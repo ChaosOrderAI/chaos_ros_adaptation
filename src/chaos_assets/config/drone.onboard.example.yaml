@@ -1,0 +1,26 @@
+# Copy to /etc/chaos/asset.yaml on ONE drone companion computer.
+# Domain 71 is an example; match the existing PSDK gateway's actual domain.
+# Legacy DJI integration currently exposes state only.
+schema_version: 1
+hosts:
+  onboard: {ros_domain_id: 71}
+transports:
+  platform:
+    executable: /opt/chaos/bin/mqtt_ros2_adapter
+    config:
+      network: {access: system}
+      mqtt:
+        host: mqtt.example.com
+        port: 8883
+        client_id: chaos-{asset_id}
+        ca_file: /etc/chaos/certs/ca.crt
+        client_certificate_file: /etc/chaos/certs/client.crt
+        client_key_file: /etc/chaos/certs/client.key
+        password_environment: MQTT_PASSWORD
+assets:
+  - id: drone_001
+    model_file: package://chaos_assets/models/dji_m3td/v1/model.yaml
+    host: onboard
+    mode: real
+    capabilities: [state]
+    transport: platform

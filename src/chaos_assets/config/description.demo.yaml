@@ -1,0 +1,14 @@
+# Two instances of one synthetic model. TF prefixes are derived independently.
+schema_version: 1
+hosts:
+  dev:
+    ros_domain_id: 87
+assets:
+  - id: demo_001
+    model_file: package://chaos_assets/models/demo_ugv/v1/model.yaml
+    host: dev
+    mode: mock
+  - id: demo_002
+    model_file: package://chaos_assets/models/demo_ugv/v1/model.yaml
+    host: dev
+    mode: mock

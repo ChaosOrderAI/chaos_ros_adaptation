@@ -1,0 +1,13 @@
+schema_version: 1
+hosts:
+  dev:
+    ros_domain_id: 87
+assets:
+  - id: vehicle_001
+    model_file: ../models/lingao_vehicle/v1/model.yaml
+    host: dev
+    mode: mock
+  - id: drone_001
+    model_file: ../models/dji_m3td/v1/model.yaml
+    host: dev
+    mode: mock

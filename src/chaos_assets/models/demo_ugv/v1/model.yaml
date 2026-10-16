@@ -1,0 +1,24 @@
+# Synthetic geometry and mock motion only; not a measured vehicle model.
+schema_version: 1
+model: demo_ugv
+model_version: v1
+kind: ugv
+capabilities: [state, motion.velocity, motion.stop, navigation.pose]
+backends:
+  mock:
+    plugin: mock
+    options: {kind: ugv}
+    capabilities: [state, motion.velocity, motion.stop, navigation.pose]
+description:
+  file: urdf/robot.urdf
+  publish_frequency: 30.0
+sensors:
+  body_imu:
+    kind: imu
+    driver: {mode: mock}
+    # Mounting TF is owned by the URDF, so no sensor.transform is supplied.
+    streams:
+      imu:
+        type: sensor_msgs/msg/Imu
+        topic: data
+        rate_hz: 20.0

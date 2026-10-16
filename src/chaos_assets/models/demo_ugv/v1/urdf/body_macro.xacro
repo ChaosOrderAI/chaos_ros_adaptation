@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- Synthetic, configurable geometry. No measured mounting calibration. -->
+  <xacro:macro name="demo_body" params="body_length">
+    <link name="base_link">
+      <visual>
+        <geometry><box size="${body_length} 0.4 0.2"/></geometry>
+        <material name="blue"><color rgba="0.12 0.35 0.60 1"/></material>
+      </visual>
+    </link>
+    <link name="body_imu_link"/>
+    <joint name="body_imu_mount" type="fixed">
+      <parent link="base_link"/><child link="body_imu_link"/>
+      <origin xyz="0.1 0 0.11"/>
+    </joint>
+  </xacro:macro>
+</robot>

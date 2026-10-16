@@ -1,0 +1,17 @@
+# Attach to existing drivers; this file does not start vendor hardware processes.
+# Confirm the actual frames/topics in each deployment before real use.
+schema_version: 1
+hosts:
+  vehicle_edge_01: {ros_domain_id: 61}
+  drone_edge_01: {ros_domain_id: 71}
+assets:
+  - id: vehicle_001
+    model_file: ../models/lingao_vehicle/v1/model.yaml
+    host: vehicle_edge_01
+    mode: real
+    frames: {base: base_foot, odom: odom, map: map}
+  - id: drone_001
+    model_file: ../models/dji_m3td/v1/model.yaml
+    host: drone_edge_01
+    mode: real
+    capabilities: [state]

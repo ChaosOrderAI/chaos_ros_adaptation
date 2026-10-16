@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<robot name="chaos_demo_ugv_xacro" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="body_length" default="0.6"/>
+  <xacro:include filename="body_macro.xacro"/>
+  <xacro:demo_body body_length="$(arg body_length)"/>
+</robot>

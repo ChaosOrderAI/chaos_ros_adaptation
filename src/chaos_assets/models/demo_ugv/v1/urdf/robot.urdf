@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<!-- Synthetic visualization fixture, not calibration or a physical simulator.
+     Link names are local; robot_state_publisher supplies the asset frame prefix.
+     Wheel positions require joint_states from a driver or an explicit test. -->
+<robot name="chaos_demo_ugv">
+  <material name="body_blue"><color rgba="0.12 0.35 0.60 1"/></material>
+  <material name="wheel_gray"><color rgba="0.15 0.15 0.15 1"/></material>
+  <material name="sensor_orange"><color rgba="0.95 0.45 0.10 1"/></material>
+
+  <link name="base_link">
+    <visual>
+      <geometry><box size="0.6 0.4 0.2"/></geometry>
+      <material name="body_blue"/>
+    </visual>
+  </link>
+  <link name="left_wheel_link">
+    <visual>
+      <origin rpy="1.5707963267948966 0 0"/>
+      <geometry><cylinder radius="0.08" length="0.04"/></geometry>
+      <material name="wheel_gray"/>
+    </visual>
+  </link>
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/><child link="left_wheel_link"/>
+    <origin xyz="0 0.23 -0.1"/><axis xyz="0 1 0"/>
+    <limit effort="1" velocity="4"/>
+  </joint>
+  <link name="right_wheel_link">
+    <visual>
+      <origin rpy="1.5707963267948966 0 0"/>
+      <geometry><cylinder radius="0.08" length="0.04"/></geometry>
+      <material name="wheel_gray"/>
+    </visual>
+  </link>
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/><child link="right_wheel_link"/>
+    <origin xyz="0 -0.23 -0.1"/><axis xyz="0 1 0"/>
+    <limit effort="1" velocity="4"/>
+  </joint>
+  <link name="body_imu_link">
+    <visual>
+      <geometry><box size="0.03 0.02 0.01"/></geometry>
+      <material name="sensor_orange"/>
+    </visual>
+  </link>
+  <joint name="body_imu_mount" type="fixed">
+    <parent link="base_link"/><child link="body_imu_link"/>
+    <origin xyz="0.1 0 0.11"/>
+  </joint>
+</robot>

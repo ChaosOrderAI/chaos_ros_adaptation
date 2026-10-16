@@ -1,0 +1,36 @@
+[Unit]
+Description=Chaos onboard ROS 2 robot runtime
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=6
+
+[Service]
+Type=exec
+User=chaos
+Group=chaos
+WorkingDirectory=/var/lib/chaos
+StateDirectory=chaos
+StateDirectoryMode=0750
+LogsDirectory=chaos
+LogsDirectoryMode=0750
+Environment=ROS_HOME=/var/lib/chaos/ros
+Environment=ROS_LOG_DIR=/var/log/chaos
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/chaos/edge.env
+ExecStart=/opt/chaos/deploy/start-edge.sh
+# Recreate only processes; a fresh runtime never restores old control tokens.
+Restart=always
+RestartSec=5s
+# Let launch signal and join its children before the service manager kills them.
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutStopSec=25s
+UMask=0027
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=chaos-edge
+
+[Install]
+WantedBy=multi-user.target

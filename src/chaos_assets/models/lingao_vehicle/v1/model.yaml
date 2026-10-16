@@ -1,0 +1,24 @@
+schema_version: 1
+model: lingao_vehicle
+model_version: v1
+kind: ugv
+capabilities: [state, motion.velocity, motion.stop, navigation.pose]
+limits:
+  linear_mps: 0.5
+  angular_rps: 0.8
+  command_timeout_s: 0.5
+  state_timeout_s: 2.0
+  lease_max_s: 30.0
+  action_timeout_s: 120.0
+resources: {}
+backends:
+  mock:
+    plugin: mock
+    options: {kind: ugv}
+    capabilities: [state, motion.velocity, motion.stop, navigation.pose]
+  real:
+    plugin: lingao_ros2
+    options:
+      odom_topic: /lingao/odom
+      cmd_vel_topic: /cmd_vel
+    capabilities: [state, motion.velocity, motion.stop]

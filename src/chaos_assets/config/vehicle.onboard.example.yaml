@@ -1,0 +1,25 @@
+# Copy to /etc/chaos/asset.yaml on ONE vehicle. Set its actual identity,
+# frames, domain, broker and device certificates before starting.
+schema_version: 1
+hosts:
+  onboard: {ros_domain_id: 61}
+transports:
+  platform:
+    executable: /opt/chaos/bin/mqtt_ros2_adapter
+    config:
+      network: {access: system}
+      mqtt:
+        host: mqtt.example.com
+        port: 8883
+        client_id: chaos-{asset_id}
+        ca_file: /etc/chaos/certs/ca.crt
+        client_certificate_file: /etc/chaos/certs/client.crt
+        client_key_file: /etc/chaos/certs/client.key
+        password_environment: MQTT_PASSWORD
+assets:
+  - id: vehicle_001
+    model_file: package://chaos_assets/models/lingao_vehicle/v1/model.yaml
+    host: onboard
+    mode: real
+    frames: {base: base_foot, odom: odom, map: map}
+    transport: platform

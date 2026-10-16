@@ -1,0 +1,48 @@
+# Synthetic sensor data only. Hardware driver declarations are forced to mock
+# whenever the owning robot uses mode: mock.
+schema_version: 1
+hosts:
+  dev:
+    ros_domain_id: 87
+assets:
+  - id: vehicle_001
+    model_file: package://chaos_assets/models/lingao_vehicle/v1/model.yaml
+    host: dev
+    mode: mock
+    sensors:
+      front_camera:
+        kind: camera
+        driver: {mode: mock}
+        streams:
+          color:
+            type: sensor_msgs/msg/Image
+            topic: color/image_raw
+            frame_id: vehicle_001/front_camera_color_optical_frame
+            rate_hz: 10.0
+          camera_info:
+            type: sensor_msgs/msg/CameraInfo
+            topic: color/camera_info
+            frame_id: vehicle_001/front_camera_color_optical_frame
+            rate_hz: 10.0
+      lidar:
+        kind: lidar
+        driver: {mode: mock}
+        streams:
+          points:
+            type: sensor_msgs/msg/PointCloud2
+            topic: points
+          imu:
+            type: sensor_msgs/msg/Imu
+            topic: imu
+            frame_id: vehicle_001/lidar_imu_link
+            rate_hz: 50.0
+      body_imu:
+        kind: imu
+        driver: {mode: mock}
+        streams:
+          imu:
+            type: sensor_msgs/msg/Imu
+            topic: data
+            rate_hz: 50.0
+# Mounting transforms are intentionally absent: supply measured xyz/rpy values
+# for real hardware. Optical frames require the camera driver's calibrated TF.

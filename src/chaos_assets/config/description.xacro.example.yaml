@@ -1,0 +1,14 @@
+# Requires xacro. body_length changes only illustrative geometry, not motion.
+schema_version: 1
+hosts:
+  dev:
+    ros_domain_id: 87
+assets:
+  - id: demo_001
+    model_file: package://chaos_assets/models/demo_ugv/v1/model.yaml
+    host: dev
+    mode: mock
+    description:
+      file: package://chaos_assets/models/demo_ugv/v1/urdf/robot.urdf.xacro
+      arguments:
+        body_length: 0.8

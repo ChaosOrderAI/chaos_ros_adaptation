@@ -1,0 +1,6 @@
+repositories:
+  OrbbecSDK_ROS2:
+    type: git
+    url: https://github.com/orbbec/OrbbecSDK_ROS2.git
+    # Official release v2.10.6, released 2026-09-30. Pin the commit, not the branch.
+    version: 296156521b60bdf813cb94c46cbb55562bbdc453

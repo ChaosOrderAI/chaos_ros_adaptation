@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>chaos_bringup</name><version>0.1.0</version>
+  <description>Validated per-host launch for heterogeneous robot assets.</description>
+  <maintainer email="maintainers@example.com">Chaos maintainers</maintainer>
+  <license>Proprietary</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>chaos_assets</exec_depend><exec_depend>chaos_runtime</exec_depend>
+  <exec_depend>chaos_mqtt</exec_depend><exec_depend>ament_index_python</exec_depend>
+  <exec_depend>chaos_sensors</exec_depend><exec_depend>tf2_ros</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>launch</exec_depend><exec_depend>launch_ros</exec_depend>
+  <test_depend>python3-pytest</test_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

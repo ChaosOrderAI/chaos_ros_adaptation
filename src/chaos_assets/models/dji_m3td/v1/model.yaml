@@ -1,0 +1,25 @@
+schema_version: 1
+model: dji_m3td
+model_version: v1
+kind: uav
+capabilities: [state, motion.velocity, motion.stop, navigation.pose, flight.takeoff, flight.land]
+limits:
+  linear_mps: 1.0
+  angular_rps: 0.5
+  command_timeout_s: 0.5
+  state_timeout_s: 2.0
+  lease_max_s: 30.0
+  max_altitude_m: 20.0
+resources: {}
+backends:
+  mock:
+    plugin: mock
+    options: {kind: uav}
+    capabilities: [state, motion.velocity, motion.stop, navigation.pose, flight.takeoff, flight.land]
+  # Existing gateway has no transport-independent completion contract yet.
+  # The real backend currently observes legacy ROS status only.
+  real:
+    plugin: dji_psdk_legacy
+    options:
+      status_topic: /m3td/system/status
+    capabilities: [state]

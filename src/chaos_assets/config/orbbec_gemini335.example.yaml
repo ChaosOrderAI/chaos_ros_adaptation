@@ -1,0 +1,85 @@
+# Gemini 335 on a vehicle. Replace the serial number before real startup.
+# To inspect without any hardware: use edge.launch.py dry_run:=true.
+# To generate mock data: use system.launch.py host_id:=onboard mode:=mock.
+schema_version: 1
+hosts:
+  onboard:
+    ros_domain_id: 61
+assets:
+  - id: vehicle_001
+    host: onboard
+    mode: real
+    model_file: package://chaos_assets/models/lingao_vehicle/v1/model.yaml
+    sensors:
+      front_camera:
+        kind: camera
+        enabled: true
+        frame_id: vehicle_001_front_camera_link
+        driver:
+          mode: node
+          package: orbbec_camera
+          executable: orbbec_camera_node
+          parameters:
+            device_type: camera
+            camera_name: vehicle_001_front_camera
+            serial_number: REPLACE_WITH_GEMINI335_SERIAL
+            enumerate_net_device: false
+            enable_color: true
+            enable_depth: true
+            # 0 / ANY selects supported device defaults. Set measured profiles
+            # explicitly for a bandwidth/CPU budget on the target computer.
+            color_width: 0
+            color_height: 0
+            color_fps: 0
+            color_format: ANY
+            depth_width: 0
+            depth_height: 0
+            depth_fps: 0
+            depth_format: ANY
+            color_qos: sensor_data
+            depth_qos: sensor_data
+            color_camera_info_qos: sensor_data
+            depth_camera_info_qos: sensor_data
+            enable_frame_sync: true
+            depth_registration: false
+            enable_point_cloud: false
+            enable_colored_point_cloud: false
+            enable_sync_output_accel_gyro: true
+            enable_accel: true
+            enable_gyro: true
+            accel_rate: 200hz
+            gyro_rate: 200hz
+            accel_range: 4g
+            gyro_range: 1000dps
+            publish_tf: true
+            time_domain: global
+        # Vendor driver owns camera-internal TF. Add base -> camera_link only
+        # after measuring the mounting extrinsics; never invent a zero offset.
+        streams:
+          color_image:
+            type: sensor_msgs/msg/Image
+            topic: color/image_raw
+            frame_id: vehicle_001_front_camera_color_optical_frame
+            rate_hz: 30.0
+            monitor: false
+          color_info:
+            type: sensor_msgs/msg/CameraInfo
+            topic: color/camera_info
+            frame_id: vehicle_001_front_camera_color_optical_frame
+            rate_hz: 30.0
+          depth_image:
+            type: sensor_msgs/msg/Image
+            topic: depth/image_raw
+            frame_id: vehicle_001_front_camera_depth_optical_frame
+            rate_hz: 30.0
+            monitor: false
+          depth_info:
+            type: sensor_msgs/msg/CameraInfo
+            topic: depth/camera_info
+            frame_id: vehicle_001_front_camera_depth_optical_frame
+            rate_hz: 30.0
+          imu:
+            type: sensor_msgs/msg/Imu
+            topic: gyro_accel/sample
+            frame_id: vehicle_001_front_camera_accel_gyro_optical_frame
+            rate_hz: 200.0
