@@ -2,6 +2,7 @@
 import functools
 import json
 import math
+import re
 import signal
 import threading
 import time
@@ -17,13 +18,55 @@ from rclpy.task import Future
 from rclpy.signals import SignalHandlerOptions
 from geometry_msgs.msg import PoseStamped
 from chaos_interfaces.action import Flight, NavigatePose
-from chaos_interfaces.msg import CommandResult, RobotState, VelocityCommand
+from chaos_interfaces.msg import CommandResult, ControlTrace, RobotState, VelocityCommand
 from chaos_interfaces.srv import ControlLease, GetDescription, Stop
 
 from chaos_runtime.adapters.base import load_adapter
 from chaos_runtime.action_server import RecoveringActionServer
 from chaos_runtime.control import (CommandDeadline, ControlGuard, Limits, Rejected,
                                    finite_positive, validate_pose)
+
+
+def _emit_control_trace(runtime, command, stage, code, *, request_id='', velocity=None):
+    """Best-effort evidence, isolated from control decisions and driver outcomes.
+
+    The sequence advances before construction/publication so a missing event is
+    visible to an offline consumer. No authorization values or error text are
+    copied. Runtime callers hold adapter_lock, which also serializes the stream.
+    """
+    runtime.trace_sequence = getattr(runtime, 'trace_sequence', 0) + 1
+    try:
+        trace = ControlTrace()
+        trace.header.stamp = runtime.get_clock().now().to_msg()
+        trace.header.frame_id = runtime.asset['frames']['base']
+        trace.asset_id = runtime.asset['id']
+        trace.sequence = runtime.trace_sequence
+        trace.monotonic_ns = time.monotonic_ns()
+        # Correlation IDs are metadata, never free-form input or credentials.
+        trace.request_id = request_id if (
+            isinstance(request_id, str)
+            and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', request_id)) else ''
+        trace.command, trace.stage = command, stage
+        trace.code = code if (
+            isinstance(code, str) and re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', code)) else 'UNKNOWN'
+        if velocity is not None and command == 'motion.velocity' and stage == 'issued':
+            trace.velocity_valid = True
+            (trace.velocity.linear.x, trace.velocity.linear.y, trace.velocity.linear.z,
+             trace.velocity.angular.x, trace.velocity.angular.y,
+             trace.velocity.angular.z) = velocity
+            # Sample the guard after the event timestamp: any sampling delay
+            # shortens the exported interval, rather than extending its lease.
+            trace.valid_for_s = max(0.0, min(
+                runtime.guard.velocity_expires, runtime.guard.expires) - runtime.guard.clock()
+            ) if runtime.guard.token else 0.0
+        runtime.trace_pub.publish(trace)
+    except Exception:
+        # A failed observation channel must not turn an accepted command into
+        # a rejected one, or suppress watchdog/stop output. Avoid exception text.
+        try:
+            runtime.get_logger().warning('Control trace publication failed; event dropped')
+        except Exception:
+            pass
 
 
 class RobotRuntime(Node):
@@ -49,6 +92,8 @@ class RobotRuntime(Node):
                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.state_pub = self.create_publisher(RobotState, self._endpoint('state'), state_qos)
         self.results_pub = self.create_publisher(CommandResult, self._endpoint('command_results'), 50)
+        self.trace_sequence = 0
+        self.trace_pub = self.create_publisher(ControlTrace, self._endpoint('control_trace'), 100)
         self.create_service(GetDescription, self._endpoint('description'), self._describe,
                             callback_group=self.io_group)
         self.create_service(ControlLease, self._endpoint('control/lease'), self._lease,
@@ -107,13 +152,17 @@ class RobotRuntime(Node):
         result.success, result.code, result.message = success, code, message
         self.results_pub.publish(result)
 
-    def _halt(self, code, message, explicit=False):
+    def _halt(self, code, message, explicit=False, request_id=''):
         if self.operation is not None and self.operation['interrupted'] is None:
             self.operation['interrupted'] = (code, message)
         if self.stop_pending is None:
-            self.stop_pending = {'explicit': explicit, 'failures': 0, 'next_attempt': 0.0}
+            _emit_control_trace(self, 'motion.stop', 'invalidated', code, request_id=request_id)
+            self.stop_pending = {'explicit': explicit, 'failures': 0, 'next_attempt': 0.0,
+                                 'request_id': request_id}
         elif explicit:
             self.stop_pending['explicit'] = True
+            self.stop_pending['request_id'] = request_id
+            _emit_control_trace(self, 'motion.stop', 'invalidated', code, request_id=request_id)
         return self._retry_stop(force=explicit)
 
     def _retry_stop(self, force=False):
@@ -140,6 +189,8 @@ class RobotRuntime(Node):
         self.driving = False
         self.guard.velocity_expires = 0.0
         self.stop_pending = None
+        _emit_control_trace(self, 'motion.stop', 'issued', 'STOP_OUTPUT_ISSUED',
+                            request_id=pending.get('request_id', ''))
         # Preserve the fault latch: a recovered stop must not resume motion.
         return True
 
@@ -195,14 +246,19 @@ class RobotRuntime(Node):
                 self._require_capability('motion.stop')
                 self.guard.require(request.lease_token)
                 deadline.require()
-                if not self._halt('STOPPED', 'Stopped by command', explicit=True):
+                if not self._halt('STOPPED', 'Stopped by command', explicit=True,
+                                  request_id=request.request_id):
                     raise Rejected('STOP_FAILED', self.fault)
                 return self._response(response, True, 'OK', 'Controlled stop output issued')
             except Rejected as error:
+                _emit_control_trace(self, 'motion.stop', 'rejected', error.code,
+                                    request_id=request.request_id)
                 return self._response(response, False, error.code, str(error))
             except Exception as error:
                 self.fault = str(error)
                 self._halt('DRIVER_ERROR', self.fault)
+                _emit_control_trace(self, 'motion.stop', 'rejected', 'DRIVER_ERROR',
+                                    request_id=request.request_id)
                 return self._response(response, False, 'DRIVER_ERROR', self.fault)
 
     def _velocity(self, request):
@@ -223,12 +279,18 @@ class RobotRuntime(Node):
                     request.valid_for_s, request.header.frame_id, self.asset['frames']['base'], values)
                 self.adapter.set_velocity(values)
                 self.driving = True
+                _emit_control_trace(self, 'motion.velocity', 'issued', 'RUNTIME_ISSUED',
+                                    request_id=request.request_id, velocity=values)
                 self._result(request.request_id, True, 'ACCEPTED', 'Velocity accepted until command expiry')
             except Rejected as error:
+                _emit_control_trace(self, 'motion.velocity', 'rejected', error.code,
+                                    request_id=request.request_id)
                 self._result(request.request_id, False, error.code, str(error))
             except Exception as error:
                 self.fault = str(error)
                 self._halt('DRIVER_ERROR', self.fault)
+                _emit_control_trace(self, 'motion.velocity', 'rejected', 'DRIVER_ERROR',
+                                    request_id=request.request_id)
                 self._result(request.request_id, False, 'DRIVER_ERROR', self.fault)
 
     def _goal(self, kind, request):
@@ -339,6 +401,7 @@ class RobotRuntime(Node):
                     self._require_capability(kind)
                     self._require_ready()
                     operation['deadline'].require()
+                    _emit_control_trace(self, kind, 'invalidated', 'OPERATION_STARTING')
                     self.adapter.start_operation(kind, operation['target'])
             while rclpy.ok(context=self.context):
                 with self.adapter_lock:

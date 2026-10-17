@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local mTLS MQTT -> Rust bridge -> gateway -> mock runtime integration.
 
-Requires existing mosquitto clients/server, openssl and a built Rust adapter.
+Requires existing mosquitto clients/server, openssl and the installed framework.
 Uses ephemeral certificates in /tmp, a random loopback port, domain 189, and
 only mock assets. Never edits the existing broker configuration/credentials.
 """
@@ -24,6 +24,7 @@ from ament_index_python.packages import get_package_share_directory
 import yaml
 
 from chaos_assets.inventory import load_inventory
+from chaos_bringup.planning import resolve_mqtt_executable
 from chaos_mqtt.config import build_adapter_config
 
 
@@ -31,10 +32,8 @@ def run():
     for name in ('mosquitto', 'mosquitto_pub', 'mosquitto_sub', 'openssl'):
         if shutil.which(name) is None:
             raise RuntimeError(f'{name} is required; this script does not install dependencies')
-    repo = Path(__file__).resolve().parents[2]
-    binary = repo / 'mqtt_ros2_adapter/target/debug/mqtt_ros2_adapter'
-    if not binary.is_file():
-        raise RuntimeError('Build mqtt_ros2_adapter/target/debug/mqtt_ros2_adapter first')
+    binary = resolve_mqtt_executable()
+    adapter_share = Path(get_package_share_directory('chaos_mqtt')) / 'transport'
     os.environ['ROS_DOMAIN_ID'] = '189'
     os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] = 'LOCALHOST'
     os.environ.pop('ROS_LOCALHOST_ONLY', None)
@@ -43,7 +42,7 @@ def run():
         root = Path(folder)
         os.environ['ROS_LOG_DIR'] = str(root / 'ros-log')
         spec = importlib.util.spec_from_file_location('chaos_local_mqtt_certificates',
-                                                      repo / 'mqtt_ros2_adapter/scripts/local_mqtt.py')
+                                                      adapter_share / 'scripts/local_mqtt.py')
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
         helper.STATE, helper.CERTS = root, root / 'certs'
@@ -61,14 +60,16 @@ def run():
         share = Path(get_package_share_directory('chaos_assets'))
         inventory_data = {
             'schema_version': 1, 'hosts': {'local': {'ros_domain_id': 189}},
-            'transports': {'test': {'executable': str(binary), 'config': {'mqtt': {
+            'transports': {'test': {'config': {'mqtt': {
                 'host': '127.0.0.1', 'port': port, 'client_id': 'chaos-{asset_id}',
                 'ca_file': str(certs / 'ca.crt'),
                 'client_certificate_file': str(certs / 'client.crt'),
                 'client_key_file': str(certs / 'client.key'),
             }}}},
             'assets': [{'id': 'drone_001', 'host': 'local', 'mode': 'mock', 'transport': 'test',
-                        'model_file': str(share / 'models/dji_m3td/v1/model.yaml')}],
+                        'model_file': str(share / 'models/dji_m3td/v1/model.yaml'),
+                        'data_collection': {'enabled': True, 'output_dir': str(root / 'recordings'),
+                                            'time_sync': {'require_sync': True}}}],
         }
         inventory_path = root / 'inventory.yaml'
         inventory_path.write_text(yaml.safe_dump(inventory_data))
@@ -78,9 +79,11 @@ def run():
         config = build_adapter_config(asset, inventory.transports['test'])
         generated_path = root / 'generated-adapter.json'
         generated_path.write_text(json.dumps(config))
-        subprocess.run([str(binary), '--check-config', str(generated_path)], check=True,
+        subprocess.run(['ros2', 'run', 'chaos_mqtt', 'mqtt_transport',
+                        '--check-config', str(generated_path)], check=True,
                        capture_output=True, text=True, timeout=10)
-        print('PASS: native Rust preflight accepts actual asset-generated configuration')
+        print(f'PASS: chaos_mqtt integrated transport: {binary}')
+        print('PASS: ros2 run preflight accepts actual asset-generated configuration')
         mqtt_args = ['-h', '127.0.0.1', '-p', str(port), '--cafile', str(certs / 'ca.crt'),
                      '--cert', str(certs / 'client.crt'), '--key', str(certs / 'client.key'), '-q', '1']
         incoming = queue.Queue()
@@ -157,6 +160,11 @@ def run():
 
                 telemetry = wait(lambda topic, value: topic == 'robots/drone_001/state')
                 assert json.loads(telemetry['data'])['asset_id'] == 'drone_001'
+                collection = json.loads(wait(
+                    lambda topic, value: topic == 'robots/drone_001/data_collection/status')['data'])
+                assert collection['asset_id'] == 'drone_001' and collection['require_sync']
+                assert collection['state'] in ('waiting_for_clock', 'recording'), collection
+                print('PASS: read-only collection/time-quality status reaches MQTT through the installed transport')
                 _, described = request('system.describe')
                 assert described['ok'] and described['data']['asset_id'] == 'drone_001', described
                 _, acquired = request('control.acquire', owner='tls_smoke', duration_s=15.0)

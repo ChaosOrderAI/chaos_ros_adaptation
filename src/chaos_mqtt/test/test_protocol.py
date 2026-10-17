@@ -120,6 +120,21 @@ def test_generator_cannot_expire_accepted_actions_before_gateway_timeout():
             build_adapter_config(asset, {'config': {'action_timeout_ms': timeout}})
 
 
+def test_collection_status_is_optional_read_only_and_does_not_expose_sensor_data():
+    asset = {'id': 'unit', 'namespace': '/robots/unit', 'data_collection': {'enabled': True}}
+    config = build_adapter_config(asset, {'config': {}})
+    mapping = config['topic_mappings'][-1]
+    assert mapping['ros_topic'] == '/robots/unit/data_collection/status'
+    assert mapping['mqtt_topic'] == 'robots/unit/data_collection/status'
+    assert mapping['direction'] == 'ros2_to_mqtt'
+    assert mapping['ros']['durability'] == 'transient_local'
+    assert mapping['mqtt']['retain'] is False
+    assert len(config['topic_mappings']) == 3
+    assert not any('record' in route['command'] for route in config['routes'])
+    asset['data_collection']['enabled'] = False
+    assert len(build_adapter_config(asset, {'config': {}})['topic_mappings']) == 2
+
+
 @pytest.mark.parametrize('asset', [
     {'id': 'bad/id', 'namespace': '/robots/unit'},
     {'id': 'unit', 'namespace': '/robots//unit'},

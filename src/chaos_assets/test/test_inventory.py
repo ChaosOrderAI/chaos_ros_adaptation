@@ -95,6 +95,22 @@ def test_onboard_config_can_be_copied_outside_workspace(tmp_path, monkeypatch):
     assert asset['model'] == 'lingao_vehicle'
     assert asset['mode'] == 'real'
     assert Path(asset['model_file']).is_file()
+    assert inventory.transports['platform']['executable'] == 'mqtt_transport'
+
+
+@pytest.mark.parametrize('executable', [None, '', 123, []])
+def test_explicit_invalid_transport_executable_is_not_defaulted(tmp_path, executable):
+    def mutate(data):
+        data['transports'] = {'mqtt': {'executable': executable, 'config': {}}}
+    with pytest.raises(ConfigurationError, match='executable'):
+        load_inventory(write_inventory(tmp_path, mutate))
+
+
+def test_custom_transport_executable_path_remains_relative_to_inventory(tmp_path):
+    def mutate(data):
+        data['transports'] = {'mqtt': {'executable': './bin/custom_bridge', 'config': {}}}
+    inventory = load_inventory(write_inventory(tmp_path, mutate))
+    assert inventory.transports['mqtt']['executable'] == str(tmp_path / 'bin/custom_bridge')
 
 
 @pytest.mark.parametrize('uri', [

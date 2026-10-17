@@ -1,0 +1,20 @@
+# Managed LAN NTP server fragment. EXAMPLE ONLY: replace all placeholders.
+# The primary brain server may host chronyd, but robot control does not set time.
+# Use approved, independent upstream references; optional GPS/PPS integration
+# requires its own measured configuration and is not supplied by this template.
+server REPLACE_WITH_UPSTREAM_NTP_1 iburst minpoll 6 maxpoll 6
+server REPLACE_WITH_UPSTREAM_NTP_2 iburst minpoll 6 maxpoll 6
+server REPLACE_WITH_UPSTREAM_NTP_3 iburst minpoll 6 maxpoll 6
+
+driftfile /var/lib/chrony/chrony.drift
+rtcsync
+makestep 1.0 3
+
+# Replace with the actual robot LAN CIDR, e.g. a chosen private subnet.
+# Limit UDP/123 access to this LAN in the host/network deployment policy.
+allow REPLACE_WITH_ROBOT_LAN_CIDR
+
+# Intentionally no "local stratum", "orphan", "trust", or unlimited makestep.
+# Loss of upstream evidence must be visible; a low root distance alone does not
+# prove that an isolated local reference is correct. Inspect tracking/sources.
+# This fragment does not remove sources from other chrony configuration files.

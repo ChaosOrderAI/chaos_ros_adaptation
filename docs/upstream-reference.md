@@ -38,10 +38,37 @@
 |---|---|
 | `vehicle_access`、`4g-platform`、`Project` | 按用户给出的无人车代码归类；由设备适配器逐步对接现有驱动和业务 |
 | `m3td_psdk` | 保留 PSDK 与设备控制实现；首版旧网关接入限于状态读取 |
-| `mqtt_ros2_adapter` | 复用 MQTT 与 ROS 2 传输能力，通过显式路由配置选择统一协议 |
+| `mqtt_ros2_adapter` | 完整传输源码与 Cargo 锁文件已归入 `chaos_ws/src/chaos_mqtt/transport`，由 `chaos_mqtt` 一个 ROS 包统一构建、安装和启动；原兄弟目录保留 |
+| `zkdx` | 服务器端任务与协同主脑；连接本机载框架的 MQTT 设备适配器尚待实现 |
 | `LeTools-dev` | 继续作为接口抽象、配置和可扩展结构的参考 |
 | `chaos_ws` | 新增 ROS 2 Jazzy 统一配置、接口、运行时、启动、SDK 和协议适配 |
+
+框架中的传输实现是独立源码副本，不通过软链接或构建时读取依赖原兄弟目录。后续传输修改在 `chaos_ws/src/chaos_mqtt/transport` 维护，与同包的 Python 业务网关共同交付；内部 Cargo crate 名仍为 `mqtt_ros2_adapter`，对外只注册 `chaos_mqtt` ROS 包，安装入口为 `ros2 run chaos_mqtt mqtt_transport`。原项目需要同步更新时单独核对变更，避免两份源码无意分叉。
 
 上游展示的是一个机器人产品家族的控制工程。多机器人资产实例、主机选择、能力探测、统一 MQTT 命令和无人机异步动作完成语义，是本项目为当前需求增加的设计，不应称为 Kuavo 已经提供的功能。
 
 后续如果实际引入上游源文件或模型，应记录固定提交、路径和相应许可证；本次参考记录只说明已查看的材料及设计来源。
+
+## Kuavo Data Challenge：训练数据链路参考
+
+核对日期：2026-10-17。用户补充的参考项目为 [LejuRobotics/kuavo_data_challenge](https://github.com/LejuRobotics/kuavo_data_challenge)。本次通过公开 GitHub API 确认并读取固定提交 [`c0ca6a48047e1396e02ac1d83df2cd8b6ede17cd`](https://github.com/LejuRobotics/kuavo_data_challenge/commit/c0ca6a48047e1396e02ac1d83df2cd8b6ede17cd)（提交时间 2026-04-03）的源文件，未执行其安装脚本、转换器或训练代码。以下结论是静态核对结果，不代表已完成上游训练复现。
+
+### 采用其分层与配置方式
+
+上游将数据转换、训练、部署分别放在 `kuavo_data`、`kuavo_train`、`kuavo_deploy`；转换配置选择任务描述、相机、目标采样频率及读取块大小，训练配置再选择 ACT、Diffusion 等策略。其主体 ROS 环境是 ROS 1 Noetic，转换代码依赖 `rosbag`/`rospy`。这些依赖不能直接成为 Ubuntu 24.04 / ROS 2 Jazzy 机载框架的依赖。[固定版本 README](https://github.com/LejuRobotics/kuavo_data_challenge/blob/c0ca6a48047e1396e02ac1d83df2cd8b6ede17cd/README.md)、[数据配置](https://github.com/LejuRobotics/kuavo_data_challenge/blob/c0ca6a48047e1396e02ac1d83df2cd8b6ede17cd/configs/data/KuavoRosbag2Lerobot.yaml)
+
+本项目采用“原始采集 → 离线质检与任务划分 → 导出 → 训练 → 受控推理”的组织方式。机载 `chaos_data` 保存 ROS 2 原始消息、主机时间质量和数据来源；离线导出明确观测与控制标签，训练环境另行选择、锁定 LeRobot 和模型依赖。读取块大小是资源管理参数，不是模型预测动作块的长度。当前导出为本项目定义的中间格式，未宣称是 LeRobot 原生数据集；具体入口与边界见 [训练数据规范](training-data.md)。
+
+### 时间对齐需要独立实现
+
+固定版本的分块读取使用 bag 时间，覆盖消息处理器取得的 header 时间；按相机帧号步长降采样，再对各路数据取最近样本，未对离线匹配施加最大时间差。块内不能取到预选样本时还会重新选择最近样本。因此，源数据存在延迟、缺帧或不同钟域时，不能把这种最近匹配视为同步保证。[分块处理源码](https://github.com/LejuRobotics/kuavo_data_challenge/blob/c0ca6a48047e1396e02ac1d83df2cd8b6ede17cd/kuavo_data/common/chunk_process.py)
+
+上游线上观测缓冲使用 `header.stamp` 并支持最大时间差门限；与上述离线路径存在时间语义差异。本项目要求训练导出保留源时间、接收时间和匹配偏差，明确因果可用条件，并使未来推理端复用相同预处理契约。chrony 授时用于主机质量判断，不能替代传感器采样时刻和硬件同步验证。[线上观测缓冲源码](https://github.com/LejuRobotics/kuavo_data_challenge/blob/c0ca6a48047e1396e02ac1d83df2cd8b6ede17cd/kuavo_deploy/utils/obs_buffer.py)
+
+### 观测、动作和任务边界需要保留真实含义
+
+上游状态与命令来自不同话题，并对 Kuavo 机械臂、末端执行器做专用切片；一个 bag 在转换后保存为一个 episode。这些维度和任务边界不能照搬到无人机、无人车。本项目显式描述特征字段、单位、坐标系及控制来源；磁盘分卷和同步质量分段都不自动定义一次任务。机器人测得的速度是观测，不能冒充控制动作标签。[原始话题映射](https://github.com/LejuRobotics/kuavo_data_challenge/blob/c0ca6a48047e1396e02ac1d83df2cd8b6ede17cd/kuavo_data/common/kuavo_dataset.py)
+
+上游转换器将深度逐帧归一化为 uint8 图像。为保留 Gemini 335 的物理深度含义，本项目保存原始数组及编码，不做逐帧 min/max 归一化；米制换算和无效值规则由驱动与训练特征契约明确。缺失或异常样本不能通过改写时间或补零而伪装正常。[转换入口源码](https://github.com/LejuRobotics/kuavo_data_challenge/blob/c0ca6a48047e1396e02ac1d83df2cd8b6ede17cd/kuavo_data/CvtRosbag2Lerobot.py)
+
+本轮实现训练数据准备和接口预留，不安装 GPU 训练环境、不下载模型、不启动训练或实机推理。未来的策略执行需要通过本项目 SDK、控制租约、有效期与限幅，不能绕过运行时直接连接执行器。

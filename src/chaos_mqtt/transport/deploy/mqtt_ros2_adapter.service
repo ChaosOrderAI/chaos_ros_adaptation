@@ -1,0 +1,36 @@
+[Unit]
+Description=MQTT to ROS 2 edge adapter
+Wants=network-online.target
+After=network-online.target
+# A modem interface may appear late during boot; retry startup until it exists.
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=mqtt-ros2
+Group=mqtt-ros2
+WorkingDirectory=/var/lib/mqtt_ros2_adapter
+StateDirectory=mqtt_ros2_adapter
+StateDirectoryMode=0750
+LogsDirectory=mqtt_ros2_adapter
+LogsDirectoryMode=0750
+Environment=ROS_HOME=/var/lib/mqtt_ros2_adapter/ros
+Environment=ROS_LOG_DIR=/var/log/mqtt_ros2_adapter
+EnvironmentFile=/etc/mqtt_ros2_adapter/adapter.env
+ExecStart=/opt/mqtt_ros2_adapter/current/start.sh
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+UMask=0027
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mqtt_ros2_adapter
+
+[Install]
+WantedBy=multi-user.target

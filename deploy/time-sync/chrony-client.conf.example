@@ -1,0 +1,18 @@
+# Robot / ROS 2 host chrony fragment. EXAMPLE ONLY: not installed automatically.
+# Replace the placeholder with the same managed LAN NTP service on every robot.
+# Review existing /etc/chrony/chrony.conf and DHCP/conf.d source includes first;
+# appending this fragment does not remove other active time sources.
+server REPLACE_WITH_LAN_NTP_SERVER iburst minpoll 4 maxpoll 6
+
+driftfile /var/lib/chrony/chrony.drift
+rtcsync
+
+# Step only during chronyd's first three updates. Restarting chronyd starts a new
+# startup period: stop collection first, then wait for synchronization again.
+# Never use an unlimited step policy or run chronyc makestep while collecting.
+makestep 1.0 3
+
+# No "local stratum" / orphan mode: disconnected clocks must not appear synced.
+# maxpoll 6 is at most 64 seconds and fits the collector's 120 second reference
+# age policy. These short polls are for the managed LAN server, not public NTP.
+# The collector only probes chronyc tracking; it does not apply this file.

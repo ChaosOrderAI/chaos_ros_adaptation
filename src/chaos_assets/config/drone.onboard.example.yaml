@@ -6,7 +6,7 @@ hosts:
   onboard: {ros_domain_id: 71}
 transports:
   platform:
-    executable: /opt/chaos/bin/mqtt_ros2_adapter
+    # Uses the integrated mqtt_transport executable from chaos_mqtt.
     config:
       network: {access: system}
       mqtt:

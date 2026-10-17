@@ -1,0 +1,83 @@
+{
+  "network": {
+    "access": "5g",
+    "interface": "wwan0",
+    "connection_timeout_seconds": 30,
+    "tcp_nodelay": true,
+    "reconnect_initial_ms": 2000,
+    "reconnect_max_ms": 60000
+  },
+  "mqtt": {
+    "host": "mqtt.example.com",
+    "port": 8883,
+    "client_id": "m3td-orin-001",
+    "command_topic": "drones/m3td-orin-001/commands",
+    "response_topic": "drones/m3td-orin-001/responses",
+    "event_topic": "drones/m3td-orin-001/events",
+    "ca_file": "/etc/mqtt_ros2_adapter/certs/ca.crt",
+    "client_certificate_file": "/etc/mqtt_ros2_adapter/certs/orin-client.crt",
+    "client_key_file": "/etc/mqtt_ros2_adapter/certs/orin-client.key",
+    "username": "m3td-orin-001",
+    "password_environment": "MQTT_PASSWORD",
+    "keep_alive_seconds": 60,
+    "maximum_clock_skew_ms": 5000
+  },
+  "ros2": {
+    "node_name": "m3td_mqtt_bridge",
+    "topic_prefix": "m3td",
+    "qos_depth": 32
+  },
+  "response_timeout_ms": 30000,
+  "routes": [
+    {
+      "command": "flight.velocity",
+      "topic_suffix": "flightControl/velocity",
+      "msg_type": "std_msgs/Float64"
+    },
+    {
+      "command": "algorithm.enable",
+      "topic_suffix": "algorithm/enable",
+      "msg_type": "std_msgs/Bool"
+    }
+  ],
+  "topic_mappings": [
+    {
+      "name": "velocity_setpoint",
+      "direction": "mqtt_to_ros2",
+      "mqtt_topic": "drones/m3td-orin-001/setpoints/velocity",
+      "ros_topic": "/m3td/setpoints/velocity",
+      "msg_type": "geometry_msgs/msg/Twist",
+      "mqtt": {
+        "qos": 1,
+        "retain": false
+      },
+      "ros": {
+        "depth": 10,
+        "reliability": "reliable",
+        "durability": "volatile",
+        "deadline_ms": null,
+        "lifespan_ms": 1000
+      },
+      "max_payload_bytes": 4096
+    },
+    {
+      "name": "temperature_telemetry",
+      "direction": "ros2_to_mqtt",
+      "mqtt_topic": "drones/m3td-orin-001/telemetry/temperature",
+      "ros_topic": "/m3td/sensors/temperature",
+      "msg_type": "std_msgs/msg/Float64",
+      "mqtt": {
+        "qos": 0,
+        "retain": false
+      },
+      "ros": {
+        "depth": 10,
+        "reliability": "best_effort",
+        "durability": "volatile",
+        "deadline_ms": null,
+        "lifespan_ms": 1000
+      },
+      "max_payload_bytes": 4096
+    }
+  ]
+}

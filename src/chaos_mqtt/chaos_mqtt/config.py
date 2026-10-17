@@ -80,4 +80,14 @@ def build_adapter_config(asset, transport_profile):
         }
         for name in ('state', 'task_events')
     ]
+    if (asset.get('data_collection') or {}).get('enabled'):
+        config['topic_mappings'].append({
+            'name': 'chaos_data_collection_status', 'direction': 'ros2_to_mqtt',
+            'mqtt_topic': f'robots/{asset_id}/data_collection/status',
+            'ros_topic': f'{namespace}/data_collection/status',
+            'msg_type': 'std_msgs/msg/String', 'delivery': 'latest',
+            'mqtt': {'qos': 0, 'retain': False},
+            'ros': {'depth': 1, 'reliability': 'reliable', 'durability': 'transient_local'},
+            'max_payload_bytes': 16384,
+        })
     return config

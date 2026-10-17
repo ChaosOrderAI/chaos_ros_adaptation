@@ -2,17 +2,41 @@
 <package format="3">
   <name>chaos_mqtt</name>
   <version>0.1.0</version>
-  <description>Asset scoped MQTT command facade for the Chaos ROS 2 runtime.</description>
+  <description>Unified MQTT transport and command gateway for the Chaos ROS 2 runtime.</description>
   <maintainer email="maintainers@example.com">Chaos maintainers</maintainer>
+  <!-- Existing Python gateway license; imported Rust transport declares MIT. -->
   <license>Proprietary</license>
-  <buildtool_depend>ament_python</buildtool_depend>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <buildtool_depend>cargo</buildtool_depend>
+  <buildtool_depend>rustc</buildtool_depend>
+  <build_depend>libclang-dev</build_depend>
+  <build_depend>pkg-config</build_depend>
+  <depend>rcl</depend>
+  <depend>rcl_action</depend>
+  <depend>rcl_logging_spdlog</depend>
+  <depend>rcl_yaml_param_parser</depend>
+  <depend>rcutils</depend>
+  <depend>rmw</depend>
+  <depend>rmw_implementation</depend>
+  <depend>rosidl_runtime_c</depend>
+  <depend>rosidl_typesupport_c</depend>
+  <depend>rosidl_typesupport_introspection_c</depend>
+  <depend>builtin_interfaces</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>unique_identifier_msgs</depend>
+  <depend>action_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>diagnostic_msgs</depend>
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>action_msgs</exec_depend>
-  <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>rosidl_runtime_py</exec_depend>
   <exec_depend>chaos_interfaces</exec_depend>
+  <test_depend>ament_cmake_test</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>python3-pytest</test_depend>
-  <export><build_type>ament_python</build_type></export>
+  <export><build_type>ament_cmake</build_type></export>
 </package>

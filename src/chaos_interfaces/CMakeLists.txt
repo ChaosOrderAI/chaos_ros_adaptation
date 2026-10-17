@@ -6,7 +6,7 @@ find_package(builtin_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/RobotState.msg" "msg/CommandResult.msg" "msg/VelocityCommand.msg"
+  "msg/RobotState.msg" "msg/CommandResult.msg" "msg/VelocityCommand.msg" "msg/ControlTrace.msg"
   "srv/GetDescription.srv" "srv/ControlLease.srv" "srv/Stop.srv"
   "action/NavigatePose.action" "action/Flight.action"
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs)

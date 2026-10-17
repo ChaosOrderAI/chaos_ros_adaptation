@@ -1,0 +1,19 @@
+# Synthetic robot/IMU/model only. This demo records with explicitly unverified
+# clock quality; production must keep time_sync.require_sync: true.
+schema_version: 1
+hosts:
+  dev:
+    ros_domain_id: 87
+assets:
+  - id: demo_001
+    model_file: package://chaos_assets/models/demo_ugv/v1/model.yaml
+    host: dev
+    mode: mock
+    data_collection:
+      enabled: true
+      output_dir: /tmp/chaos-recordings
+      storage_id: mcap
+      max_bagfile_duration_s: 300
+      max_bagfile_size_mb: 1024
+      time_sync:
+        require_sync: false

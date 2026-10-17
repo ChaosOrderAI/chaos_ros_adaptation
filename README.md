@@ -11,14 +11,18 @@
 - [传感器配置、标准接口与诊断](docs/sensors.md)
 - [奥比中光 Gemini 335 官方驱动](docs/orbbec-driver.md)
 - [URDF / Xacro 导入、TF 归属与 RViz](docs/robot-description.md)
+- [数据采集、时间同步与离线审计](docs/data-collection.md)
+- [训练数据规范、任务片段与离线导出](docs/training-data.md)
 - [示例资产清单](src/chaos_assets/config/demo.yaml)
 - [无人车型号](src/chaos_assets/models/lingao_vehicle/v1/model.yaml) / [无人机型号](src/chaos_assets/models/dji_m3td/v1/model.yaml)
 
 ## 开发环境构建与启动
 
-依赖 ROS 2 Jazzy、colcon、ament_cmake/ament_python、rclpy、geometry_msgs、std_msgs、sensor_msgs、diagnostic_msgs、tf2_ros、action_msgs、rosidl_default_generators、Python PyYAML 和 pytest。模型导入使用 robot_state_publisher、urdfdom；Xacro 模型另需 xacro。现有厂商程序无需参与 mock 构建。
+依赖 ROS 2 Jazzy、colcon、ament_cmake/ament_cmake_python/ament_python、rclpy、geometry_msgs、std_msgs、sensor_msgs、nav_msgs、diagnostic_msgs、tf2_ros、action_msgs、rosidl_default_generators、Python PyYAML 和 pytest。离线图像导出另使用 NumPy。`chaos_mqtt` 内置的 Rust 传输还需 Rust/Cargo、C/C++ 编译工具（Ubuntu 的 `build-essential`）、CMake、`pkg-config` 和 `libclang-dev`。模型导入使用 robot_state_publisher、urdfdom；Xacro 模型另需 xacro。现有厂商程序无需参与 mock 构建。
 
-在本目录执行，明确使用 `--base-paths src`，避免把旁边的 ROS 1 工程和 SDK 一起构建：
+数据采集另需 `rosbag2_py`、`rosbag2_transport`、`rosbag2_storage_mcap`（或 SQLite 插件）；真实时间质量检查使用 chrony 的 `chronyc`。这些依赖需要在部署环境准备，代码不会自动安装或修改系统授时服务。
+
+首次构建时在本目录执行，明确使用 `--base-paths src`，避免把旁边的 ROS 1 工程和 SDK 一起构建。已有旧版安装时，先使用下方的迁移命令建立新的构建与安装目录：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -30,6 +34,17 @@ ros2 launch chaos_bringup system.launch.py dry_run:=true
 
 # 同时运行模拟无人车和无人机；MQTT 默认关闭
 ros2 launch chaos_bringup system.launch.py
+```
+
+`chaos_mqtt` 是一个 ROS 包，包含 Python 业务网关和完整 Rust 传输实现；工作空间共 8 个包。Cargo 默认执行锁定依赖的 release 构建，并行任务数为 2，可用 CMake 参数 `MQTT_ADAPTER_BUILD_JOBS` 调整。首次构建需要下载依赖；依赖缓存准备完成后，可在构建命令中追加 `--cmake-args -DMQTT_ADAPTER_OFFLINE=ON`。完整框架源码位于本工作空间，构建和运行不依赖旁边的 `mqtt_ros2_adapter` 目录。目标架构、消息绑定范围和生产普通安装见 [部署说明](docs/onboard-deployment.md)。
+
+从之前两个独立 ROS 包的布局升级时，`chaos_mqtt` 的构建类型已由 `ament_python` 改为 `ament_cmake`，应使用新的构建和安装目录，避免旧包索引与构建缓存残留。在未加载旧工作空间的新终端执行下面的命令，保留原安装空间供核对；后续示例相应加载 `install-mqtt-merged/local_setup.bash`：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon --log-base log-mqtt-merged build --base-paths src \
+  --build-base build-mqtt-merged --install-base install-mqtt-merged --symlink-install
+source install-mqtt-merged/local_setup.bash
 ```
 
 本轮控制服务和动作新增 `expires_at` 字段，需统一重建并重启所有使用 `chaos_interfaces` 的节点；旧、新接口产物不可混跑。MQTT 中间件也需重建，以支持任务终态响应与新的发送队列策略。
@@ -56,8 +71,11 @@ src/
   chaos_runtime/     每资产运行时与可扩展后端
   chaos_bringup/     统一 launch
   chaos_sdk/         上层 Python API
-  chaos_mqtt/        MQTT 命令与 ROS 接口转换
+  chaos_mqtt/        一个 ROS 包，统一构建与安装业务网关和传输
+    chaos_mqtt/      Python 命令、请求与 ROS 接口转换
+    transport/       完整 Rust 传输源码及 Cargo 锁文件
   chaos_sensors/     模拟传感器、数据新鲜度诊断与传感器目录
+  chaos_data/        原生 rosbag 采集、时间质量门控、审计与离线训练数据导出
 drivers/
   src/OrbbecSDK_ROS2/ 固定版本的官方相机驱动，独立构建
 ```
@@ -122,18 +140,46 @@ ros2 launch chaos_bringup system.launch.py \
 
 ## MQTT 接入
 
-复用旁边的 `mqtt_ros2_adapter`。新增 `route_profile: custom` 只加载显式路由；缺省 `legacy_drone` 保持旧配置行为。按照中间件 README 构建，使用已配置的 broker 与证书，然后填写 [mqtt.example.yaml](src/chaos_assets/config/mqtt.example.yaml)。
+`chaos_mqtt` 统一包含 MQTT / ROS 2 传输与业务协议转换，Rust 源码保留在包内 `transport/`，见 [包内说明](src/chaos_mqtt/README.md)。`route_profile: custom` 只加载显式路由；传输实现缺省的 `legacy_drone` 保持旧配置行为。准备 broker 与设备证书，然后填写 [mqtt.example.yaml](src/chaos_assets/config/mqtt.example.yaml)。
 
 ```bash
 ros2 launch chaos_bringup system.launch.py \
   inventory:=/absolute/path/mqtt.yaml host_id:=dev enable_mqtt:=true
 ```
 
-launch 为每个资产生成单独的 Rust JSON，用 `--check-config` 在启动任何节点前校验真实配置，再启动业务 gateway 与中间件。`dry_run:=true` 仅检查计划，不要求本机存在二进制、证书，也不执行原生配置检查。
+launch 为每个资产生成单独的 Rust JSON，通过 `chaos_mqtt` 的 ament 包索引找到已安装的 `mqtt_transport`，用 `--check-config` 在启动任何节点前校验真实配置，再启动同包内的 `gateway` 和 `mqtt_transport` 两个受管进程。通信配置通常省略 `executable`；旧裸名称 `mqtt_ros2_adapter` 兼容解析到同一个包内传输，已有显式可执行文件路径仍可用于外部版本。默认启动无需将二进制加入 `PATH` 或复制到 `/opt/chaos/bin`。`dry_run:=true` 仅检查计划，不要求本机存在二进制、证书，也不执行原生配置检查。
+
+需要独立排查中间件配置时，可以使用标准 ROS 包入口：
+
+```bash
+ros2 run chaos_mqtt mqtt_transport --check-config /absolute/path/config.json
+```
+
+框架日常运行使用资产 YAML 生成这份 JSON，统一 launch 管理中间件进程。服务器端 `zkdx` 的设备适配器接入仍需单独完成；源码归并不会自动改变服务器协议。
 
 默认 MQTT 主题为 `robots/<id>/commands`、`responses`、`state`、`task_events`。外层命令沿用原协议 `version/message_id/timestamp_ms/command`；内部命令名按能力生成。状态与任务事件经 `std_msgs/String` 转发，线上的 JSON 外层包含 `data` 字符串；格式和受理/完成区别见架构文档。
 
 控制服务和动作将 MQTT 截止时间传到 runtime，并在获得执行锁后复检。SDK 默认接受期限为 5 秒，可通过 `Robot(..., command_ttl_s=...)` 或单次调用的 `ttl_s=...` 调整；它限制请求何时可以开始执行，不限制已开始任务的持续时间。动作最终结果同时进入 `responses` 和 `task_events`，在当前进程缓存窗口内重发原 `message_id` 可取回最终响应。状态与普通反馈只保留最新未发送样本，终态和控制响应使用可靠队列。
+
+## 数据采集
+
+资产的 `data_collection.enabled: true` 启用独立 `chaos_data` 包，统一启动后将本机状态、相机/雷达/IMU、TF 和模型录制为分卷 MCAP。默认要求 chrony 时间质量合格；失同步或检测到墙钟跳变时结束当前段，恢复稳定后重新开始，保留原消息时间戳及质量证据。10 ms 默认门限只针对主机时钟，不代表多传感器硬件同步精度。
+
+```bash
+ros2 launch chaos_bringup system.launch.py \
+  inventory:="$PWD/src/chaos_assets/config/data_collection.demo.yaml"
+```
+
+此示例使用 mock 数据，显式允许未验证的时钟，输出到 `/tmp/chaos-recordings`。生产配置、统一 chrony/NTP 模板、回放与训练索引命令见 [数据采集说明](docs/data-collection.md)。启用 MQTT 后，只读状态发布至 `robots/<id>/data_collection/status`；原始数据留在本机。
+
+参考 Kuavo Data Challenge 的数据、训练、部署分层，新增独立离线 `data_export`。它按显式任务 episode、观测字段和动作空间导出数值 JSONL、原始图像 NPY 及时间/来源信息。运行时的 `control_trace` 记录不含租约 token 的控制发令和失效事件，默认一并采集；停止或超时后不会无限保持旧动作标签。训练侧如何选择可信时段、避免未来观测泄漏以及无人车/无人机模板见 [训练数据说明](docs/training-data.md)。
+
+```bash
+ros2 run chaos_data data_export /data/analysis/profile.yaml \
+  --output /data/datasets/task_v001
+```
+
+这是本项目的中间数据格式；LeRobot 格式适配、模型训练和机载推理仍为后续模块。新增 `ControlTrace` 后需重新构建并部署 `chaos_interfaces` 和运行时，离线导出环境也需要可加载相同消息接口。
 
 ## 验证与扩展
 
@@ -141,22 +187,32 @@ launch 为每个资产生成单独的 Rust JSON，用 `--check-config` 在启动
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 python3 -m pytest -q src
+colcon test --packages-select chaos_mqtt
+colcon test-result --verbose
 python3 scripts/smoke_test.py
 python3 scripts/mqtt_smoke_test.py
 python3 scripts/transport_smoke_test.py
 python3 scripts/sensor_smoke_test.py
 python3 scripts/description_smoke_test.py
+python3 scripts/data_smoke_test.py
+python3 scripts/training_data_smoke_test.py
 ```
+
+使用上面的迁移目录时，先加载 `install-mqtt-merged/local_setup.bash`；`colcon test` 追加 `--build-base build-mqtt-merged --install-base install-mqtt-merged`，`colcon test-result` 追加 `--test-result-base build-mqtt-merged`，确保检查的是本次构建。
 
 smoke test 只构造 mock 资产，使用 localhost 和 Domain 187，启动实际 launch 后检查多机器人隔离、能力发现、控制租约、过期速度、导航完成与取消、起降和租约到期。测试会关闭其启动的所有进程，不连接厂商设备或远程 broker。
 
 `mqtt_smoke_test.py` 使用 localhost 和 Domain 188，验证 ROS 侧 MQTT 命令门面的请求关联、去重、过期拒绝、Action 终态和未知遥测。它没有启动 MQTT broker，不作为实际 TLS 网络链路的验收。
 
-`transport_smoke_test.py` 需要本机 `mosquitto`、`mosquitto_pub`、`mosquitto_sub`、`openssl` 和已构建的 Rust debug 二进制。它在临时目录生成证书，使用随机 localhost 端口、双向 TLS 和 Domain 189，启动真实 broker 及 `enable_mqtt=true` 的统一 launch，验证 MQTT → Rust → 业务 gateway → mock 机器人 → 回执/任务事件的完整链路，并中断自己的临时 broker，验证恢复后的任务终态及原请求重试。退出时清理自己的进程与临时文件，不连接远程服务。
+`transport_smoke_test.py` 需要本机 `mosquitto`、`mosquitto_pub`、`mosquitto_sub`、`openssl` 和已加载的本工作空间安装环境。测试使用随框架安装的 Rust 中间件，在临时目录生成证书，使用随机 localhost 端口、双向 TLS 和 Domain 189，启动真实 broker 及 `enable_mqtt=true` 的统一 launch，验证 MQTT → Rust → 业务 gateway → mock 机器人 → 回执/任务事件的完整链路，并中断自己的临时 broker，验证恢复后的任务终态及原请求重试。退出时清理自己的进程与临时文件，不连接远程服务。
 
 `sensor_smoke_test.py` 使用 localhost 和 Domain 190，把 Gemini 335 模板强制切为 mock，并增加模拟雷达与 IMU。验证标准数据、静态 TF、晚加入客户端读取目录、选择性监测和驱动故障时整体退出。测试不加载原厂相机节点，不打开 USB 或真实设备。
 
 `description_smoke_test.py` 使用 localhost 和 Domain 191，验证两个模型的独立 `robot_description`、固定 TF、URDF 中的 IMU 安装点和活动关节 TF。只有测试脚本发布合成关节位置，正常启动不会自动补零关节状态。
+
+`data_smoke_test.py` 使用 localhost 和 Domain 192，临时注入 chrony 查询结果，验证等待同步、失步关段、恢复、MCAP 分卷、相机/雷达/IMU 原始时间戳、静态 TF 与模型重订阅，以及退出刷盘和离线索引。它不调整系统时钟，也不验收真实 NTP 精度。传输 smoke 同时检查只读采集状态的 MQTT 上报。
+
+`training_data_smoke_test.py` 使用 localhost 和 Domain 193，通过 SDK 控制 mock 机器人，验证脱敏控制 trace、停止失效、原生录制和安装版离线导出。它检查严格模式拒绝未验证授时、显式 mock 豁免、图像精度及输出不覆盖，不启动学习模型或真实设备。
 
 新增设备：增加资产实例。新增型号：增加版本化型号文件。新增后端：继承 `chaos_runtime.adapters.base.Adapter` 并注册 Python entry point `chaos.robot_adapters`，提供能力、配置校验、状态与设备操作，再通过配置选择插件。完整方法以基类与内置适配器为准；插件模块导入不得连接硬件，连接必须放在实例构造阶段。
 

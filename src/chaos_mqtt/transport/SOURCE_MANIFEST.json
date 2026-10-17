@@ -1,0 +1,33 @@
+{
+  "source": "mqtt_ros2_adapter sibling repository working tree",
+  "snapshot_date": "2026-10-17",
+  "base_git_commit": "fa36988e2f7c72a3672fcb2a7044db2a19f3038e",
+  "snapshot_kind": "working_tree_including_uncommitted_changes",
+  "files_sha256": {
+    ".gitignore": "0fc69dac18840350a37f05c82ab363c0cb24a027de0c0dec702c9cc5c2dbcf7b",
+    "Cargo.lock": "9a8302674ece9957e4011cffd29b022103e74cafeb61ada6a0689c2b335ea58b",
+    "Cargo.toml": "5fc3499250ace480b7a920c8af7d27558e61a664bbab4b23d2697eb57fa96ee1",
+    "README.md": "a440112d664279029e608ea032eb031a11d3824cd49ddef190449cd3e1d5d100",
+    "config.4g.example.json": "c32224bc44734ad3eff45d0fbd88a55b51b6ff976904d908d18eb9e6d57718ac",
+    "config.5g.example.json": "ff370dd1883f2d733bf82d108862ce55a346f9b848f546437c8a608f850add00",
+    "config.example.json": "1157301971a7a784362bcbc7572296350b0d845dc13e4ce38abe42b2511ec1ca",
+    "config.wifi.example.json": "55d75e424fc853d0503e1fc707da6fa6374132f2141ad6929ebe87c4c7703184",
+    "deploy/adapter.env.example": "741a90cee8ffcc57658874d05965fd832dbba3798178448f3fbc4275392873e8",
+    "deploy/bind-interface.conf": "3850b9d0dfcd53f8d741008330e2f05df7810b285b509c19044ba56d4dc70e02",
+    "deploy/mqtt_ros2_adapter.service": "84a30f42baa8d3b79e2a4d3c13e19120323820cc35f5cfea8d82710104850b68",
+    "deploy/start.sh": "000ab3c02680cb9fd8a254bf3ec449f691268a1299dbbfd9517c284b886ffa30",
+    "examples/latency_probe.rs": "67a2484a8447f9d1bfeb1f16045666ef3e3eafbd30c8db16b6c3169a67946d67",
+    "scripts/local_mqtt.py": "abedfcb1f2f69b126ef589b247934bc5de50f757e64a6bdb45e013e208a715c4",
+    "src/adapter.rs": "4694c2e977c71c136fa4f85ffd178907f232db26c5301e375106bf2f6406d398",
+    "src/config.rs": "3a541753dfcbf31289d4da29521ed88ba4e2305667d649ca119b3a3a700f0bbf",
+    "src/config/communication.rs": "67214a29df519ff28add2087d4ddee71c5ab43014053720a1303eac186b69d1f",
+    "src/envelope.rs": "7da7aca9b7fcb64bbfc360f47c73a221290261ea1ecd7750e6ba1e081d5d4476",
+    "src/forwarding.rs": "d6bf9567d396e3ab1d5020450ee0150f2d257bc0776e38df4c06cda9101252d9",
+    "src/main.rs": "6508cfebd4a8f68a14b9a87d3e74cc817be14809be29f0b23c757c74b93916d6",
+    "src/mqtt.rs": "b81781ee8ed8a0d71344f8044de9cb05878d098b704a31f7b5349fccd7b6e594",
+    "src/mqtt/tests.rs": "3678b1658b6f2b26d05cbc358bcae059dd7ddc5e9fc8a737add688991b9c890a",
+    "src/replay.rs": "61b1de1802a336a50953bd20485c2030839d50725bd57632cc94623b9e6f712d",
+    "src/ros2.rs": "400160ae7fde727642110b6b7ab594ea90b5c9a30221149dd05131b09ba11a34",
+    "src/routes.rs": "ed60f399377f2b16f2c75f6438a105393bf62a0c250f02d54be19d8db5e6ccff"
+  }
+}

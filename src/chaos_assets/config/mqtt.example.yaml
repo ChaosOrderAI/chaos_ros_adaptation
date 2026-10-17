@@ -1,11 +1,11 @@
-# Requires a separately built Rust binary and provisioned certificates.
+# Uses chaos_mqtt's integrated transport and provisioned certificates.
 # This template is not used by the default launch.
 schema_version: 1
 hosts:
   dev: {ros_domain_id: 87}
 transports:
   edge_mqtt:
-    executable: mqtt_ros2_adapter
+    # executable is optional: the default resolves from the ROS package index.
     config:
       mqtt:
         host: mqtt.example.com

@@ -3,11 +3,39 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
 import shutil
 
+from ament_index_python.packages import get_package_prefix, PackageNotFoundError
+
 from chaos_assets import ConfigurationError, load_inventory
 from chaos_mqtt.config import build_adapter_config
+
+
+def resolve_mqtt_executable(executable='mqtt_transport'):
+    """Resolve chaos_mqtt's transport through the sourced ROS installation.
+
+    Explicit paths and other executable names remain valid overrides. The
+    default never falls back to a potentially unrelated binary on PATH.
+    """
+    # Keep the former default name as an alias, without relying on the removed
+    # ROS package or an old binary that happens to remain on PATH.
+    if executable in ('mqtt_transport', 'mqtt_ros2_adapter'):
+        try:
+            prefix = get_package_prefix('chaos_mqtt')
+        except PackageNotFoundError as exc:
+            raise ConfigurationError(
+                'Unified chaos_mqtt package not found; build the workspace '
+                'with colcon and source its install/local_setup.bash') from exc
+        path = Path(prefix) / 'lib' / 'chaos_mqtt' / 'mqtt_transport'
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise ConfigurationError(f'Installed MQTT executable not found or not executable: {path}')
+        return str(path.absolute())
+    path = shutil.which(executable)
+    if path is None:
+        raise ConfigurationError(f'MQTT executable not found or not executable: {executable}')
+    return str(Path(path).absolute())
 
 
 @dataclass(frozen=True)
@@ -98,8 +126,7 @@ def _plan_inventory(inventory, host_id, asset_ids=None, enable_mqtt=False,
                 topics.add(topic)
             executable = profile['executable']
             if check_files and asset['id'] in selected_ids:
-                if not shutil.which(executable):
-                    raise ConfigurationError(f'MQTT executable not found or not executable: {executable}')
+                executable = resolve_mqtt_executable(executable)
                 if not mqtt.get('host'):
                     raise ConfigurationError('MQTT broker host is required')
                 for key in ('ca_file', 'client_certificate_file', 'client_key_file'):

@@ -10,7 +10,7 @@ asset.yaml（vehicle_001）             asset.yaml（drone_001）
           ↓ 本机 ROS 2                         ↓ 本机 ROS 2
 现有底盘驱动                         现有 PSDK 网关
           ↕                                     ↕
-chaos_mqtt + MQTT 中间件              chaos_mqtt + MQTT 中间件
+chaos_mqtt（网关 + 传输）             chaos_mqtt（网关 + 传输）
           ↘          平台 MQTT broker          ↙
 ```
 
@@ -22,7 +22,7 @@ Python 源码、ROS 接口定义与资产格式共用；生成的 ROS 消息扩�
 
 建议在目标设备或相同架构、相同系统的构建环境中构建。每种架构只安装与该机器相关的厂商驱动；mock 和另一类机器人的 SDK 不需要在实机启动时加载。具体厂商栈支持的硬件/系统还需要各自核对，使用 Jazzy 不代表现有 Humble 驱动或 PSDK 已经完成迁移。
 
-在目标机完成 ROS 2 Jazzy 及 README 中的构建依赖安装后，从 `chaos_ws` 执行：
+在目标机完成 ROS 2 Jazzy 及 README 中的构建依赖安装后，从 `chaos_ws` 执行。工作空间共 8 个 ROS 包，`src/chaos_mqtt` 通过 ament_cmake 与 ament_cmake_python 同时构建 Python 网关和 `transport/` 下的 Rust 传输；构建机还需 Rust/Cargo、`build-essential`、CMake、`pkg-config` 和 `libclang-dev`：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -35,7 +35,36 @@ source /opt/chaos/ros/local_setup.bash
 
 生产安装使用普通安装，在最终前缀构建；不要把当前开发用的 `--symlink-install` 目录直接复制到机载计算机。上面的新 build/log 目录用于隔离开发缓存；也可以在独立源码副本中构建。导入本机 Jazzy 后加载 `local_setup.bash`，避免带入开发机记录的其他工作空间路径。
 
-MQTT 中间件按 [现有边端构建说明](../../mqtt_ros2_adapter/README.md) 在相同架构环境构建，将得到的可执行文件安装到 `/opt/chaos/bin/mqtt_ros2_adapter`。构建中间件无需导入 `chaos_interfaces`：当前桥接使用标准 String 消息，业务转换在 `chaos_mqtt` 中完成。检查其动态库依赖全部可用。
+从之前 `chaos_mqtt` 与 `mqtt_ros2_adapter` 并列的布局升级时，`chaos_mqtt` 的构建类型已改变，旧安装空间也可能残留独立传输包的索引。请在未加载旧工作空间的新终端构建到新的前缀，保留旧安装供核对。例如管理员预先创建并授权写入 `/opt/chaos/ros-mqtt-merged` 后：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon --log-base log-mqtt-merged build --base-paths src \
+  --build-base build-mqtt-merged --merge-install \
+  --install-base /opt/chaos/ros-mqtt-merged \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
+source /opt/chaos/ros-mqtt-merged/local_setup.bash
+```
+
+后续路径检查相应使用新前缀，验收后将 `edge.env` 的 `CHAOS_OVERLAY_SETUP` 指向该前缀的 `local_setup.bash`，按既有停机流程切换服务。不要继续叠加加载旧工作空间来验证此次合并。
+
+`chaos_mqtt` 由同一次 colcon 构建调用 Cargo `--locked --release`，传输安装到 `/opt/chaos/ros/lib/chaos_mqtt/mqtt_transport`，Python 网关入口安装到同一目录下的 `gateway`。无需单独构建兄弟目录或复制二进制。首次构建需要下载 Cargo 依赖；准备好依赖缓存后，可在上述 `--cmake-args` 后增加 `-DMQTT_ADAPTER_OFFLINE=ON` 执行离线构建。锁文件固定 Rust 依赖，系统库和 Rust 工具链版本仍由构建环境管理。
+
+Cargo 默认使用 2 个并行构建任务，可通过 `-DMQTT_ADAPTER_BUILD_JOBS=2` 调整。构建会在 `BINDGEN_EXTRA_CLANG_ARGS` 未设置时探测本机 C 编译器的头文件路径，无需照搬开发机的 x86 路径；如果自定义该变量，必须使用当前目标机的路径。
+
+默认 r2r 消息绑定范围为 `std_msgs;geometry_msgs;sensor_msgs;nav_msgs;diagnostic_msgs`，并自动包含 r2r 所需的基础接口。该范围覆盖框架传输和常见传感器消息，避免构建时把当前环境中所有消息包都引入运行依赖。需要转发自定义 ROS 消息时，先构建并加载相应接口包，再使用 CMake 参数 `MQTT_ADAPTER_IDL_PACKAGES` 指定完整包列表并重新构建中间件。例如在上述 `--cmake-args` 后追加 `'-DMQTT_ADAPTER_IDL_PACKAGES=std_msgs;geometry_msgs;sensor_msgs;nav_msgs;diagnostic_msgs;my_robot_msgs'`；引号用于保留包名之间的分号。
+
+自定义消息的运行库也要部署到目标机；仅安装新的消息包不会扩展已经编译的 Rust 二进制支持范围。
+
+加载安装环境后检查包入口与动态库；`ldd` 输出不能有 `not found`：
+
+```bash
+ros2 pkg executables chaos_mqtt
+file /opt/chaos/ros/lib/chaos_mqtt/mqtt_transport
+ldd /opt/chaos/ros/lib/chaos_mqtt/mqtt_transport
+```
+
+`ros2 pkg executables chaos_mqtt` 应包含 `gateway` 和 `mqtt_transport`。只运行已构建安装空间的设备不需要 Cargo、Rust 编译器或 libclang，仍需匹配的 ROS 和系统运行库。当前包内传输与业务网关通过标准 String 消息通信，仍由两个进程运行；统一资产配置和 launch 将它们与机器人运行时交给同一个服务管理。
 
 本轮为控制服务和动作增加了 `expires_at` 字段，并扩展 MQTT 终态响应和发送策略。升级时需要统一重建接口、runtime、gateway、SDK 及其他接口使用者，同时更新 Rust 中间件；旧、新 ROS 接口产物不能混跑。更新文件后按既有停机流程重启本机框架，新进程不会恢复旧控制租约。请求期限使用 Unix UTC，设备和平台需保持时钟同步。
 
@@ -44,18 +73,20 @@ MQTT 中间件按 [现有边端构建说明](../../mqtt_ros2_adapter/README.md) 
 部署目录约定：
 
 ```text
-/opt/chaos/ros/                  本机架构的 ROS 安装空间
+/opt/chaos/ros/                  本机架构的 ROS 安装空间，包含 Rust MQTT 中间件
 /opt/chaos/drivers/              可选的独立传感器驱动安装空间
-/opt/chaos/bin/                  本机架构的 MQTT 中间件
 /opt/chaos/deploy/start-edge.sh  服务启动入口
 /etc/chaos/asset.yaml           当前机器人资产
 /etc/chaos/edge.env             当前资产 ID、路径与可选密码
 /etc/chaos/certs/               当前设备的客户端证书及 CA
 /var/lib/chaos/                 服务运行目录
+/var/lib/chaos/recordings/      可选数据采集会话，或配置到独立数据盘
 /var/log/chaos/                 ROS 日志
 ```
 
 无人车使用 [vehicle.onboard.example.yaml](../src/chaos_assets/config/vehicle.onboard.example.yaml)，无人机使用 [drone.onboard.example.yaml](../src/chaos_assets/config/drone.onboard.example.yaml)。将适用的一个模板复制为 `/etc/chaos/asset.yaml`，设置自己的资产 ID、ROS Domain、broker 和证书。模板中的域号和 broker 仅为示例。
+
+通信配置中的 `executable` 可省略，launch 默认从 `chaos_mqtt` 的 ament 包索引定位安装空间中的 `mqtt_transport`。旧裸名称 `mqtt_ros2_adapter` 兼容解析到该入口；以前配置的 `/opt/chaos/bin/mqtt_ros2_adapter` 等显式路径仍作为覆盖值生效。迁移到统一安装时移除该项，即可使用随框架构建的版本。原兄弟目录可以保留，不参与本框架的构建和部署。
 
 型号引用采用 `package://chaos_assets/models/.../model.yaml`，因此资产文件放入 `/etc/chaos` 后仍能从已安装的 ROS 包解析型号，不依赖源码目录。自定义型号可引用另一个已安装的资产包，或引用受版本管理的绝对文件路径。
 
@@ -74,6 +105,10 @@ ros2 launch chaos_bringup edge.launch.py \
 
 无人机填写实际的 `drone_001` 或自定义 ID。`dry_run` 只检查结构和启动计划；不会连接底盘、飞控或 broker。真实启动时去掉 `dry_run:=true`，MQTT 的二进制、证书文件与原生配置会在任何节点启动前检查。只需本机 ROS 功能时显式指定 `enable_mqtt:=false`。
 
+启用数据采集时，在设备资产增加 `data_collection`，默认写入 `/var/lib/chaos/recordings`。部署 rosbag2 存储插件、准备数据盘权限，并让各机器人与主脑使用同一 chrony/NTP 服务器；缺少 chronyc 或时间质量未达标时，严格采集会等待。配置、只读验收命令与服务器/客户端模板见 [数据采集说明](data-collection.md)。服务已有 `StateDirectory=chaos`，自定义磁盘路径仍需对应挂载和用户权限。
+
+采集器异常不会使机器人运行时退出；平台应检查采集状态及更新间隔，停止更新也视为不可用。会话正常关闭依赖原生录制器刷盘，服务模板停止宽限为 50 秒，覆盖采集器启动过程中收到停止信号、完成探测及刷盘的最坏等待；不要缩短到不足以关闭缓存的时间。没有自动删除或上传录制文件，空间告警后需维护数据盘。
+
 ## 3. 与已有驱动的归属
 
 运动适配器采用 attach，底盘和 DJI 网关继续由设备上的既有服务管理。传感器可以通过资产的 `sensors.*.driver.mode: node` 交给统一 launch；已由其他服务运行的传感器则使用 attach。将驱动和本框架的 ROS Domain、发现范围、话题、frame 配置为一致。
@@ -82,7 +117,9 @@ Gemini 335 使用 [专用模板](../src/chaos_assets/config/orbbec_gemini335.exa
 
 - 无人车：连接已有底盘的 Odometry / Twist，提供状态、速度和软件受控停止。旧 MQTT 桥、导航、跟随等其他直写底盘的控制源需要按实际接管方案管理。
 - 无人机：订阅旧 PSDK 网关的状态；现阶段没有统一飞控接管。旧网关内置 MQTT 保持其现有归属，与新框架使用不同 client ID / 主题；当前 PSDK 飞行控制仍属于旧网关。
-- launch 管理某资产的 Rust 中间件后，同一资产不再由独立 `mqtt_ros2_adapter.service` 启动第二份中间件。
+- launch 管理某资产的 Rust 中间件后，同一资产不再由独立 `mqtt_ros2_adapter.service` 启动第二份中间件；从旧部署迁移时，在既定切换窗口停用该资产的独立服务，保留其他资产的服务。
+
+`src/chaos_mqtt/transport/deploy` 保留原传输实现的独立部署模板，供兼容旧部署时参考。当前框架使用本节的统一 launch 和下面的 `chaos-edge.service`，无需另行安装这些独立模板。
 
 PSDK 网关需要后续增加 ROS-only 控制入口、源时间戳和独立的任务终态接口；此后才能让新框架统一接管飞行控制。Nav2 任务封装也尚未接入。本次部署模板不会自动启动这些未集成的能力。
 

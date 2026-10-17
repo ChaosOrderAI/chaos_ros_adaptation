@@ -3,6 +3,9 @@ install/
 log/
 build-onboard/
 log-onboard/
+build-mqtt-merged/
+install-mqtt-merged/
+log-mqtt-merged/
 .pytest_cache/
 __pycache__/
 *.pyc

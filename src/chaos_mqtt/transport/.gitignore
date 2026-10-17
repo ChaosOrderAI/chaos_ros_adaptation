@@ -1,0 +1,8 @@
+/target
+config.json
+*.key
+*.crt
+.env
+/.local/mqtt/
+/config.local.json
+/config.edge.json

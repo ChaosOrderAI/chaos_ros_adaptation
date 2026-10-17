@@ -160,6 +160,7 @@ def load_inventory(path, mode=None):
     """
     from .sensors import resolve_sensors, validate_sensor_graph
     from .description import resolve_description, validate_description_graph
+    from .collection import resolve_collection
 
     if mode not in (None, '', 'mock', 'real'):
         raise ConfigurationError('mode override must be mock or real')
@@ -180,7 +181,8 @@ def load_inventory(path, mode=None):
     for name, profile in transports.items():
         _text(name, 'transport profile name', _IDENTIFIER)
         _record(profile, f'transports.{name}', {'executable', 'config'})
-        executable = _text(profile.get('executable'), f'transports.{name}.executable')
+        executable = _text(profile.get('executable', 'mqtt_transport'), f'transports.{name}.executable')
+        profile['executable'] = executable
         if '/' in executable:
             profile['executable'] = str(_resolve_path(executable, path.parent, f'transports.{name}.executable'))
         _record(profile.get('config'), f'transports.{name}.config')
@@ -198,7 +200,7 @@ def load_inventory(path, mode=None):
     ids, namespaces, frames_seen = set(), set(), set()
     for entry in entries:
         _record(entry, 'asset', {'id', 'model_file', 'host', 'namespace', 'mode', 'enabled',
-                               'driver', 'capabilities', 'frames', 'limits', 'transport', 'sensors', 'description'})
+                               'driver', 'capabilities', 'frames', 'limits', 'transport', 'sensors', 'description', 'data_collection'})
         asset_id = _text(entry.get('id'), 'asset.id', _IDENTIFIER)
         if asset_id in ids:
             raise ConfigurationError(f'duplicate asset ID: {asset_id}')
@@ -216,10 +218,12 @@ def load_inventory(path, mode=None):
         model_path = _resolve_path(entry.get('model_file'), path.parent, f'{asset_id}.model_file')
         model = _load(model_path)
         _record(model, str(model_path), {'schema_version', 'model', 'model_version', 'kind',
-                                      'capabilities', 'backends', 'limits', 'resources', 'sensors', 'description'})
+                                      'capabilities', 'backends', 'limits', 'resources', 'sensors', 'description', 'data_collection'})
         for declaration in (model, entry):
             if 'description' in declaration:
                 _record(declaration['description'], f'{asset_id}.description')
+            if 'data_collection' in declaration:
+                _record(declaration['data_collection'], f'{asset_id}.data_collection')
         _schema(model, str(model_path))
         model_id = _text(model.get('model'), 'model.model', _TOKEN)
         version = _text(model.get('model_version'), 'model.model_version', _TOKEN)
@@ -277,8 +281,10 @@ def load_inventory(path, mode=None):
                 model.get('description'), entry.get('description'), model_path.parent, path.parent, asset)
             asset['sensors'] = resolve_sensors(
                 model.get('sensors', {}), entry.get('sensors', {}), model_path.parent, path.parent, asset)
+            asset['data_collection'] = resolve_collection(
+                model.get('data_collection'), entry.get('data_collection'), model_path.parent, path.parent, asset)
         except RecursionError as error:
-            raise ConfigurationError(f'{asset_id}.sensors: configuration nesting is too deep or recursive') from error
+            raise ConfigurationError(f'{asset_id}: configuration nesting is too deep or recursive') from error
         try:
             encoded = json.dumps(asset, sort_keys=True, allow_nan=False)
         except (ValueError, TypeError, RecursionError) as error:

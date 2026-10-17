@@ -11,6 +11,9 @@ from launch.events import Shutdown
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+from .collection import (
+    collection_processes, collection_summary, on_collection_exit, preflight_collection,
+)
 from .description import (
     component_asset, description_processes, description_summary, preflight_descriptions,
 )
@@ -59,12 +62,14 @@ def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST'):
                 'ros_domain_id': p['asset']['ros_domain_id'],
                 'capabilities': p['asset']['capabilities'], 'mqtt': p['mqtt'] is not None,
                 'sensors': sensor_summary(p['asset']),
-                'description': description_summary(p['asset'])}
+                'description': description_summary(p['asset']),
+                'data_collection': collection_summary(p['asset'])}
                for p in plan]
     if dry_run:
         return [LogInfo(msg=json.dumps(summary, ensure_ascii=False, indent=2))]
     preflight_descriptions(plan)
     preflight_sensors(plan)
+    preflight_collection(plan)
     generated = tempfile.TemporaryDirectory(prefix='chaos-launch-')
     root = Path(generated.name)
     try:
@@ -114,6 +119,10 @@ def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST'):
             actions.append(child)
         for label, child in sensor_processes(node_asset, environment, sensor_parameter_files):
             actions.append(RegisterEventHandler(OnProcessExit(target_action=child, on_exit=_on_exit(label))))
+            actions.append(child)
+        for label, child in collection_processes(node_asset, environment):
+            actions.append(RegisterEventHandler(OnProcessExit(
+                target_action=child, on_exit=on_collection_exit(label))))
             actions.append(child)
         if item['mqtt']:
             transport = item['mqtt']

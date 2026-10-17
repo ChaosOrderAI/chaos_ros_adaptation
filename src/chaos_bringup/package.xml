@@ -8,6 +8,7 @@
   <exec_depend>chaos_assets</exec_depend><exec_depend>chaos_runtime</exec_depend>
   <exec_depend>chaos_mqtt</exec_depend><exec_depend>ament_index_python</exec_depend>
   <exec_depend>chaos_sensors</exec_depend><exec_depend>tf2_ros</exec_depend>
+  <exec_depend>chaos_data</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>launch</exec_depend><exec_depend>launch_ros</exec_depend>
   <test_depend>python3-pytest</test_depend>

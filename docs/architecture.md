@@ -17,8 +17,14 @@ flowchart TB
     A --> L[chaos_bringup 统一 launch]
     L --> R[每资产 chaos_runtime]
     S[chaos_sdk 本机应用] <--> R
-    P[远程平台] <--> T[mqtt_ros2_adapter]
-    T <--> G[chaos_mqtt 业务协议转换]
+    subgraph MQTT[chaos_mqtt 单一 ROS 包]
+        T[Rust mqtt_transport 传输与路由]
+        G[Python gateway 业务协议转换]
+        T <--> G
+    end
+    P[远程平台] <--> T
+    L --> T
+    L --> G
     G <--> R
     R --> B[能力与设备适配器]
     B --> V[现有无人车驱动]
@@ -30,6 +36,16 @@ flowchart TB
     I --> O[chaos_sensors 可选流诊断]
     L --> U[每资产 robot_state_publisher]
     U --> F[robot_description 与 TF]
+    L --> E[chaos_data 采集监督]
+    N[chrony 主机时间质量] --> E
+    E --> W[原生 rosbag2 录制]
+    I --> W
+    R --> W
+    F --> W
+    W --> Z[本机 MCAP 与时间质量记录]
+    Z --> E1[离线 data_export 与任务标注]
+    E1 --> E2[观测/动作 JSONL 与无损图像数组]
+    E2 -.后续格式适配.-> E3[独立训练环境与模型产物]
 ```
 
 | 包 | 责任 |
@@ -39,9 +55,9 @@ flowchart TB
 | `chaos_interfaces` | 定义机器人状态、能力和控制的 ROS 消息、服务等契约 |
 | `chaos_runtime` | 每资产的公共运行时，加载适配器并维持统一行为 |
 | `chaos_sdk` | 面向业务程序封装统一接口 |
-| `chaos_mqtt` | 将外部命令、请求编号、结果映射到统一 ROS 接口 |
+| `chaos_mqtt` | 内置 Rust MQTT / ROS 2 传输与 Python 业务网关，将外部命令、请求编号、结果映射到统一 ROS 接口 |
 | `chaos_sensors` | 模拟传感器、标准流健康诊断、可发现的传感器目录 |
-| 现有 `mqtt_ros2_adapter` | 承担 MQTT / ROS 2 传输与路由 |
+| `chaos_data` | 原生 rosbag 录制、chrony 时间质量准入、异常分段、磁盘保护、离线审计及任务级训练数据导出 |
 
 设备协议、消息转换和 SDK 调用入口各有一个归属。对现有驱动的补丁应围绕适配所需接口进行，避免将资产管理和远程平台业务塞入硬件 SDK。
 
@@ -89,6 +105,8 @@ flowchart TB
 |---|---|---|
 | `description` | `GetDescription` Service | 查询身份、型号版本、当前可用能力、坐标系和限制 |
 | `state` | `RobotState` Topic | 汇总机器人状态与数据有效性 |
+| `command_results` | `CommandResult` Topic | 速度命令受理/拒绝回执 |
+| `control_trace` | `ControlTrace` Topic | 不含租约 token 的运行时发令、拒绝和失效证据，用于离线动作标签 |
 | `control/lease` | `ControlLease` Service | acquire / renew / release 控制租约 |
 | `motion/velocity` | `VelocityCommand` Topic | 带 token、时间和有效期的速度指令 |
 | `motion/stop` | `Stop` Service | 请求受控停止 |
@@ -161,7 +179,9 @@ Jazzy 某些版本在受理响应发送失败时不会交付 goal handle。兼�
 
 启用 MQTT 时，launch 先生成所选资产的配置，逐份调用 Rust 中间件的 `--check-config` 验证原生配置和本地文件；全部成功后才返回任何运行时或传输进程的启动动作。这个检查不初始化 ROS，不连接 broker 或硬件。`dry_run:=true` 只做计划与适配器契约检查，不要求二进制和证书存在，也不执行原生检查。
 
-任一受管进程退出会结束当前主机的 launch；正常运行期间子进程以非零状态退出时，launch 同样报告失败，方便外部服务管理器识别。首版不自动重启进程、重放动作或恢复控制租约。解析快照和生成配置保存在临时目录，退出时清理；需要保留时使用 `asset_config --output` 单独导出。
+运行时、MQTT、传感器驱动或模型发布器退出会结束当前主机的 launch；正常运行期间这些进程以非零状态退出时，launch 同样报告失败，方便外部服务管理器识别。辅助采集器 `chaos_data` 退出只报错，不连带终止机器人控制；采集没有自动重启，需要查看状态、日志与 manifest。首版不自动重放动作或恢复控制租约。解析快照和生成配置保存在临时目录，退出时清理；需要保留时使用 `asset_config --output` 单独导出。
+
+可选 `data_collection` 与资产一起解析并生成精确话题清单。Python 监督器只处理质量和会话信息，独立原生 rosbag2 子进程处理高带宽消息。统一 chrony/NTP 方案先统一各主机 UTC，严格模式时间质量失效或墙钟跳变会关闭当前 bag，稳定后重新订阅并记录新段；消息源时间戳保留原值，硬件时间域和标定仍需驱动保证。原始 bag 与时间质量日志用于回放、训练筛选和故障追溯，详见 [数据采集说明](data-collection.md)。
 
 推荐的长期状态流程是：
 
@@ -179,7 +199,9 @@ Jazzy 某些版本在受理响应发送失败时不会交付 goal handle。兼�
 
 ## 6. MQTT 与 SDK 边界
 
-`mqtt_ros2_adapter` 保持传输职责，统一业务协议由 `chaos_mqtt` 映射到 ROS 服务和消息。旧协议与新协议使用显式路由配置，避免给每台车自动启用无人机命令。
+MQTT 功能全部归属于 `src/chaos_mqtt` 这一个 ROS 包：`transport/` 保存完整 Rust 源码和锁文件，`chaos_mqtt/` 保存 Python 业务网关。通过 ament_cmake 与 ament_cmake_python 统一构建、安装，两个可执行入口为 `lib/chaos_mqtt/mqtt_transport` 和 `lib/chaos_mqtt/gateway`。Rust crate 内部保留 `mqtt_ros2_adapter` 名称，不再注册同名 ROS 包。运行时仍为两个受管进程，分别处理传输和 ROS 服务、Action 的业务映射。旧协议与新协议使用显式路由配置，避免给每台车自动启用无人机命令。
+
+launch 默认通过 `chaos_mqtt` 的 ament 包索引定位 `mqtt_transport`，不依赖源码、兄弟目录或 `PATH` 中的同名程序；旧配置中的裸名称 `mqtt_ros2_adapter` 也解析到这个入口，显式可执行文件路径仍可覆盖。设备部署使用同一安装空间和 `chaos-edge.service` 管理整个本机框架。开发用 symlink 安装和生产普通安装共用包入口，x86_64 / ARM64 分别在匹配的环境构建。由原来的两个 ROS 包升级时，使用新的构建和安装前缀，避免加载旧包索引；操作见 [部署说明](onboard-deployment.md)。
 
 统一资产配置生成 Rust 适配器的 `route_profile: custom`，并按当前后端能力生成命令路由。旧程序默认的 `legacy_drone` 保留原有无人机路由；`custom` 只采用显式配置的路由，未知 profile 会被拒绝。首版命令包括 `system.describe`、`control.acquire/renew/release`、`motion.velocity/stop`、`navigation.to_pose`、`flight.takeoff/land`；某资产不支持的能力不会因为加入 MQTT 而获得实现。
 
@@ -202,7 +224,7 @@ SDK 和 MQTT API 都调用每资产的统一接口。两者应得到一致的能
 
 Python SDK 使用调用方提供的 rclpy Node，以异步 Service / Action future 接入应用已有 executor；业务程序仍负责执行该节点。
 
-默认 demo 不需要 MQTT broker。`chaos_assets/config/mqtt.example.yaml` 是可选通信模板，需要另行构建 Rust 可执行程序并配置可用的 broker 和证书。
+默认 demo 不需要 MQTT broker。`chaos_assets/config/mqtt.example.yaml` 是可选通信模板，使用统一构建的 Rust 程序，启用时需要配置可用的 broker 和证书。服务器端 `zkdx` 是独立的任务与协同主脑，其面向当前 MQTT 命令、租约和结果语义的设备适配器尚待接入。
 
 视频、点云等高带宽数据可以保留现有传输通道。统一资产 API 管理其能力、状态和连接信息，首版不承担所有媒体传输。
 
