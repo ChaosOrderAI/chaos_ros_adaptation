@@ -25,7 +25,16 @@ import yaml
 
 from chaos_assets import load_inventory
 from chaos_interfaces.msg import RobotState
-from chaos_sensors.ros_support import MESSAGE_TYPES
+
+# The message-type catalog of the sensor contract. It is written out here
+# instead of imported from the removed Python sensor package: the mapping is
+# part of the sensor contract, not of a runtime implementation.
+from sensor_msgs.msg import CameraInfo, Image, Imu, LaserScan, PointCloud2
+
+MESSAGE_TYPES = {
+    f'sensor_msgs/msg/{message.__name__}': message
+    for message in (Image, CameraInfo, PointCloud2, LaserScan, Imu)
+}
 
 
 def run():

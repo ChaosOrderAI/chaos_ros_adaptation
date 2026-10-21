@@ -39,14 +39,18 @@ Xacro 参数用字典传给独立解释进程，不拼接 shell 命令。Xacro �
 
 ## 构建与试运行
 
-需要 ROS 2 Jazzy 的 `robot_state_publisher` 和 `urdfdom`（提供 `check_urdf`）；使用 Xacro 时另需 `xacro`。对应 Ubuntu 软件包为 `ros-jazzy-robot-state-publisher`、`ros-jazzy-urdfdom`、`ros-jazzy-xacro`。纯 URDF 路径不导入 Xacro。当前开发机的 Xacro 验证使用 `/tmp` 中的独立测试安装，没有替用户修改系统依赖。
+需要 ROS 2 Jazzy 的 `robot_state_publisher` 和 `urdfdom`（提供 URDF 解析库，`chaos_assets` 原生链接它做模型校验）；使用 Xacro 时另需 `xacro`。对应 Ubuntu 软件包为 `ros-jazzy-robot-state-publisher`、`ros-jazzy-urdfdom`、`ros-jazzy-xacro`。纯 URDF 路径不导入 Xacro。Xacro 验证在独立的测试安装前缀中进行，没有替用户修改系统依赖。
+
+模型导入与校验由 `chaos_assets` 的**原生 C++ 引擎**完成（`chaos_assets::resolve_description` / `validate_description_graph`）；Xacro 展开通过一个不含业务决策的薄桥调用官方 `xacro` 包。冻结后的 XML 作为 `robot_description` 参数传给 `robot_state_publisher`。
 
 在 `chaos_ws` 下执行：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon build --base-paths src --symlink-install
-source install/setup.bash
+colcon --log-base log-cpp build --base-paths src \
+  --build-base build-cpp --install-base install-cpp \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
+source install-cpp/local_setup.bash
 
 # 校验两个模型并显示启动计划；不启动 ROS 节点
 ros2 launch chaos_bringup system.launch.py \
@@ -61,9 +65,11 @@ ros2 launch chaos_bringup system.launch.py \
   inventory:="$PWD/src/chaos_assets/config/description.xacro.example.yaml" dry_run:=true
 ```
 
-`dry_run` 会实际读取模型、展开 Xacro、执行本地 `check_urdf` 并检查资源和 TF 归属；不会启动 RSP、硬件驱动或 ROS 数据连接，因此仍需要解析用的依赖。真实启动还会预检 RSP 可执行文件。模型在资产解析阶段展开为不可变 XML 快照，启动阶段不重新读取源模型；`sha256` 和资产 `config_digest` 包含本次模型结果。
+`dry_run` 会实际读取模型、展开 Xacro、用 urdfdom 原生解析校验并检查资源和 TF 归属；不会启动 RSP、硬件驱动或 ROS 数据连接，因此仍需要解析用的依赖。真实启动还会预检 RSP 可执行文件。模型在资产解析阶段展开为不可变 XML 快照，启动阶段不重新读取源模型；`sha256` 和资产 `config_digest` 包含本次模型结果。
 
 原始文件保持不变。检查器会将相对 mesh/texture 文件名在冻结 XML 中转换为绝对 `file://` URI；`package://` 保留，并检查安装资源存在。拒绝远程 URL、带 host 的 file URI 和缺失文件。相对网格路径按入口模型目录解释，即使标签来自 Xacro include；跨目录资源优先使用 `package://`。
+
+冻结后的 XML 由 libxml2 序列化，保留 XML 声明与源文件注释。它与迁移前 Python 实现写出的字节**不同**（语义相同），因此带机器人描述的资产的 `sha256` 与 `config_digest` 与 Python 基线不同。下游若把描述摘要与存储值比较，需要在迁移后重新计算一次。详见 [资产与启动规划器迁移说明](cpp-assets-migration.md)。
 
 模型 XML 已冻结不代表 mesh/纹理被打包进消息。RViz 所在机器仍需能访问这些文件；跨设备显示应安装相同描述包并使用 `package://`，避免引用机载计算机私有的绝对路径。ROS 资源解析依据 [resource_retriever](https://github.com/ros/resource_retriever/blob/jazzy/resource_retriever/src/retriever.cpp#L126-L148)。
 

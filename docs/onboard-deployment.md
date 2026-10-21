@@ -22,7 +22,7 @@ Python 源码、ROS 接口定义与资产格式共用；生成的 ROS 消息扩�
 
 建议在目标设备或相同架构、相同系统的构建环境中构建。每种架构只安装与该机器相关的厂商驱动；mock 和另一类机器人的 SDK 不需要在实机启动时加载。具体厂商栈支持的硬件/系统还需要各自核对，使用 Jazzy 不代表现有 Humble 驱动或 PSDK 已经完成迁移。
 
-在目标机完成 ROS 2 Jazzy 及 README 中的构建依赖安装后，从 `chaos_ws` 执行。工作空间共 8 个 ROS 包，`src/chaos_mqtt` 通过 ament_cmake 与 ament_cmake_python 同时构建 Python 网关和 `transport/` 下的 Rust 传输；构建机还需 Rust/Cargo、`build-essential`、CMake、`pkg-config` 和 `libclang-dev`：
+在目标机完成 ROS 2 Jazzy 及 README 中的构建依赖安装后，从 `chaos_ws` 执行。工作空间包含 **9 个生产 ROS 包和 1 个基准包**，业务运行时全部为原生 C++17；`src/chaos_mqtt` 通过 ament_cmake 与 ament_cmake_python 同时构建**原生 C++ 业务网关**和 `transport/` 下的 Rust 传输；构建机还需 Rust/Cargo、`build-essential`、CMake、`pkg-config` 和 `libclang-dev`：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -35,20 +35,9 @@ source /opt/chaos/ros/local_setup.bash
 
 生产安装使用普通安装，在最终前缀构建；不要把当前开发用的 `--symlink-install` 目录直接复制到机载计算机。上面的新 build/log 目录用于隔离开发缓存；也可以在独立源码副本中构建。导入本机 Jazzy 后加载 `local_setup.bash`，避免带入开发机记录的其他工作空间路径。
 
-从之前 `chaos_mqtt` 与 `mqtt_ros2_adapter` 并列的布局升级时，`chaos_mqtt` 的构建类型已改变，旧安装空间也可能残留独立传输包的索引。请在未加载旧工作空间的新终端构建到新的前缀，保留旧安装供核对。例如管理员预先创建并授权写入 `/opt/chaos/ros-mqtt-merged` 后：
+**始终构建到新的前缀，并在未加载旧工作空间的终端执行。** 旧安装空间可能残留并列包索引和 `ament_python` 缓存；叠加加载旧 overlay 会让旧包遮蔽新前缀，导致与实际代码无关的失败。验收后把 `edge.env` 的 `CHAOS_OVERLAY_SETUP` 指向新前缀的 `local_setup.bash`，按既有停机流程切换服务。
 
-```bash
-source /opt/ros/jazzy/setup.bash
-colcon --log-base log-mqtt-merged build --base-paths src \
-  --build-base build-mqtt-merged --merge-install \
-  --install-base /opt/chaos/ros-mqtt-merged \
-  --cmake-args -DCMAKE_BUILD_TYPE=Release
-source /opt/chaos/ros-mqtt-merged/local_setup.bash
-```
-
-后续路径检查相应使用新前缀，验收后将 `edge.env` 的 `CHAOS_OVERLAY_SETUP` 指向该前缀的 `local_setup.bash`，按既有停机流程切换服务。不要继续叠加加载旧工作空间来验证此次合并。
-
-`chaos_mqtt` 由同一次 colcon 构建调用 Cargo `--locked --release`，传输安装到 `/opt/chaos/ros/lib/chaos_mqtt/mqtt_transport`，Python 网关入口安装到同一目录下的 `gateway`。无需单独构建兄弟目录或复制二进制。首次构建需要下载 Cargo 依赖；准备好依赖缓存后，可在上述 `--cmake-args` 后增加 `-DMQTT_ADAPTER_OFFLINE=ON` 执行离线构建。锁文件固定 Rust 依赖，系统库和 Rust 工具链版本仍由构建环境管理。
+`chaos_mqtt` 由同一次 colcon 构建调用 Cargo `--locked --release`，传输安装到 `/opt/chaos/ros/lib/chaos_mqtt/mqtt_transport`，**原生 C++ 网关**入口安装到同一目录下的 `gateway`。无需单独构建兄弟目录或复制二进制。首次构建需要下载 Cargo 依赖；准备好依赖缓存后，可在上述 `--cmake-args` 后增加 `-DMQTT_ADAPTER_OFFLINE=ON` 执行离线构建。锁文件固定 Rust 依赖，系统库和 Rust 工具链版本仍由构建环境管理。
 
 Cargo 默认使用 2 个并行构建任务，可通过 `-DMQTT_ADAPTER_BUILD_JOBS=2` 调整。构建会在 `BINDGEN_EXTRA_CLANG_ARGS` 未设置时探测本机 C 编译器的头文件路径，无需照搬开发机的 x86 路径；如果自定义该变量，必须使用当前目标机的路径。
 
@@ -66,7 +55,29 @@ ldd /opt/chaos/ros/lib/chaos_mqtt/mqtt_transport
 
 `ros2 pkg executables chaos_mqtt` 应包含 `gateway` 和 `mqtt_transport`。只运行已构建安装空间的设备不需要 Cargo、Rust 编译器或 libclang，仍需匹配的 ROS 和系统运行库。当前包内传输与业务网关通过标准 String 消息通信，仍由两个进程运行；统一资产配置和 launch 将它们与机器人运行时交给同一个服务管理。
 
-本轮为控制服务和动作增加了 `expires_at` 字段，并扩展 MQTT 终态响应和发送策略。升级时需要统一重建接口、runtime、gateway、SDK 及其他接口使用者，同时更新 Rust 中间件；旧、新 ROS 接口产物不能混跑。更新文件后按既有停机流程重启本机框架，新进程不会恢复旧控制租约。请求期限使用 Unix UTC，设备和平台需保持时钟同步。
+控制服务、动作和 SDK 的接口变更必须统一重建：`chaos_interfaces` 的所有使用者、runtime、网关和 SDK 一起重建，并更新 Rust 中间件；旧、新 ROS 接口产物不能混跑。更新文件后按既有停机流程重启本机框架，新进程不会恢复旧控制租约。请求期限使用 Unix UTC，设备和平台需保持时钟同步。
+
+### 机器狗：原生 Unitree SDK2
+
+Go2 的 real 后端需要原生 SDK2 构建，即 `CHAOS_GO2_WITH_UNITREE_SDK=ON`，并且上游 SDK2 的安装前缀在 `CMAKE_PREFIX_PATH` 中：
+
+```bash
+colcon --log-base log-onboard build --base-paths src --build-base build-onboard --merge-install \
+  --install-base /opt/chaos/ros \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release \
+               -DCHAOS_GO2_WITH_UNITREE_SDK=ON \
+               -DCMAKE_PREFIX_PATH="$UNITREE_SDK2_PREFIX"
+```
+
+默认（OFF）构建不链接厂商 SDK：支持 mock 与全部本地校验，但 real 模式在启动阶段显式失败。
+
+运行时必须让 SDK 库目录**排在 ROS 库目录之前**，否则会解析到与厂商 `libddscxx` 不配套的那一份 `libddsc`。在 `edge.env` 中导出：
+
+```bash
+LD_LIBRARY_PATH=/opt/unitree_sdk2/lib:/opt/ros/jazzy/lib/x86_64-linux-gnu
+```
+
+（`/opt/unitree_sdk2` 替换为该机实际的 SDK 前缀。）SDK-ON 只验证了编译与链接，**尚未在真实机器狗上验证**写入时序、DDS 发现延迟和硬件响应。详见 [Go2 接入说明](unitree-go2.md)。
 
 ## 2. 每台机器只配置自己的资产
 
@@ -117,7 +128,7 @@ Gemini 335 使用 [专用模板](../src/chaos_assets/config/orbbec_gemini335.exa
 
 - 无人车：连接已有底盘的 Odometry / Twist，提供状态、速度和软件受控停止。旧 MQTT 桥、导航、跟随等其他直写底盘的控制源需要按实际接管方案管理。
 - 无人机：订阅旧 PSDK 网关的状态；现阶段没有统一飞控接管。旧网关内置 MQTT 保持其现有归属，与新框架使用不同 client ID / 主题；当前 PSDK 飞行控制仍属于旧网关。
-- Go2：使用 SDK 状态与平面速度/停止接口，不自动站起或导航。启动前退出旧 SDK、MQTT、导航控制源，服务环境需安装 `unitree_sdk2py`；驱动与 runtime 由同一个 launch 负责启动和退出。
+- Go2：使用 SDK 状态与平面速度/停止接口，不自动站起或导航。启动前退出旧 SDK、MQTT、导航控制源；服务环境需要 SDK-ON 安装空间和按上文顺序导出的 `LD_LIBRARY_PATH`；驱动与 runtime 由同一个 launch 负责启动和退出。
 - launch 管理某资产的 Rust 中间件后，同一资产不再由独立 `mqtt_ros2_adapter.service` 启动第二份中间件；从旧部署迁移时，在既定切换窗口停用该资产的独立服务，保留其他资产的服务。
 
 `src/chaos_mqtt/transport/deploy` 保留原传输实现的独立部署模板，供兼容旧部署时参考。当前框架使用本节的统一 launch 和下面的 `chaos-edge.service`，无需另行安装这些独立模板。

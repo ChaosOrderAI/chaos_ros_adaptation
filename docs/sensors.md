@@ -1,6 +1,6 @@
 # 传感器资产与驱动
 
-硬件采集由独立驱动进程负责，统一 launch 按资产配置启动和监督驱动。相机、雷达和 IMU 使用标准 `sensor_msgs` 接口，机器人控制继续通过 `chaos_runtime`。大数据流留在本机 ROS 网络，不默认经过 MQTT 或 Python 业务网关。
+硬件采集由独立驱动进程负责，统一 launch 按资产配置启动和监督驱动。相机、雷达和 IMU 使用标准 `sensor_msgs` 接口，机器人控制继续通过 `chaos_runtime`。大数据流留在本机 ROS 网络，不默认经过 MQTT 或业务网关。`chaos_sensors` 的模拟与监测节点是原生 C++ 实现（`ros2 run chaos_sensors mock_sensor` / `sensor_monitor`），Python 侧只保留 launch 胶水。
 
 Gemini 335 的官方 C++ 驱动源码、固定版本和部署步骤见 [奥比中光接入](orbbec-driver.md)。本层同样允许接入其他提供标准消息的 ROS 2 驱动。
 
@@ -78,7 +78,7 @@ ros2 topic echo /robots/vehicle_001/sensors/diagnostics
 
 默认监测流接收超时、源时间戳无效/不前进/过期/超前，以及 frame 不匹配。接收间隔使用单调时钟，源时间年龄使用 ROS 时钟。数据一直到达也可能源时间已过期。若旧驱动把缓存数据重新打上当前时间，框架无法据此识别真实硬件已经停更，需要修正上游的采样时间语义。
 
-`monitor:false` 保留目录与数据输出，跳过对应订阅。Python 订阅会反序列化整条消息，Gemini 模板默认仅监测 CameraInfo 与 IMU，避免监测大图像的额外负载。CameraInfo 正常不能证明每张图像有效；被关闭的流没有健康检查结果。
+`monitor:false` 保留目录与数据输出，跳过对应订阅。监测节点使用原生 C++ 类型化订阅，同样会反序列化整条消息，因此 Gemini 模板默认仅监测 CameraInfo 与 IMU，避免监测大图像的额外负载。CameraInfo 正常不能证明每张图像有效；被关闭的流没有健康检查结果。
 
 诊断只提供观测信息，不自动更改机器人 ready、控制租约或触发停车。attach 驱动失联会产生诊断，如何让特定传感器故障约束导航/飞行，应由对应任务和控制策略明确实现。
 

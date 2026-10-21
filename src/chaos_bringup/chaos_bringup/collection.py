@@ -1,36 +1,47 @@
-"""Launch optional data collection without giving it authority over robot control."""
+"""Launch optional data collection without giving it authority over robot control.
 
-import json
-import os
-from pathlib import Path
-import stat
+The recording policy derivation, the summary, the output directory check and
+the storage plugin check are performed by the native planner
+(``chaos_bringup._chaos_bringup_core``). This module only turns a native
+process specification into a ROS action.
+"""
 
 import launch.logging
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from chaos_assets import ConfigurationError
+from chaos_assets import ConfigurationError  # noqa: F401  (shared error type)
 
-from .description import component_asset
-from .sensors import require_executable
+from ._chaos_bringup_core import (
+    check_output_directory as _check_output_directory,
+    collection_processes as _collection_processes,
+    collection_summary as _collection_summary,
+    require_executable as _require_executable,
+)
+
+
+def require_executable(package, executable):
+    """Resolve a ROS executable without importing or invoking a vendor driver."""
+    return _require_executable(package, executable)
 
 
 def enabled_collection(asset):
+    """The recording policy of an asset, or None when it is disabled."""
     config = asset.get('data_collection')
     return config if config and config.get('enabled', False) else None
 
 
 def collection_summary(asset):
-    config = enabled_collection(asset)
-    if config is None:
-        return None
-    return {key: config[key] for key in (
-        'output_dir', 'storage_id', 'topics', 'time_sync',
-        'max_bagfile_duration_s', 'max_bagfile_size_mb', 'min_free_space_mb')}
+    """The recording policy summary of an asset."""
+    return _collection_summary(asset)
 
 
 def registered_writers():
-    """Inspect plugin registration; never construct a writer or a ROS node."""
+    """Inspect plugin registration; never construct a writer or a ROS node.
+
+    The list of registered storage plugins is a property of the build of
+    ``rosbag2_py``; the native planner receives it as an injected capability.
+    """
     try:
         from rosbag2_py import get_registered_writers
         return set(get_registered_writers())
@@ -41,57 +52,40 @@ def registered_writers():
 
 def check_output_directory(path):
     """Check the nearest existing ancestor without creating any filesystem entry."""
-    candidate = Path(path)
-    while True:
-        try:
-            info = candidate.stat()
-        except FileNotFoundError:
-            if candidate == candidate.parent:
-                raise ConfigurationError(f'data collection output has no existing ancestor: {path}')
-            candidate = candidate.parent
-            continue
-        except OSError as error:
-            raise ConfigurationError(f'cannot inspect data collection output directory: {path}') from error
-        if not stat.S_ISDIR(info.st_mode):
-            raise ConfigurationError(f'data collection output ancestor is not a directory: {candidate}')
-        if not os.access(candidate, os.W_OK | os.X_OK):
-            raise ConfigurationError(f'data collection output ancestor is not writable: {candidate}')
-        return
+    return _check_output_directory(path)
 
 
 def preflight_collection(plan):
     """Check enabled recorders before any component starts; clock checks run onboard."""
-    configs = [config for item in plan
-               if (config := enabled_collection(item['asset'])) is not None]
-    if not configs:
-        return
-    try:
-        require_executable('chaos_data', 'collector')
-    except ConfigurationError as error:
-        raise ConfigurationError(
-            'data collection dependency chaos_data/collector is unavailable; '
-            'build and source the complete workspace') from error
-    available = registered_writers()
-    for config in configs:
-        if config['storage_id'] not in available:
-            raise ConfigurationError(
-                f'data collection storage plugin is unavailable: {config["storage_id"]}')
-        check_output_directory(config['output_dir'])
+    from .planning import preflight as _preflight
+
+    _preflight(plan, registered_writers=sorted(registered_writers()), check_files=True)
+
+
+def _node(spec, environment):
+    # The parameters keep the structure of the native specification: one
+    # dictionary per entry, so a caller sees the same parameters as the
+    # native planner derived them.
+    parameters = []
+    for entry in spec['parameters']:
+        parameters.append({key: ParameterValue(value, value_type=str)
+                           if isinstance(value, str) else value
+                           for key, value in entry.items()})
+    return Node(package=spec['package'], executable=spec['executable'], name=spec['name'],
+                namespace=spec['namespace'], output='screen',
+                arguments=list(spec['arguments']), parameters=parameters,
+                remappings=[tuple(rule) for rule in spec['remappings']],
+                additional_env=environment,
+                # Allow a signal during an in-flight probe/startup as well as the
+                # native stop/flush deadline (5 + 15 + 5 + 10 seconds, plus child
+                # cleanup).
+                sigterm_timeout='40.0', sigkill_timeout='5.0')
 
 
 def collection_processes(asset, environment):
-    if enabled_collection(asset) is None:
-        return []
-    child = Node(
-        package='chaos_data', executable='collector', name='data_collector',
-        namespace=asset['namespace'], output='screen', additional_env=environment,
-        parameters=[{'asset_json': ParameterValue(
-            json.dumps(component_asset(asset)), value_type=str), 'use_sim_time': False}],
-        # Allow a signal during an in-flight probe/startup as well as the native
-        # stop/flush deadline (5 + 15 + 5 + 10 seconds, plus child cleanup).
-        sigterm_timeout='40.0', sigkill_timeout='5.0',
-    )
-    return [(f'Data collection {asset["id"]}', child)]
+    """Return (label, process) pairs for the enabled recorder."""
+    return [(spec['label'], _node(spec, environment))
+            for spec in _collection_processes(asset)]
 
 
 def on_collection_exit(label):

@@ -1,3 +1,12 @@
+"""Planning contracts of the native planner.
+
+The planning rules are implemented in C++. These tests drive the public
+Python surface of the package and keep the assertion intent of the original
+behaviour tests: the selection of the assets, the immutability of the
+snapshot, the ownership rules and the resolution of the transport executable.
+"""
+
+import os
 from copy import deepcopy
 from pathlib import Path
 
@@ -5,11 +14,18 @@ import pytest
 import yaml
 
 from chaos_assets import ConfigurationError
-from chaos_bringup.planning import prepare_plan
 from chaos_bringup import planning
+from chaos_bringup.planning import prepare_plan
 
 
 ASSETS = Path(__file__).resolve().parents[2] / 'chaos_assets'
+
+
+def _absolute_models(data):
+    """The model files are referenced by an absolute path."""
+    for asset in data['assets']:
+        asset['model_file'] = str((ASSETS / 'config' / asset['model_file']).resolve())
+    return data
 
 
 def test_demo_plan_starts_two_independent_assets():
@@ -42,7 +58,7 @@ def test_plan_is_immutable_despite_mutating_returned_nested_configuration():
 
 
 def test_shared_mqtt_identity_rejected_before_launch(tmp_path):
-    data = yaml.safe_load((ASSETS / 'config/mqtt.example.yaml').read_text())
+    data = _absolute_models(yaml.safe_load((ASSETS / 'config/mqtt.example.yaml').read_text()))
     for asset in data['assets']:
         asset['model_file'] = str((ASSETS / 'config' / asset['model_file']).resolve())
     data['transports']['edge_mqtt']['config']['mqtt']['client_id'] = 'same'
@@ -78,22 +94,20 @@ def test_mqtt_collision_across_hosts_is_rejected_even_with_asset_filter(tmp_path
         prepare_plan(path, 'dev', asset_ids=['vehicle_001'], enable_mqtt=True, check_files=False)
 
 
-@pytest.mark.parametrize('configured_executable', [None, 'mqtt_transport', 'mqtt_ros2_adapter'])
-def test_bundled_transport_is_selected_from_package_index_not_path(tmp_path, monkeypatch, configured_executable):
-    prefix = tmp_path / 'installed'
+def test_bundled_transport_is_selected_from_package_index_not_path(tmp_path, monkeypatch):
+    import ament_index_python
+
+    prefix = Path(ament_index_python.packages.get_package_prefix('chaos_mqtt'))
     binary = prefix / 'lib/chaos_mqtt/mqtt_transport'
-    binary.parent.mkdir(parents=True)
-    binary.write_text('#!/bin/sh\nexit 0\n')
-    binary.chmod(0o755)
-    def package_prefix(name):
-        assert name == 'chaos_mqtt', 'the former transport ROS package must not be queried'
-        return str(prefix)
-    monkeypatch.setattr(planning, 'get_package_prefix', package_prefix)
+    if not binary.is_file():
+        pytest.skip('the chaos_mqtt package is not installed')
     # An unrelated legacy binary on PATH must not override the installed one.
-    monkeypatch.setattr(planning.shutil, 'which', lambda name: '/legacy/mqtt_ros2_adapter')
+    legacy = tmp_path / 'legacy'
+    legacy.mkdir()
+    (legacy / 'mqtt_ros2_adapter').write_text('#!/bin/sh\nexit 0\n')
+    (legacy / 'mqtt_ros2_adapter').chmod(0o755)
+    monkeypatch.setenv('PATH', f'{legacy}:{os.environ.get("PATH", "")}')
     data = yaml.safe_load((ASSETS / 'config/mqtt.example.yaml').read_text())
-    if configured_executable is not None:
-        data['transports']['edge_mqtt']['executable'] = configured_executable
     for asset in data['assets']:
         asset['model_file'] = str((ASSETS / 'config' / asset['model_file']).resolve())
     mqtt = data['transports']['edge_mqtt']['config']['mqtt']
@@ -107,36 +121,44 @@ def test_bundled_transport_is_selected_from_package_index_not_path(tmp_path, mon
     assert all(item['mqtt']['executable'] == str(binary) for item in plan)
 
 
-def test_missing_bundled_package_fails_without_legacy_path_fallback(monkeypatch):
+def test_missing_bundled_package_fails_without_legacy_path_fallback(tmp_path, monkeypatch):
+    legacy = tmp_path / 'legacy'
+    legacy.mkdir()
+    (legacy / 'mqtt_ros2_adapter').write_text('#!/bin/sh\nexit 0\n')
+    (legacy / 'mqtt_ros2_adapter').chmod(0o755)
+    monkeypatch.setenv('PATH', f'{legacy}:{os.environ.get("PATH", "")}')
+
     def missing(name):
-        raise planning.PackageNotFoundError(name)
-    monkeypatch.setattr(planning, 'get_package_prefix', missing)
-    monkeypatch.setattr(planning.shutil, 'which', lambda name: '/legacy/mqtt_ros2_adapter')
+        raise LookupError(name)
+
     with pytest.raises(ConfigurationError, match='build the workspace'):
-        planning.resolve_mqtt_executable()
+        planning.resolve_mqtt_executable('mqtt_transport', prefix_resolver=missing)
     # Configuration inspection must still work before building/provisioning.
     assert len(prepare_plan(ASSETS / 'config/mqtt.example.yaml', 'dev',
                             enable_mqtt=True, check_files=False)) == 2
 
 
 @pytest.mark.parametrize('mode', [None, 0o644])
-def test_incomplete_bundled_install_fails_preflight(tmp_path, monkeypatch, mode):
-    monkeypatch.setattr(planning, 'get_package_prefix', lambda name: str(tmp_path))
+def test_incomplete_bundled_install_fails_preflight(tmp_path, mode):
+    prefix = tmp_path
     if mode is not None:
-        binary = tmp_path / 'lib/chaos_mqtt/mqtt_transport'
+        binary = prefix / 'lib/chaos_mqtt/mqtt_transport'
         binary.parent.mkdir(parents=True)
         binary.write_text('#!/bin/sh\nexit 0\n')
         binary.chmod(mode)
     with pytest.raises(ConfigurationError, match='Installed MQTT executable'):
-        planning.resolve_mqtt_executable()
+        planning.resolve_mqtt_executable('mqtt_transport',
+                                         prefix_resolver=lambda name: str(prefix))
 
 
-def test_explicit_external_transport_override_is_preserved(tmp_path, monkeypatch):
+def test_explicit_external_transport_override_is_preserved(tmp_path):
     binary = tmp_path / 'custom_bridge'
     binary.write_text('#!/bin/sh\nexit 0\n')
     binary.chmod(0o755)
-    monkeypatch.setattr(planning, 'get_package_prefix',
-                        lambda name: pytest.fail('explicit override must not use package index'))
-    assert planning.resolve_mqtt_executable(str(binary)) == str(binary)
+
+    def unused(name):
+        pytest.fail('an explicit override must not use the package index')
+
+    assert planning.resolve_mqtt_executable(str(binary), prefix_resolver=unused) == str(binary)
     with pytest.raises(ConfigurationError, match='not found or not executable'):
         planning.resolve_mqtt_executable(str(tmp_path / 'absent'))

@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "source": "/home/yunze/chaos_ros_control/chaos_ws/src/chaos_assets/config/sensors.demo.yaml",
+  "hosts": {
+    "dev": {
+      "ros_domain_id": 87
+    }
+  },
+  "assets": [
+    {
+      "id": "vehicle_001",
+      "model": "lingao_vehicle",
+      "model_version": "v1",
+      "kind": "ugv",
+      "host": "dev",
+      "ros_domain_id": 87,
+      "namespace": "/robots/vehicle_001",
+      "enabled": true,
+      "mode": "mock",
+      "driver": {
+        "plugin": "mock",
+        "options": {
+          "kind": "ugv"
+        }
+      },
+      "capabilities": [
+        "state",
+        "motion.velocity",
+        "motion.stop",
+        "navigation.pose"
+      ],
+      "frames": {
+        "base": "vehicle_001/base_link",
+        "odom": "vehicle_001/odom",
+        "map": "vehicle_001/map"
+      },
+      "limits": {
+        "linear_mps": 0.5,
+        "angular_rps": 0.8,
+        "command_timeout_s": 0.5,
+        "state_timeout_s": 2.0,
+        "lease_max_s": 30.0,
+        "action_timeout_s": 120.0,
+        "max_altitude_m": 20.0
+      },
+      "resources": {},
+      "transport": null,
+      "model_file": "/home/yunze/chaos_ros_control/chaos_ws/src/chaos_assets/models/lingao_vehicle/v1/model.yaml",
+      "description": null,
+      "sensors": {
+        "front_camera": {
+          "kind": "camera",
+          "driver": {
+            "mode": "mock",
+            "declared_mode": "mock"
+          },
+          "streams": {
+            "color": {
+              "type": "sensor_msgs/msg/Image",
+              "topic": "/robots/vehicle_001/sensors/front_camera/color/image_raw",
+              "frame_id": "vehicle_001/front_camera_color_optical_frame",
+              "rate_hz": 10.0,
+              "qos": "sensor_data",
+              "monitor": true,
+              "timeout_s": 2.0
+            },
+            "camera_info": {
+              "type": "sensor_msgs/msg/CameraInfo",
+              "topic": "/robots/vehicle_001/sensors/front_camera/color/camera_info",
+              "frame_id": "vehicle_001/front_camera_color_optical_frame",
+              "rate_hz": 10.0,
+              "qos": "sensor_data",
+              "monitor": true,
+              "timeout_s": 2.0
+            }
+          },
+          "id": "front_camera",
+          "enabled": true,
+          "namespace": "/robots/vehicle_001/sensors/front_camera",
+          "frame_id": "vehicle_001/front_camera_link"
+        },
+        "lidar": {
+          "kind": "lidar",
+          "driver": {
+            "mode": "mock",
+            "declared_mode": "mock"
+          },
+          "streams": {
+            "points": {
+              "type": "sensor_msgs/msg/PointCloud2",
+              "topic": "/robots/vehicle_001/sensors/lidar/points",
+              "frame_id": "vehicle_001/lidar_link",
+              "qos": "sensor_data",
+              "monitor": true,
+              "rate_hz": 10.0,
+              "timeout_s": 2.0
+            },
+            "imu": {
+              "type": "sensor_msgs/msg/Imu",
+              "topic": "/robots/vehicle_001/sensors/lidar/imu",
+              "frame_id": "vehicle_001/lidar_imu_link",
+              "rate_hz": 50.0,
+              "qos": "sensor_data",
+              "monitor": true,
+              "timeout_s": 2.0
+            }
+          },
+          "id": "lidar",
+          "enabled": true,
+          "namespace": "/robots/vehicle_001/sensors/lidar",
+          "frame_id": "vehicle_001/lidar_link"
+        },
+        "body_imu": {
+          "kind": "imu",
+          "driver": {
+            "mode": "mock",
+            "declared_mode": "mock"
+          },
+          "streams": {
+            "imu": {
+              "type": "sensor_msgs/msg/Imu",
+              "topic": "/robots/vehicle_001/sensors/body_imu/data",
+              "rate_hz": 50.0,
+              "frame_id": "vehicle_001/body_imu_link",
+              "qos": "sensor_data",
+              "monitor": true,
+              "timeout_s": 2.0
+            }
+          },
+          "id": "body_imu",
+          "enabled": true,
+          "namespace": "/robots/vehicle_001/sensors/body_imu",
+          "frame_id": "vehicle_001/body_imu_link"
+        }
+      },
+      "data_collection": null,
+      "config_digest": "5f88ad3934ec276a74d3fcfeb0b191d4538529c7b5ec128817c2f694e8f38ef1"
+    }
+  ],
+  "transports": {}
+}

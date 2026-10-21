@@ -21,6 +21,13 @@ void validate_sensor_graph(const std::vector<Json>& assets);
 // Relative ROS topic resolution against an asset namespace.
 std::string resolve_topic(const Json& value, const std::string& namespace_, const std::string& where);
 
+// Validate one ROS parameter value.
+//
+// A parameter is a bool, a string, a signed 64 bit integer, a finite double,
+// or a nonempty homogeneous array of one of those scalar kinds. Booleans are
+// numbers nowhere.
+void validate_ros_parameter(const Json& value, const std::string& where);
+
 extern const std::regex kFrameRe;
 
 }  // namespace chaos::assets

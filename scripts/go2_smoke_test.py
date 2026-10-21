@@ -75,7 +75,10 @@ def run():
                         stdout=logfile, stderr=subprocess.STDOUT, start_new_session=True)
                     rclpy.init()
                     node = Node('chaos_go2_smoke_client')
-                    sdk = Robot(node, asset['id'])
+                    # The native client owns its context, its node and its
+                    # executor thread: it does not share the node of this
+                    # script and it has no private service handles.
+                    sdk = Robot(asset['id'])
                     results = {}
                     result_subscription = node.create_subscription(
                         CommandResult, asset['namespace'] + '/command_results',
@@ -111,7 +114,10 @@ def run():
                         values = velocity_values()
                         return values is not None and all(abs(value) < 1e-6 for value in values)
 
-                    wait(lambda: sdk._description.service_is_ready(), 'description service', 20)
+                    # The native client waits for the discovery of the
+                    # description service itself; it exposes no private
+                    # service handle any more.
+                    assert sdk.wait_ready(20.0), 'description service was not discovered'
                     description = future_result(sdk.describe(), 'description response')
                     assert description.asset_id == asset['id']
                     assert description.model == 'unitree_go2'
@@ -129,7 +135,6 @@ def run():
                     assert not any('go2_driver' in name or 'mqtt' in name for name, _ in names)
                     print('PASS: installed quadruped model, SDK discovery and capabilities without flight')
 
-                    wait(lambda: sdk._lease.service_is_ready(), 'lease service')
                     lease = future_result(sdk.acquire('go2-smoke', 30.0), 'control lease')
                     assert lease.success and sdk.lease_token, lease.message
                     wait(lambda: node.count_subscribers(asset['namespace'] + '/motion/velocity') > 0,
@@ -155,13 +160,11 @@ def run():
                     assert stopped(), 'Rejected vertical velocity must not move the quadruped'
                     assert velocity(y=0.1).success
                     wait(lambda: abs(velocity_values()[1]) > 0.05, 'lateral motion before explicit stop')
-                    wait(lambda: sdk._stop.service_is_ready(), 'motion stop service')
                     stop = future_result(sdk.stop(), 'motion.stop response')
                     assert stop.success, stop.message
                     wait(stopped, 'explicit stop telemetry')
                     print('PASS: unsupported vertical velocity rejected and motion.stop clears motion')
 
-                    wait(lambda: sdk._navigation.server_is_ready(), 'navigation action server')
                     target = PoseStamped()
                     target.header.frame_id = description.map_frame
                     target.header.stamp = node.get_clock().now().to_msg()
@@ -171,9 +174,11 @@ def run():
                     target.pose.orientation.w = math.cos(0.15 / 2)
                     handle = future_result(sdk.navigate(target), 'planar navigation acceptance')
                     assert handle.accepted, 'Mock planar navigation should be accepted'
-                    result = future_result(handle.get_result_async(), 'planar navigation result')
-                    assert result.status == GoalStatus.STATUS_SUCCEEDED, result.status
-                    assert result.result.success, result.result.message
+                    # The typed task exposes the result of the goal; the
+                    # status is reported as the numeric goal status.
+                    result = handle.result()
+                    assert result['ros_goal_status'] == GoalStatus.STATUS_SUCCEEDED, result
+                    assert result['ok'], result['message']
                     wait(lambda: math.isclose(sdk.state().pose.pose.position.x,
                                              target.pose.position.x, abs_tol=1e-4)
                          and math.isclose(sdk.state().pose.pose.position.y,
@@ -182,8 +187,11 @@ def run():
                                           target.pose.orientation.z, abs_tol=1e-4)
                          and stopped(), 'final planar navigation pose')
                     target.pose.position.z = 0.1
-                    rejected_goal = future_result(sdk.navigate(target), 'vertical navigation rejection')
-                    assert not rejected_goal.accepted, 'Quadruped navigation must reject nonzero z'
+                    # The Python facade preserves a Task for refused goals;
+                    # accepted is false when the native task is empty.
+                    rejected = future_result(sdk.navigate(target),
+                                             'vertical navigation rejection')
+                    assert not rejected.accepted, 'Quadruped navigation must reject nonzero z'
                     assert abs(sdk.state().pose.pose.position.z) < 1e-9
                     print('PASS: mock planar navigation completes and nonzero-z target is rejected')
 

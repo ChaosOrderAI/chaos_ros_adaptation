@@ -1,0 +1,42 @@
+{
+  "id": "vehicle_001",
+  "model": "lingao_vehicle",
+  "model_version": "v1",
+  "kind": "ugv",
+  "host": "dev",
+  "ros_domain_id": 87,
+  "namespace": "/robots/vehicle_001",
+  "enabled": true,
+  "mode": "mock",
+  "driver": {
+    "plugin": "mock",
+    "options": {
+      "kind": "ugv"
+    }
+  },
+  "capabilities": [
+    "state",
+    "motion.velocity",
+    "motion.stop",
+    "navigation.pose"
+  ],
+  "frames": {
+    "base": "vehicle_001/base_link",
+    "odom": "vehicle_001/odom",
+    "map": "vehicle_001/map"
+  },
+  "limits": {
+    "linear_mps": 0.5,
+    "angular_rps": 0.8,
+    "command_timeout_s": 0.5,
+    "state_timeout_s": 2.0,
+    "lease_max_s": 30.0,
+    "action_timeout_s": 120.0,
+    "max_altitude_m": 20.0
+  },
+  "resources": {},
+  "transport": null,
+  "description": null,
+  "sensors": {},
+  "data_collection": null
+}

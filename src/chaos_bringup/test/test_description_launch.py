@@ -1,4 +1,10 @@
-"""URDF startup contracts without running publishers or opening robot hardware."""
+"""URDF startup contracts without running publishers or opening robot hardware.
+
+The description of an asset, the process specification of the publisher and
+the dependency check are derived by the native planner. The capabilities of
+the build are injected, so a test states the deployment it simulates instead
+of replacing internals of the package.
+"""
 
 import hashlib
 import json
@@ -73,11 +79,16 @@ def evaluated_parameters(options):
             for values in options['parameters'] for key, value in values.items()}
 
 
-def test_dry_run_has_only_description_summary_without_publisher_dependency(tmp_path, monkeypatch):
+def test_dry_run_has_only_description_summary_without_publisher_dependency(tmp_path,
+                                                                          capabilities):
     plan, _ = with_descriptions(tmp_path)
-    monkeypatch.setattr(description, 'require_executable',
-                        lambda *args: pytest.fail('dry run checked publisher binary'))
-    actions = launching.build_launch_actions(plan, dry_run=True)
+
+    def forbidden(*args):
+        pytest.fail('the dry run checked a publisher binary')
+
+    capabilities['executable_available'] = forbidden
+    capabilities['validate_asset'] = forbidden
+    actions = launching.build_launch_actions(plan, dry_run=True, capabilities=capabilities)
     assert len(actions) == 1 and isinstance(actions[0], LogInfo)
     output = perform_substitutions(LaunchContext(), actions[0].msg)
     summary = json.loads(output)[0]['description']
@@ -90,7 +101,8 @@ def test_dry_run_has_only_description_summary_without_publisher_dependency(tmp_p
 
 
 @pytest.mark.parametrize('source_change', ['replace', 'delete'])
-def test_publishers_use_frozen_xml_after_source_changes(tmp_path, monkeypatch, source_change):
+def test_publishers_use_frozen_xml_after_source_changes(tmp_path, monkeypatch, source_change,
+                                                         capabilities):
     plan, source = with_descriptions(tmp_path)
     items = list(plan)
     items[1]['asset']['ros_domain_id'] = 88
@@ -100,9 +112,10 @@ def test_publishers_use_frozen_xml_after_source_changes(tmp_path, monkeypatch, s
     else:
         source.write_text('invalid replacement!')
     calls = []
-    monkeypatch.setattr(description, 'require_executable', lambda *args: calls.append(args))
+    capabilities['executable_available'] = lambda package, executable: calls.append(
+        (package, executable)) or True
     recorded = record_nodes(monkeypatch)
-    actions = launching.build_launch_actions(plan, discovery='SUBNET')
+    actions = launching.build_launch_actions(plan, discovery='SUBNET', capabilities=capabilities)
     publishers = [options for options in recorded if options['package'] == 'robot_state_publisher']
     assert calls == [('robot_state_publisher', 'robot_state_publisher')]
     assert len(publishers) == len(plan) == 2
@@ -127,36 +140,43 @@ def test_publishers_use_frozen_xml_after_source_changes(tmp_path, monkeypatch, s
     assert sum(isinstance(action, RegisterEventHandler) for action in actions) == 5
 
 
-def test_missing_publisher_rejected_before_any_process_is_constructed(tmp_path, monkeypatch):
+def test_missing_publisher_rejected_before_any_process_is_constructed(tmp_path, monkeypatch,
+                                                                     capabilities):
     plan, _ = with_descriptions(tmp_path)
 
-    def unavailable(*args):
-        raise ConfigurationError('sensor dependency is unavailable')
+    def unavailable(package, executable):
+        return (package, executable) != ('robot_state_publisher', 'robot_state_publisher')
 
-    monkeypatch.setattr(description, 'require_executable', unavailable)
-    monkeypatch.setattr(launching, 'Node', lambda **kwargs: pytest.fail('constructed runtime before preflight'))
-    monkeypatch.setattr(description, 'Node', lambda **kwargs: pytest.fail('constructed publisher before preflight'))
-    with pytest.raises(ConfigurationError, match='robot description dependency robot_state_publisher'):
-        launching.build_launch_actions(plan)
+    capabilities['executable_available'] = unavailable
+    monkeypatch.setattr(launching, 'Node',
+                        lambda **kwargs: pytest.fail('constructed runtime before preflight'))
+    monkeypatch.setattr(description, 'Node',
+                        lambda **kwargs: pytest.fail('constructed publisher before preflight'))
+    with pytest.raises(ConfigurationError, match='robot_state_publisher'):
+        launching.build_launch_actions(plan, capabilities=capabilities)
 
 
 @pytest.mark.parametrize('configured', [None, {'enabled': False}])
-def test_absent_or_disabled_description_has_no_dependency_or_publisher(tmp_path, monkeypatch, configured):
+def test_absent_or_disabled_description_has_no_dependency_or_publisher(tmp_path, monkeypatch,
+                                                                      capabilities, configured):
     items = list(prepare_plan(ASSETS / 'config/demo.yaml', 'dev'))
     for item in items:
         item['asset']['description'] = configured
-    monkeypatch.setattr(description, 'require_executable',
-                        lambda *args: pytest.fail('checked disabled publisher dependency'))
+    asked = []
+    capabilities['executable_available'] = lambda package, executable: asked.append(
+        (package, executable)) or True
     recorded = record_nodes(monkeypatch)
-    launching.build_launch_actions(LaunchPlan.from_items(items))
+    launching.build_launch_actions(LaunchPlan.from_items(items), capabilities=capabilities)
+    # A disabled description is not a dependency of the launch.
+    assert ('robot_state_publisher', 'robot_state_publisher') not in asked
     assert len(recorded) == 2
     assert {options['package'] for options in recorded} == {'chaos_runtime'}
 
 
 def test_nonpublisher_nodes_receive_metadata_without_expanded_xml(tmp_path, monkeypatch,
-                                                               private_launch_logs_and_snapshots):
+                                                               private_launch_logs_and_snapshots,
+                                                                  capabilities):
     plan, _ = with_descriptions(tmp_path, mqtt=True)
-    monkeypatch.setattr(description, 'require_executable', lambda *args: None)
     monkeypatch.setattr(launching.subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(returncode=0))
     sensor_assets = []
 
@@ -166,7 +186,7 @@ def test_nonpublisher_nodes_receive_metadata_without_expanded_xml(tmp_path, monk
 
     monkeypatch.setattr(launching, 'sensor_processes', record_sensors)
     recorded = record_nodes(monkeypatch)
-    launching.build_launch_actions(plan)
+    launching.build_launch_actions(plan, capabilities=capabilities)
     component_options = [options for options in recorded
                          if options['package'] in ('chaos_runtime', 'chaos_mqtt')]
     assert len(component_options) == 4

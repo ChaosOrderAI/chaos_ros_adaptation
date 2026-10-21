@@ -47,7 +47,8 @@ std::string resolve_topic_impl(const Json& value, const std::string& namespace_,
 void parameter_value(const Json& value, const std::string& where) {
   auto scalar = [&](const Json& item) {
     if (item.is_boolean() || item.is_string()) return;
-    if (item.is_number_integer()) return;  // int64 range enforced at YAML load
+    int64_t ignored = 0;
+    if (int64_value(item, &ignored)) return;  // signed 64-bit range enforced at load
     if (item.is_number_float() && std::isfinite(item.get<double>())) return;
     throw ConfigurationError(where + ": expected a ROS scalar or homogeneous scalar array with finite numbers");
   };
@@ -72,13 +73,16 @@ void parameter_value(const Json& value, const std::string& where) {
 Json declarations(const Json& value, const std::string& base_path, const std::string& where) {
   Json result = record(value, where);
   for (auto it = result.begin(); it != result.end(); ++it) {
-    const std::string& sensor_id = text(Json(it.key()), where + " sensor ID", &identifier_re);
+    const std::string sensor_id = it.key();
+    text(sensor_id, where + " sensor ID", &identifier_re);
     const std::string prefix = where + "." + sensor_id;
     Json& declaration = it.value();
     record(declaration, prefix, kSensorFields);
-    if (Json* driver = declaration.find("driver")) {
-      record(*driver, prefix + ".driver", kDriverFields);
-      if (Json* files = driver->find("parameter_files")) {
+    auto driver = declaration.find("driver");
+    if (driver != declaration.end()) {
+      record(driver.value(), prefix + ".driver", kDriverFields);
+      auto files = driver->find("parameter_files");
+      if (files != driver->end()) {
         if (!files->is_array()) {
           throw ConfigurationError(prefix + ".driver.parameter_files: expected a list");
         }
@@ -90,17 +94,19 @@ Json declarations(const Json& value, const std::string& base_path, const std::st
           }
           resolved.push_back(path);
         }
-        (*driver)["parameter_files"] = resolved;
+        driver.value()["parameter_files"] = resolved;
       }
     }
-    if (Json* streams = declaration.find("streams")) {
+    auto streams = declaration.find("streams");
+    if (streams != declaration.end()) {
       for (auto sit = streams->begin(); sit != streams->end(); ++sit) {
-        text(Json(sit.key()), prefix + " stream ID", &identifier_re);
+        text(sit.key(), prefix + " stream ID", &identifier_re);
         record(sit.value(), prefix + ".streams." + sit.key(), kStreamFields);
       }
     }
-    if (Json* transform = declaration.find("transform")) {
-      record(*transform, prefix + ".transform", {"parent", "xyz", "rpy"});
+    auto transform = declaration.find("transform");
+    if (transform != declaration.end()) {
+      record(transform.value(), prefix + ".transform", {"parent", "xyz", "rpy"});
     }
   }
   return result;
@@ -109,11 +115,11 @@ Json declarations(const Json& value, const std::string& base_path, const std::st
 Json driver(const Json& value, const std::string& namespace_, const std::string& asset_mode,
             bool enabled, const std::string& where) {
   Json result = record(value, where, kDriverFields);
-  const Json* mode_value = result.find("mode");
-  if (mode_value == nullptr || !mode_value->is_string()) {
+  auto mode_value = result.find("mode");
+  if (mode_value == result.end() || !mode_value->is_string()) {
     throw ConfigurationError(where + ".mode: expected mock, node or attach");
   }
-  const std::string& mode = mode_value->get_ref<const std::string&>();
+  const std::string mode = mode_value->get_ref<const std::string&>();
   if (mode != "mock" && mode != "node" && mode != "attach") {
     throw ConfigurationError(where + ".mode: expected mock, node or attach");
   }
@@ -127,16 +133,19 @@ Json driver(const Json& value, const std::string& namespace_, const std::string&
     text(result.contains("executable") ? result.at("executable") : Json(), where + ".executable",
          &executable_re);
   }
-  if (Json* parameters = result.find("parameters")) {
+  auto parameters = result.find("parameters");
+  if (parameters != result.end()) {
     for (auto it = parameters->begin(); it != parameters->end(); ++it) {
-      text(Json(it.key()), where + ".parameters key", &parameter_re);
+      text(it.key(), where + ".parameters key", &parameter_re);
       parameter_value(it.value(), where + ".parameters." + it.key());
     }
   }
-  if (Json* remappings = result.find("remappings")) {
-    record(*remappings, where + ".remappings");
+  auto remappings = result.find("remappings");
+  if (remappings != result.end()) {
+    record(remappings.value(), where + ".remappings");
     for (auto it = remappings->begin(); it != remappings->end(); ++it) {
-      const std::string& source = text(Json(it.key()), where + ".remappings source", &ros_name_re);
+      text(it.key(), where + ".remappings source", &ros_name_re);
+      const std::string source = it.key();
       if (source == "__ns" || source == "__node" || source == "__name") {
         throw ConfigurationError(where + ".remappings: node and namespace remapping is not a topic mapping");
       }
@@ -162,8 +171,9 @@ std::vector<double> vector3(const Json& value, const std::string& where) {
     if (item.is_boolean() || !item.is_number()) {
       throw ConfigurationError(where + ": expected exactly three finite numbers");
     }
-    const double number = item.is_number_integer() ? static_cast<double>(item.get<int64_t>())
-                                                   : item.get<double>();
+    int64_t integer = 0;
+    const double number =
+        int64_value(item, &integer) ? static_cast<double>(integer) : item.get<double>();
     if (!std::isfinite(number)) {
       throw ConfigurationError(where + ": expected exactly three finite numbers");
     }
@@ -178,6 +188,10 @@ std::string resolve_topic(const Json& value, const std::string& namespace_, cons
   return resolve_topic_impl(value, namespace_, where);
 }
 
+void validate_ros_parameter(const Json& value, const std::string& where) {
+  parameter_value(value, where);
+}
+
 Json resolve_sensors(const Json& model_sensors, const Json& instance_sensors,
                      const std::string& model_directory, const std::string& inventory_directory,
                      const Json& asset) {
@@ -190,44 +204,41 @@ Json resolve_sensors(const Json& model_sensors, const Json& instance_sensors,
   // An explicit backend mode change replaces inherited options, so a
   // node -> attach override cannot inherit an executable.
   for (auto it = instance.begin(); it != instance.end(); ++it) {
-    const Json* override_driver = it.value().find("driver");
-    if (override_driver == nullptr) continue;
-    const Json* override_mode = override_driver->find("mode");
-    auto mit = model.find(it.key());
-    if (override_mode == nullptr || mit == model.end()) continue;
-    const Json* inherited_driver = mit.value().find("driver");
-    if (inherited_driver == nullptr) continue;
-    const Json* inherited_mode = inherited_driver->find("mode");
-    if (inherited_mode != nullptr && *override_mode != *inherited_mode) {
-      mit.value()["driver"] = Json(Json::object());
+    auto override_driver = it.value().find("driver");
+    if (override_driver == it.value().end() || !override_driver->contains("mode")) continue;
+    auto inherited = model.find(it.key());
+    if (inherited == model.end()) continue;
+    auto inherited_driver = inherited->find("driver");
+    if (inherited_driver == inherited->end()) continue;
+    auto inherited_mode = inherited_driver->find("mode");
+    if (inherited_mode == inherited_driver->end() || *inherited_mode != *override_driver->find("mode")) {
+      inherited.value()["driver"] = Json(Json::object());
     }
   }
-  Json result = nlohmann::ordered_json::parse(model.dump());
-  result.merge_patch(instance);
-  // Deep merge for nested dicts (driver options, streams), like the original
-  // _merge: mapping + mapping merges recursively, anything else replaces.
-  // merge_patch already implements exactly that JSON-merge semantic.
+  Json result = deep_merge(model, instance);
   if (result.size() > 64) {
     throw ConfigurationError(where + ": expected at most 64 sensors per asset");
   }
   for (auto it = result.begin(); it != result.end(); ++it) {
-    const std::string& sensor_id = it.key();
+    const std::string sensor_id = it.key();
     const std::string prefix = where + "." + sensor_id;
     Json& sensor = it.value();
 
-    const Json* kind = sensor.find("kind");
-    if (kind == nullptr || !kind->is_string() || kPrimaryTypes.find(kind->get_ref<const std::string&>()) == kPrimaryTypes.end()) {
+    auto kind = sensor.find("kind");
+    if (kind == sensor.end() || !kind->is_string() ||
+        kPrimaryTypes.find(kind->get_ref<const std::string&>()) == kPrimaryTypes.end()) {
       throw ConfigurationError(prefix + ".kind: expected camera, lidar or imu");
     }
-    const std::string& kind_string = kind->get_ref<const std::string&>();
+    const std::string kind_string = kind->get_ref<const std::string&>();
     Json enabled = sensor.contains("enabled") ? sensor.at("enabled") : Json(true);
     if (!enabled.is_boolean()) {
       throw ConfigurationError(prefix + ".enabled: expected boolean");
     }
-    const std::string& namespace_ = asset.at("namespace").get_ref<const std::string&>() + "/sensors/" + sensor_id;
-    const std::string frame =
-        text(sensor.contains("frame_id") ? sensor.at("frame_id") : Json(asset_id + "/" + sensor_id + "_link"),
-             prefix + ".frame_id", &kFrameRe);
+    const std::string namespace_ =
+        asset.at("namespace").get_ref<const std::string&>() + "/sensors/" + sensor_id;
+    const std::string frame = text(
+        sensor.contains("frame_id") ? sensor.at("frame_id") : Json(asset_id + "/" + sensor_id + "_link"),
+        prefix + ".frame_id", &kFrameRe);
     sensor["id"] = sensor_id;
     sensor["enabled"] = enabled;
     sensor["namespace"] = namespace_;
@@ -235,11 +246,11 @@ Json resolve_sensors(const Json& model_sensors, const Json& instance_sensors,
     sensor["driver"] = driver(sensor.contains("driver") ? sensor.at("driver") : Json(Json::object()),
                               namespace_, asset.at("mode").get_ref<const std::string&>(),
                               enabled.get<bool>(), prefix + ".driver");
-    Json* streams = sensor.find("streams");
-    if (streams == nullptr || streams->is_null()) {
-      throw ConfigurationError(prefix + ".streams: expected at least one stream");
+    auto streams = sensor.find("streams");
+    if (streams == sensor.end()) {
+      throw ConfigurationError(prefix + ".streams: expected a mapping");
     }
-    record(*streams, prefix + ".streams");
+    record(streams.value(), prefix + ".streams");
     if (streams->empty()) {
       throw ConfigurationError(prefix + ".streams: expected at least one stream");
     }
@@ -250,8 +261,8 @@ Json resolve_sensors(const Json& model_sensors, const Json& instance_sensors,
     for (auto sit = streams->begin(); sit != streams->end(); ++sit) {
       const std::string stream_where = prefix + ".streams." + sit.key();
       Json& stream = sit.value();
-      const Json* type = stream.find("type");
-      if (type == nullptr || !type->is_string() ||
+      auto type = stream.find("type");
+      if (type == stream.end() || !type->is_string() ||
           kMessageTypes.find(type->get_ref<const std::string&>()) == kMessageTypes.end()) {
         throw ConfigurationError(stream_where + ".type: unsupported sensor message type");
       }
@@ -281,7 +292,8 @@ Json resolve_sensors(const Json& model_sensors, const Json& instance_sensors,
     if (!has_primary) {
       throw ConfigurationError(prefix + ": no primary stream for sensor kind " + kind_string);
     }
-    if (Json* transform = sensor.find("transform")) {
+    auto transform = sensor.find("transform");
+    if (transform != sensor.end()) {
       const std::string parent = text(
           transform->contains("parent") ? transform->at("parent")
                                         : Json(asset.at("frames").at("base").get_ref<const std::string&>()),
@@ -337,8 +349,8 @@ void validate_sensor_graph(const std::vector<Json>& assets) {
         }
         frames[key] = owner;
       }
-      const Json* transform = sensor.find("transform");
-      if (transform != nullptr) {
+      auto transform = sensor.find("transform");
+      if (transform != sensor.end()) {
         transforms[std::make_pair(domain, sensor.at("frame_id").get<std::string>())] =
             transform->at("parent").get<std::string>();
       }
@@ -361,6 +373,7 @@ void validate_sensor_graph(const std::vector<Json>& assets) {
         } else if (managed) {
           found->second.second = true;
         }
+        (void)stream_owner;
       }
     }
   }

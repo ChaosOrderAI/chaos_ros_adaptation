@@ -1,6 +1,6 @@
 # 机器人数据采集与时间质量
 
-`chaos_data` 是机载 ROS 2 包，由资产配置和统一 launch 启动。原生 rosbag2 进程记录传感器、状态与 TF 的原始序列化消息，Python 监督进程负责时间质量、磁盘空间、分段和会话元数据，不额外订阅并反序列化相机或点云。数据保存在机器人本机，支持离线回放、训练选样和故障追溯；当前不自动上传主脑或转为图片、视频、训练张量。
+`chaos_data` 是机载 ROS 2 包，由资产配置和统一 launch 启动。整条链路都是**原生 C++ 实现**：独立录制进程用 `rosbag2_cpp` 写入传感器、状态与 TF 的原始序列化消息，原生监督进程负责时间质量、磁盘空间、分段和会话元数据，不额外订阅并反序列化相机或点云。数据保存在机器人本机，支持离线回放、训练选样和故障追溯；当前不自动上传主脑或转为图片、视频、训练张量。生产运行不需要 Python 科学栈——离线导出由原生 C++ 写出 NPY，NumPy 只在仓库自带的测试脚本中用于读取和断言。
 
 ## 配置与启动
 
@@ -87,7 +87,7 @@ host_error_bound = abs(system_time_correction) + root_dispersion + root_delay / 
 | DDS/RMW 发送时间 | 中间件发送元数据；可能为 0，也不等于曝光/测距时刻 |
 | 单调时间 | 质量轮询间隔、有效期、运行时长和异常窗口；不受系统墙钟回拨影响，不用于跨主机直接对齐 |
 
-Jazzy 原生录制器记录 RMW 接收/发送元数据，MCAP 对应 `logTime` / `publishTime`；消息内的 header 是第三种独立数据。当前 Jazzy `rosbag2_py.read_next()` 仅返回接收时间，因此离线审计从原始消息单独提取源时间，不把发送时间或接收时间当作 header。[Jazzy Recorder 实现](https://github.com/ros2/rosbag2/blob/jazzy/rosbag2_transport/src/rosbag2_transport/recorder.cpp)、[MCAP 存储实现](https://github.com/ros2/rosbag2/blob/jazzy/rosbag2_storage_mcap/src/mcap_storage.cpp)、[Python Reader 实现](https://github.com/ros2/rosbag2/blob/jazzy/rosbag2_py/src/rosbag2_py/_reader.cpp)
+Jazzy 原生录制器记录 RMW 接收/发送元数据，MCAP 对应 `logTime` / `publishTime`；消息内的 header 是第三种独立数据。本项目的离线审计使用 `rosbag2_cpp` 的 reader，它返回的仍是接收时间，因此审计**从原始消息单独提取源时间**，不把发送时间或接收时间当作 header。消息体通过 introspection 动态解码，因此审计不依赖每种消息类型的编译期绑定。[Jazzy Recorder 实现](https://github.com/ros2/rosbag2/blob/jazzy/rosbag2_transport/src/rosbag2_transport/recorder.cpp)、[MCAP 存储实现](https://github.com/ros2/rosbag2/blob/jazzy/rosbag2_storage_mcap/src/mcap_storage.cpp)、[C++ Reader 实现](https://github.com/ros2/rosbag2/blob/jazzy/rosbag2_cpp/src/rosbag2_cpp/reader.cpp)
 
 严格模式先等待连续 3 次有效且不同的探测样本，再创建原生 recorder。原生进程就绪后立即再次探测，manifest 保存 `startup_clock_check`，明确进程启动期间仍存在观测间隙。同步质量变差时关闭当前独立 bag，恢复稳定后创建下一个 bag 并重新订阅，从而重新获取仍由活跃 transient-local 发布者保存的 `tf_static`、模型与标定消息；已经消失的发布者不会被凭空恢复。
 

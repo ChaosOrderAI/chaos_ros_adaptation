@@ -4,6 +4,8 @@
 
 本设计参考 Kuavo Data Challenge 的数据、训练、部署分层，按 ROS 2 Jazzy 的消息和时间契约重新实现。上游 ROS 1 Noetic 转换器不能直接处理本项目 rosbag2；本机载包不引入 PyTorch、CUDA、LeRobot 或 PyArrow。固定版本参考及采用范围见 [上游核对记录](upstream-reference.md#kuavo-data-challenge训练数据链路参考)，原始录制配置见 [数据采集与时间质量](data-collection.md)。
 
+> **当前状态**：导出的既有用例集已通过，但新增的**数值用例子集仍在修复中**，本规范描述的导出链路**尚未整体验收完成**，不得据此声明导出功能完成。逐项复现命令与当前状态见 [验证记录](validation.md)。
+
 ## 数据职责与动作含义
 
 | 数据 | 含义 | 训练用途 |
@@ -112,6 +114,8 @@ ros2 run chaos_data data_export /data/analysis/profile.yaml \
 ```
 
 数据集和 episode 元数据保存配置、原始会话/分段定位及文件校验信息。源 bag、manifest 和时间日志参与来源校验，避免导出后无法确认输入版本。`control_events.jsonl` 保留选定任务区间的控制事件审计信息。
+
+导出的实现是**原生 C++**：读取用 `rosbag2_cpp` 的 reader，消息体通过 introspection 动态解码，数值写 JSONL，图像数组由原生 NPY 写出器写出（NPY format 1.0，`allow_pickle` 语义下不依赖对象序列化）。因此**生产导出不需要 NumPy 或任何 Python 科学栈**；仓库自带的 smoke 脚本用 Python 读取 NPY 做断言，那里才需要 `python3-numpy`。
 
 `episode.json` 提供 `rows`、`valid_rows`、`invalid_rows` 和 `invalid_reasons`。原因统计按 `action:<reason>` 或 `feature:<name>:<reason>` 计数；同一无效行可能有多个原因，因此原因总数可能大于 `invalid_rows`。完全无有效行时错误信息也给出该统计。`synthetic` 标明 mock 数据，`time_verified` 标明是否通过严格时间证据检查；两者不能互相替代。
 

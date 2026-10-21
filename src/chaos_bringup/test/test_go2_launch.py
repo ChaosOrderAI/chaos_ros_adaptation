@@ -1,4 +1,9 @@
-"""Go2 preflight/ownership checks do not open SDK channels or launch hardware."""
+"""Go2 preflight/ownership checks do not open SDK channels or launch hardware.
+
+The capability of the driver plugin is a property of the build and is
+reported by the runtime, so the test injects it instead of probing an SDK
+package.
+"""
 import json
 from pathlib import Path
 
@@ -9,7 +14,7 @@ from launch.actions import ExecuteProcess, LogInfo
 from launch.utilities import perform_substitutions
 
 from chaos_assets import ConfigurationError
-from chaos_bringup import drivers, launching, planning
+from chaos_bringup import launching, planning
 
 
 ASSETS = Path(__file__).resolve().parents[2] / 'chaos_assets'
@@ -28,40 +33,50 @@ def inventory(tmp_path, mode='real', extra=None):
     return path
 
 
-def test_go2_dry_run_does_not_require_or_import_sdk(tmp_path, monkeypatch):
+def test_go2_dry_run_does_not_require_or_import_sdk(tmp_path, monkeypatch, capabilities):
     monkeypatch.setenv('ROS_LOG_DIR', str(tmp_path / 'logs'))
+
     def fail(*args):
-        raise AssertionError('Dry run must never check or import SDK')
-    monkeypatch.setattr(drivers.importlib.util, 'find_spec', fail)
+        raise AssertionError('the dry run must never check the SDK or import a driver')
+
+    capabilities['backend_available'] = fail
+    capabilities['validate_asset'] = fail
     plan = planning.prepare_plan(inventory(tmp_path), 'dev')
-    actions = launching.build_launch_actions(plan, dry_run=True)
+    actions = launching.build_launch_actions(plan, dry_run=True, capabilities=capabilities)
     assert len(actions) == 1 and isinstance(actions[0], LogInfo)
     summary = json.loads(perform_substitutions(LaunchContext(), actions[0].msg))
     assert summary[0]['plugin'] == 'unitree_go2'
     assert 'navigation.pose' not in summary[0]['capabilities']
 
 
-def test_missing_sdk_refuses_real_launch_before_process_construction(tmp_path, monkeypatch):
-    monkeypatch.setattr(drivers.importlib.util, 'find_spec', lambda name: None)
+def test_missing_sdk_refuses_real_launch_before_process_construction(tmp_path, monkeypatch,
+                                                                     capabilities):
+    monkeypatch.setenv('ROS_LOG_DIR', str(tmp_path / 'logs'))
+    # The build of the runtime does not contain the native backend of the
+    # plugin, so a real asset may not start.
+    capabilities['backend_available'] = lambda plugin: False
+    monkeypatch.setattr(launching, 'Node',
+                        lambda **kwargs: pytest.fail('created a node before the preflight'))
     plan = planning.prepare_plan(inventory(tmp_path), 'dev')
-    with pytest.raises(RuntimeError, match='requires unitree_sdk2py'):
-        launching.build_launch_actions(plan)
+    with pytest.raises(ConfigurationError, match='native backend'):
+        launching.build_launch_actions(plan, capabilities=capabilities)
 
 
 @pytest.mark.parametrize('mode,expected', [('mock', 1), ('real', 2)])
-def test_only_real_go2_gets_managed_driver(tmp_path, monkeypatch, mode, expected):
+def test_only_real_go2_gets_managed_driver(tmp_path, monkeypatch, capabilities, mode, expected):
     monkeypatch.setenv('ROS_LOG_DIR', str(tmp_path / 'logs'))
-    monkeypatch.setattr(drivers.importlib.util, 'find_spec', lambda name: object())
     directories = []
     original = launching.tempfile.TemporaryDirectory
+
     def track(*args, **kwargs):
         directory = original(*args, **kwargs)
         directories.append(directory)
         return directory
+
     monkeypatch.setattr(launching.tempfile, 'TemporaryDirectory', track)
     try:
         plan = planning.prepare_plan(inventory(tmp_path, mode), 'dev')
-        actions = launching.build_launch_actions(plan)
+        actions = launching.build_launch_actions(plan, capabilities=capabilities)
         children = [a for a in actions if isinstance(a, ExecuteProcess)]
         assert len(children) == expected
         context = LaunchContext()

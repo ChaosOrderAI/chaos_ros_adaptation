@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "source": "/home/yunze/chaos_ros_control/chaos_ws/src/chaos_assets/config/demo.yaml",
+  "hosts": {
+    "dev": {
+      "ros_domain_id": 87
+    }
+  },
+  "assets": [
+    {
+      "id": "vehicle_001",
+      "model": "lingao_vehicle",
+      "model_version": "v1",
+      "kind": "ugv",
+      "host": "dev",
+      "ros_domain_id": 87,
+      "namespace": "/robots/vehicle_001",
+      "enabled": true,
+      "mode": "mock",
+      "driver": {
+        "plugin": "mock",
+        "options": {
+          "kind": "ugv"
+        }
+      },
+      "capabilities": [
+        "state",
+        "motion.velocity",
+        "motion.stop",
+        "navigation.pose"
+      ],
+      "frames": {
+        "base": "vehicle_001/base_link",
+        "odom": "vehicle_001/odom",
+        "map": "vehicle_001/map"
+      },
+      "limits": {
+        "linear_mps": 0.5,
+        "angular_rps": 0.8,
+        "command_timeout_s": 0.5,
+        "state_timeout_s": 2.0,
+        "lease_max_s": 30.0,
+        "action_timeout_s": 120.0,
+        "max_altitude_m": 20.0
+      },
+      "resources": {},
+      "transport": null,
+      "model_file": "/home/yunze/chaos_ros_control/chaos_ws/src/chaos_assets/models/lingao_vehicle/v1/model.yaml",
+      "description": null,
+      "sensors": {},
+      "data_collection": null,
+      "config_digest": "96c5d41a5e85233eec9e8121ec2c635ef557ed373152e38b94f23807db3781c4"
+    },
+    {
+      "id": "drone_001",
+      "model": "dji_m3td",
+      "model_version": "v1",
+      "kind": "uav",
+      "host": "dev",
+      "ros_domain_id": 87,
+      "namespace": "/robots/drone_001",
+      "enabled": true,
+      "mode": "mock",
+      "driver": {
+        "plugin": "mock",
+        "options": {
+          "kind": "uav"
+        }
+      },
+      "capabilities": [
+        "state",
+        "motion.velocity",
+        "motion.stop",
+        "navigation.pose",
+        "flight.takeoff",
+        "flight.land"
+      ],
+      "frames": {
+        "base": "drone_001/base_link",
+        "odom": "drone_001/odom",
+        "map": "drone_001/map"
+      },
+      "limits": {
+        "linear_mps": 1.0,
+        "angular_rps": 0.5,
+        "command_timeout_s": 0.5,
+        "state_timeout_s": 2.0,
+        "lease_max_s": 30.0,
+        "action_timeout_s": 120.0,
+        "max_altitude_m": 20.0
+      },
+      "resources": {},
+      "transport": null,
+      "model_file": "/home/yunze/chaos_ros_control/chaos_ws/src/chaos_assets/models/dji_m3td/v1/model.yaml",
+      "description": null,
+      "sensors": {},
+      "data_collection": null,
+      "config_digest": "6a99a43ed0234c6630dd3ccdc9d5c0705bcdba0714531f82c89fac34ec67e8bc"
+    }
+  ],
+  "transports": {}
+}

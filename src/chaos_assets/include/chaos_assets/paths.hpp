@@ -6,6 +6,9 @@
 
 namespace chaos::assets {
 
+// Expand a leading "~/" or "~" against $HOME like pathlib's expanduser().
+std::string expand_user(const std::string& path);
+
 // Resolve a configured path against its declaring file's directory.
 // ``package://name/relative`` URIs resolve through the ament resource index
 // (requires a sourced ROS workspace). Result is a normalized absolute path.

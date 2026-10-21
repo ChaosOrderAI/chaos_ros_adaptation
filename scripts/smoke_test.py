@@ -168,9 +168,11 @@ def run():
             client.destroy()
             print('PASS: mock takeoff/landing, released token rejection and task abort on lease expiry')
 
-            sdk = Robot(node, 'vehicle_001')
+            # The native client owns its context, its node and its executor
+            # thread: it does not share the node of this script.
+            sdk = Robot('vehicle_001')
             try:
-                assert sdk.wait_ready()
+                assert sdk.wait_ready(20.0)
                 assert future_result(sdk.describe()).base_frame == 'vehicle_001/base_link'
                 assert future_result(sdk.acquire('sdk-smoke', 5)).success
                 assert sdk.lease_token

@@ -1,4 +1,11 @@
-"""Construct launch actions from one already validated configuration snapshot."""
+"""Assemble the ROS launch actions from one already validated plan.
+
+Every startup decision is made by the native planner: the selection of the
+assets, the collision rules, the MQTT identity, the component derivation and
+the preflight checks. This module only turns a native process specification
+into a ROS action, writes the private launch artifacts and applies the
+shared exit policy.
+"""
 
 import json
 from pathlib import Path
@@ -11,14 +18,11 @@ from launch.events import Shutdown
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from .collection import (
-    collection_processes, collection_summary, on_collection_exit, preflight_collection,
-)
-from .description import (
-    component_asset, description_processes, description_summary, preflight_descriptions,
-)
-from .sensors import preflight_sensors, sensor_processes, sensor_summary, snapshot_parameter_files
-from .drivers import driver_processes, preflight_drivers
+from .collection import collection_processes, on_collection_exit
+from .description import description_processes
+from .drivers import driver_processes
+from .planning import component_asset, plan_summary, preflight, snapshot_parameter_files
+from .sensors import sensor_processes
 
 
 def parse_bool(value, name):
@@ -47,35 +51,45 @@ def _on_exit(label):
     return callback
 
 
-def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST'):
+def _runtime_node(asset, environment):
+    """The runtime node of one asset."""
+    node_asset = component_asset(asset)
+    return Node(package='chaos_runtime', executable='robot_runtime',
+                name='robot_runtime', namespace=asset['namespace'], output='screen',
+                parameters=[{'asset_json': ParameterValue(json.dumps(node_asset), value_type=str)}],
+                additional_env=environment)
+
+
+def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST', capabilities=None):
     """Preflight all selected components before returning any process action.
 
     This accepts only the resolved plan; no inventory/model file is read here.
+    The capabilities of the build are injected, so the planner never probes a
+    vendor SDK itself: ``registered_writers`` lists the available storage
+    plugins, ``backend_available`` reports the native driver backends and
+    ``executable_available`` reports the ROS executables of this deployment.
     """
     discovery = discovery_range(discovery)
-    # Loading a plugin class validates its contract but never constructs hardware.
-    from chaos_runtime.adapters.base import validate_asset
-    for item in plan:
-        validate_asset(item['asset'])
-    summary = [{'id': p['asset']['id'], 'model': p['asset']['model'],
-                'version': p['asset']['model_version'], 'mode': p['asset']['mode'],
-                'plugin': p['asset']['driver']['plugin'], 'namespace': p['asset']['namespace'],
-                'ros_domain_id': p['asset']['ros_domain_id'],
-                'capabilities': p['asset']['capabilities'], 'mqtt': p['mqtt'] is not None,
-                'sensors': sensor_summary(p['asset']),
-                'description': description_summary(p['asset']),
-                'data_collection': collection_summary(p['asset'])}
-               for p in plan]
+    summary = plan_summary(plan)
     if dry_run:
         return [LogInfo(msg=json.dumps(summary, ensure_ascii=False, indent=2))]
-    preflight_drivers(plan)
-    preflight_descriptions(plan)
-    preflight_sensors(plan)
-    preflight_collection(plan)
+    # The preflight resolves every dependency of the selection before a single
+    # process action exists. The capability of the build is injected, so the
+    # planner never probes a vendor SDK itself.
+    from .collection import registered_writers
+    from .drivers import _backend_available
+    from .runtime import validate_asset
+    options = dict(capabilities or {})
+    preflight(plan,
+              registered_writers=options.get('registered_writers', sorted(registered_writers())),
+              backend_available=options.get('backend_available', _backend_available),
+              executable_available=options.get('executable_available'),
+              validate_asset=options.get('validate_asset', validate_asset),
+              check_files=True)
     generated = tempfile.TemporaryDirectory(prefix='chaos-launch-')
     root = Path(generated.name)
     try:
-        sensor_parameter_files = snapshot_parameter_files(plan, root)
+        sensor_parameter_files = snapshot_parameter_files(plan, str(root))
         # Use the actual transport parser for authoritative validation, before
         # launch receives any process-start action. --check-config does no I/O
         # to ROS, network or hardware.
@@ -105,12 +119,13 @@ def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST'):
     ]
     for item in plan:
         asset = item['asset']
-        node_asset = component_asset(asset)
         environment = {'ROS_DOMAIN_ID': str(asset['ros_domain_id']),
                        'ROS_AUTOMATIC_DISCOVERY_RANGE': discovery}
-        runtime = Node(package='chaos_runtime', executable='robot_runtime',
-                       name='robot_runtime', namespace=asset['namespace'], output='screen',
-                       parameters=[{'asset_json': ParameterValue(json.dumps(node_asset), value_type=str)}], additional_env=environment)
+        # Only the publisher of the description receives the expanded XML.
+        # Every other node gets the metadata of the asset, so the document
+        # never reaches a process that does not publish it.
+        node_asset = component_asset(asset)
+        runtime = _runtime_node(asset, environment)
         # Fatal child exits stop this host launch; no automatic replay or control
         # reacquisition. An external service manager may restart the whole host.
         actions.append(RegisterEventHandler(OnProcessExit(target_action=runtime,
@@ -134,7 +149,7 @@ def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST'):
             config_file = root / f'{asset["id"]}-mqtt.json'
             gateway = Node(package='chaos_mqtt', executable='gateway', name='mqtt_api',
                            namespace=asset['namespace'], output='screen',
-                           parameters=[{'asset_json': ParameterValue(json.dumps(node_asset), value_type=str),
+                           parameters=[{'asset_json': ParameterValue(json.dumps(component_asset(asset)), value_type=str),
                                         'maximum_clock_skew_ms': int(transport['config']['mqtt'].get('maximum_clock_skew_ms', 5000))}],
                            additional_env=environment)
             process = ExecuteProcess(cmd=[transport['executable'], '--config', str(config_file)],

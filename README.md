@@ -5,6 +5,7 @@
 机载部署使用 `edge.launch.py` 和单设备配置，见 [机载部署说明](docs/onboard-deployment.md)。下方双 mock 的 `system.launch.py` 用于开发验证。
 
 - [架构与当前能力边界](docs/architecture.md)
+- [C++17 迁移后的最终设计与可移植构建命令](docs/cpp-migration.md)
 - [Kuavo 上游参考与采用范围](docs/upstream-reference.md)
 - [构建与验证记录](docs/validation.md)
 - [机载部署、架构构建与 systemd](docs/onboard-deployment.md)
@@ -19,16 +20,35 @@
 
 ## 开发环境构建与启动
 
-依赖 ROS 2 Jazzy、colcon、ament_cmake/ament_cmake_python/ament_python、rclpy、geometry_msgs、std_msgs、sensor_msgs、nav_msgs、diagnostic_msgs、tf2_ros、action_msgs、rosidl_default_generators、Python PyYAML 和 pytest。离线图像导出另使用 NumPy。`chaos_mqtt` 内置的 Rust 传输还需 Rust/Cargo、C/C++ 编译工具（Ubuntu 的 `build-essential`）、CMake、`pkg-config` 和 `libclang-dev`。模型导入使用 robot_state_publisher、urdfdom；Xacro 模型另需 xacro。现有厂商程序无需参与 mock 构建。
+工作空间包含 **9 个生产 ROS 包和 1 个基准包**，业务运行时全部为原生 C++17 实现（Python 仅保留 launch 胶水、薄绑定、第三方 Xacro 桥接及工具/测试脚本）。
 
-数据采集另需 `rosbag2_py`、`rosbag2_transport`、`rosbag2_storage_mcap`（或 SQLite 插件）；真实时间质量检查使用 chrony 的 `chronyc`。这些依赖需要在部署环境准备，代码不会自动安装或修改系统授时服务。
+运行时依赖 ROS 2 Jazzy、colcon、ament_cmake/ament_cmake_python、rclcpp、geometry_msgs、std_msgs、sensor_msgs、nav_msgs、diagnostic_msgs、tf2_ros、action_msgs、rosidl_default_generators、rosbag2_cpp、rosbag2_storage、rosbag2_transport、rosidl_typesupport_introspection_cpp、nlohmann_json、yaml-cpp、Boost 头文件、OpenSSL。`chaos_mqtt` 内置的 Rust 传输还需 Rust/Cargo 与 `build-essential`、`cmake`、`pkg-config`、`libclang-dev`。模型导入使用 robot_state_publisher、urdfdom；Xacro 模型另需 xacro。现有厂商程序无需参与 mock 构建。
 
-首次构建时在本目录执行，明确使用 `--base-paths src`，避免把旁边的 ROS 1 工程和 SDK 一起构建。已有旧版安装时，先使用下方的迁移命令建立新的构建与安装目录：
+下列 Ubuntu 包是本工作空间的构建与测试依赖，需要在环境准备阶段安装；仓库不自动执行安装：
+
+```text
+build-essential cmake pkg-config libclang-dev libxml2-dev liburdfdom-dev
+libyaml-cpp-dev libssl-dev nlohmann-json3-dev libboost-dev
+python3-venv python3-yaml python3-pytest
+ros-jazzy-rosbag2-cpp ros-jazzy-rosbag2-storage-mcap ros-jazzy-rosbag2-storage-sqlite3
+ros-jazzy-keyboard-handler ros-jazzy-rosidl-typesupport-introspection-cpp
+ros-jazzy-robot-state-publisher ros-jazzy-urdfdom ros-jazzy-xacro
+```
+
+NumPy **不是生产依赖**：原生导出用 C++ 写出 NPY 数组，运行期不加载 Python 科学栈。只有仓库自带的 smoke test 脚本用 Python 读取 NPY 并做断言，需要 `python3-numpy`。真实时间质量检查使用 chrony 的 `chronyc`。这些依赖需要在部署环境准备，代码不会自动安装或修改系统授时服务。
+
+首次构建时在本目录执行，明确使用 `--base-paths src`，避免把旁边的 ROS 1 工程和 SDK 一起构建。**使用全新的 build / install / log 目录**，避免旧的 `ament_python` 缓存和并列包索引残留；加载时只 source 本次安装空间的 `local_setup.bash`，不要叠加旧 overlay：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon build --base-paths src --symlink-install
-source install/setup.bash
+
+# 全新构建目录：build-<tag> / install-<tag> / log-<tag>
+colcon --log-base log-cpp build --base-paths src \
+  --build-base build-cpp --install-base install-cpp \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+# 只加载本次安装空间，不要再 source 旧的 install/setup.bash
+source install-cpp/local_setup.bash
 
 # 先检查计划：不启动 ROS 节点、驱动或 MQTT 连接
 ros2 launch chaos_bringup system.launch.py dry_run:=true
@@ -37,24 +57,13 @@ ros2 launch chaos_bringup system.launch.py dry_run:=true
 ros2 launch chaos_bringup system.launch.py
 ```
 
-`chaos_mqtt` 是一个 ROS 包，包含 Python 业务网关和完整 Rust 传输实现；工作空间共 8 个包。Cargo 默认执行锁定依赖的 release 构建，并行任务数为 2，可用 CMake 参数 `MQTT_ADAPTER_BUILD_JOBS` 调整。首次构建需要下载依赖；依赖缓存准备完成后，可在构建命令中追加 `--cmake-args -DMQTT_ADAPTER_OFFLINE=ON`。完整框架源码位于本工作空间，构建和运行不依赖旁边的 `mqtt_ros2_adapter` 目录。目标架构、消息绑定范围和生产普通安装见 [部署说明](docs/onboard-deployment.md)。
-
-从之前两个独立 ROS 包的布局升级时，`chaos_mqtt` 的构建类型已由 `ament_python` 改为 `ament_cmake`，应使用新的构建和安装目录，避免旧包索引与构建缓存残留。在未加载旧工作空间的新终端执行下面的命令，保留原安装空间供核对；后续示例相应加载 `install-mqtt-merged/local_setup.bash`：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-colcon --log-base log-mqtt-merged build --base-paths src \
-  --build-base build-mqtt-merged --install-base install-mqtt-merged --symlink-install
-source install-mqtt-merged/local_setup.bash
-```
-
-本轮控制服务和动作新增 `expires_at` 字段，需统一重建并重启所有使用 `chaos_interfaces` 的节点；旧、新接口产物不可混跑。MQTT 中间件也需重建，以支持任务终态响应与新的发送队列策略。
+`chaos_mqtt` 是一个 ROS 包，包含**原生 C++ 业务网关**和完整 Rust 传输实现。Cargo 默认执行锁定依赖的 release 构建，并行任务数为 2，可用 CMake 参数 `MQTT_ADAPTER_BUILD_JOBS` 调整。首次构建需要下载依赖；依赖缓存准备完成后，可在构建命令中追加 `--cmake-args -DMQTT_ADAPTER_OFFLINE=ON`。完整框架源码位于本工作空间，构建和运行不依赖旁边的 `mqtt_ros2_adapter` 目录。目标架构、消息绑定范围和生产普通安装见 [部署说明](docs/onboard-deployment.md)。
 
 默认清单使用 ROS Domain 87，只在本机发现。另一个终端查看状态时使用相同环境：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source install/setup.bash
+source install-cpp/local_setup.bash
 export ROS_DOMAIN_ID=87
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ros2 service call /robots/vehicle_001/description chaos_interfaces/srv/GetDescription '{}'
@@ -67,16 +76,17 @@ ros2 topic echo /robots/drone_001/state
 
 ```text
 src/
-  chaos_assets/      型号版本、实例清单、配置校验与解析
-  chaos_interfaces/ 状态、控制租约、速度、停止、导航与飞行动作契约
-  chaos_runtime/     每资产运行时与可扩展后端
-  chaos_bringup/     统一 launch
-  chaos_sdk/         上层 Python API
-  chaos_mqtt/        一个 ROS 包，统一构建与安装业务网关和传输
-    chaos_mqtt/      Python 命令、请求与 ROS 接口转换
-    transport/       完整 Rust 传输源码及 Cargo 锁文件
-  chaos_sensors/     模拟传感器、数据新鲜度诊断与传感器目录
-  chaos_data/        原生 rosbag 采集、时间质量门控、审计与离线训练数据导出
+  chaos_core/         共享值对象、错误与时间原语；无 ROS 依赖的头文件库
+  chaos_interfaces/   状态、控制租约、速度、停止、导航与飞行动作契约
+  chaos_assets/       型号版本、实例清单、配置校验与解析
+  chaos_bringup/      统一 launch 规划器与 launch 胶水
+  chaos_runtime/      每资产运行时、后端适配契约与 Go2 驱动
+  chaos_sdk/          原生 C++ 异步客户端（薄 Python 绑定）
+  chaos_mqtt/         一个 ROS 包，统一构建与安装原生 C++ 网关和 Rust 传输
+    transport/        完整 Rust 传输源码及 Cargo 锁文件（导入的第三方实现，不在本轮修改范围）
+  chaos_sensors/      模拟传感器、数据新鲜度诊断与传感器目录
+  chaos_data/         原生 rosbag2 采集、时间质量门控、审计与离线训练数据导出
+  chaos_benchmarks/   领域微基准（非生产入口，不参与运行）
 drivers/
   src/OrbbecSDK_ROS2/ 固定版本的官方相机驱动，独立构建
 ```
@@ -107,7 +117,7 @@ ros2 launch chaos_bringup system.launch.py \
 | mock quadruped | 状态、控制租约、前后/横移/转向、停止、导航 Action | 无设备 |
 | `lingao_ros2` | 新鲜 Odometry 状态、经校验的 Twist 速度与受控停止 | 现有底盘驱动已运行，配置实际 topic 和 frame |
 | `dji_psdk_legacy` | 订阅旧网关 ROS 状态 | 旧网关已经产生 `system/status`；暂无统一飞行控制 |
-| `unitree_go2` | 新鲜 Odometry 状态、平面速度与受控停止；统一 launch 启动 `go2_driver` | 目标 Python 环境安装 `unitree_sdk2py`，配置设备网卡和 DDS domain |
+| `unitree_go2` | 新鲜 Odometry 状态、平面速度与受控停止；统一 launch 启动 `go2_driver` | 原生 Unitree SDK2：以 `-DCHAOS_GO2_WITH_UNITREE_SDK=ON` 构建，配置设备网卡和 DDS domain |
 
 [edge.example.yaml](src/chaos_assets/config/edge.example.yaml) 是接入模板，域号、话题和 frame 必须与目标设备核对。车辆和 DJI 运动后端采用 attach：底盘驱动和旧 DJI 网关仍由既有服务管理。Go2 驱动由统一 launch 管理，传感器可另选 node 模式纳入统一 launch。无人车旧部署使用 Humble，Jazzy 下的底盘驱动构建与实机验证仍需完成。
 
@@ -117,6 +127,36 @@ ros2 launch chaos_bringup system.launch.py \
 ros2 launch chaos_bringup system.launch.py \
   inventory:="$PWD/src/chaos_assets/config/go2.demo.yaml"
 ```
+
+### Unitree Go2 原生 SDK2 构建
+
+`chaos_runtime` 的 CMake 选项 `CHAOS_GO2_WITH_UNITREE_SDK` **默认 OFF**：
+
+- **OFF（默认）**：不链接厂商 SDK。支持 mock 模式与全部本地校验；real 模式在预检阶段显式失败并给出原因，不会伪装成 SDK 可用。
+- **ON**：需要 `find_package(unitree_sdk2 CONFIG REQUIRED)` 成功，即把上游 SDK2 的安装前缀加入 `CMAKE_PREFIX_PATH`。此时后端编译并链接厂商库。
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon --log-base log-cpp-sdk build --base-paths src \
+  --build-base build-cpp-sdk --install-base install-cpp-sdk --symlink-install \
+  --cmake-args -DCHAOS_GO2_WITH_UNITREE_SDK=ON \
+               -DCMAKE_PREFIX_PATH="$UNITREE_SDK2_PREFIX"
+source install-cpp-sdk/local_setup.bash
+```
+
+运行时必须让厂商库的搜索路径**排在 ROS 库目录之前**，否则会解析到与厂商 `libddscxx` 不配套的 ROS `libddsc`，形成版本错配：
+
+```bash
+export LD_LIBRARY_PATH="$UNITREE_SDK2_PREFIX/lib:/opt/ros/jazzy/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+构建产物可用下面的命令自证能力，不需要连接机器狗：
+
+```bash
+ros2 run chaos_runtime go2_driver --build-capabilities   # 输出 {"unitree_sdk2":true}
+```
+
+SDK-ON 只验证了**编译与链接**，尚未在真实机器狗上验证过写入时序、DDS 发现延迟和硬件响应。详见 [Go2 说明](docs/unitree-go2.md)。
 
 DJI 的旧 `system/status` 仅在状态请求时发布，没有请求时会变为离线。适配器不会伪造周期遥测或把未知 GPS 坐标转换成有效本地位姿。接入飞行控制前，需要改造旧网关的请求关联、终态事件和 ROS-only 运行模式。框架租约不替代原飞控授权。
 
@@ -150,7 +190,7 @@ ros2 launch chaos_bringup system.launch.py \
 
 ## MQTT 接入
 
-`chaos_mqtt` 统一包含 MQTT / ROS 2 传输与业务协议转换，Rust 源码保留在包内 `transport/`，见 [包内说明](src/chaos_mqtt/README.md)。`route_profile: custom` 只加载显式路由；传输实现缺省的 `legacy_drone` 保持旧配置行为。准备 broker 与设备证书，然后填写 [mqtt.example.yaml](src/chaos_assets/config/mqtt.example.yaml)。
+`chaos_mqtt` 统一包含 MQTT / ROS 2 传输与业务协议转换：业务网关是**原生 C++** 可执行文件，Rust 传输源码保留在包内 `transport/`（导入的第三方实现，本轮未修改），见 [包内说明](src/chaos_mqtt/README.md)。`route_profile: custom` 只加载显式路由；传输实现缺省的 `legacy_drone` 保持旧配置行为。准备 broker 与设备证书，然后填写 [mqtt.example.yaml](src/chaos_assets/config/mqtt.example.yaml)。
 
 ```bash
 ros2 launch chaos_bringup system.launch.py \
@@ -173,7 +213,7 @@ ros2 run chaos_mqtt mqtt_transport --check-config /absolute/path/config.json
 
 ## 数据采集
 
-资产的 `data_collection.enabled: true` 启用独立 `chaos_data` 包，统一启动后将本机状态、相机/雷达/IMU、TF 和模型录制为分卷 MCAP。默认要求 chrony 时间质量合格；失同步或检测到墙钟跳变时结束当前段，恢复稳定后重新开始，保留原消息时间戳及质量证据。10 ms 默认门限只针对主机时钟，不代表多传感器硬件同步精度。
+资产的 `data_collection.enabled: true` 启用独立 `chaos_data` 包，统一启动后将本机状态、相机/雷达/IMU、TF 和模型录制为分卷 bag（存储插件由资产配置指定，默认示例为 MCAP，也支持 SQLite）。录制由**原生 rosbag2_cpp 进程**完成，监督、时钟门控、审计和离线导出也是原生实现，不依赖 Python 科学栈。默认要求 chrony 时间质量合格；失同步或检测到墙钟跳变时结束当前段，恢复稳定后重新开始，保留原消息时间戳及质量证据。10 ms 默认门限只针对主机时钟，不代表多传感器硬件同步精度。
 
 ```bash
 ros2 launch chaos_bringup system.launch.py \
@@ -195,10 +235,15 @@ ros2 run chaos_data data_export /data/analysis/profile.yaml \
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-python3 -m pytest -q src
-colcon test --packages-select chaos_mqtt
-colcon test-result --verbose
+source install-cpp/local_setup.bash
+
+# 单元测试：按包选择，避免把未参与本次构建的包算进来
+colcon test --packages-select chaos_core chaos_interfaces chaos_assets \
+  chaos_bringup chaos_runtime chaos_sensors chaos_sdk chaos_mqtt chaos_data \
+  --build-base build-cpp --install-base install-cpp
+colcon test-result --test-result-base build-cpp --verbose
+
+# Python 侧 smoke test（需要 python3-numpy 读取导出的 NPY）
 python3 scripts/smoke_test.py
 python3 scripts/go2_smoke_test.py
 python3 scripts/mqtt_smoke_test.py
@@ -209,7 +254,7 @@ python3 scripts/data_smoke_test.py
 python3 scripts/training_data_smoke_test.py
 ```
 
-使用上面的迁移目录时，先加载 `install-mqtt-merged/local_setup.bash`；`colcon test` 追加 `--build-base build-mqtt-merged --install-base install-mqtt-merged`，`colcon test-result` 追加 `--test-result-base build-mqtt-merged`，确保检查的是本次构建。
+`colcon test` 与 `colcon test-result` 必须指向**本次构建的目录**（`--build-base` / `--test-result-base`），否则读到的是旧安装空间的残留结果。逐项复现命令、已验证事实与仍未完成的检查见 [验证记录](docs/validation.md)。
 
 smoke test 只构造 mock 资产，使用 localhost 和 Domain 187，启动实际 launch 后检查多机器人隔离、能力发现、控制租约、过期速度、导航完成与取消、起降和租约到期。测试会关闭其启动的所有进程，不连接厂商设备或远程 broker。
 
@@ -227,6 +272,6 @@ smoke test 只构造 mock 资产，使用 localhost 和 Domain 187，启动实�
 
 `training_data_smoke_test.py` 使用 localhost 和 Domain 193，通过 SDK 控制 mock 机器人，验证脱敏控制 trace、停止失效、原生录制和安装版离线导出。它检查严格模式拒绝未验证授时、显式 mock 豁免、图像精度及输出不覆盖，不启动学习模型或真实设备。
 
-新增设备：增加资产实例。新增型号：增加版本化型号文件。新增后端：继承 `chaos_runtime.adapters.base.Adapter` 并注册 Python entry point `chaos.robot_adapters`，提供能力、配置校验、状态与设备操作，再通过配置选择插件。完整方法以基类与内置适配器为准；插件模块导入不得连接硬件，连接必须放在实例构造阶段。
+新增设备：增加资产实例。新增型号：增加版本化型号文件。新增后端：实现原生 C++ 适配契约 `chaos::runtime::Adapter`（`src/chaos_runtime/include/chaos_runtime/adapter.hpp`），提供 `snapshot()`、`setVelocity()`、`stop()`、`startOperation()` / `pollOperation()` 等能力，并登记到运行时的后端工厂，再通过配置选择该后端。完整方法以该头文件与内置适配器为准；加载适配器时不得连接硬件，连接必须放在实例构造阶段。launch 通过 `chaos_bringup` 的原生预检接口调用运行时校验器，共用资产规则。
 
 当前尚未实现真实 Nav2 Action 封装、真实飞行控制、LifecycleNode、远程部署管理和跨重启任务恢复。这些边界保留在架构文档中，后续可以逐项扩展而不改变已有资产身份与公共控制约定。

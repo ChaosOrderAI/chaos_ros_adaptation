@@ -1,17 +1,23 @@
-"""Sensor startup validation without importing or running any hardware driver."""
+"""Sensor startup validation without importing or running any hardware driver.
+
+The sensor declaration, the process specification and the parameter file
+snapshot are derived by the native planner. The capabilities of the build are
+injected, so a test states the deployment it simulates instead of replacing
+internals of the package.
+"""
 
 import json
 from pathlib import Path
 
 import pytest
+import yaml
 from launch import LaunchContext
 from launch.actions import ExecuteProcess, LogInfo
 from launch.utilities import perform_substitutions
-import yaml
 
 from chaos_assets import ConfigurationError
 from chaos_bringup import launching, sensors
-from chaos_bringup.planning import prepare_plan
+from chaos_bringup.planning import LaunchPlan, prepare_plan
 
 
 ASSETS = Path(__file__).resolve().parents[2] / 'chaos_assets'
@@ -41,10 +47,15 @@ def inventory(tmp_path, *, mode='real', driver_mode='node', parameter_files=None
     return prepare_plan(path, 'local')
 
 
-def test_dry_run_shows_sensor_plan_without_vendor_dependencies(tmp_path, monkeypatch):
+def test_dry_run_shows_sensor_plan_without_vendor_dependencies(tmp_path, capabilities):
     plan = inventory(tmp_path)
-    monkeypatch.setattr(sensors, 'require_executable', lambda *args: pytest.fail('dry run preflighted binaries'))
-    actions = launching.build_launch_actions(plan, dry_run=True)
+
+    def forbidden(*args):
+        pytest.fail('the dry run preflighted binaries')
+
+    capabilities['executable_available'] = forbidden
+    capabilities['validate_asset'] = forbidden
+    actions = launching.build_launch_actions(plan, dry_run=True, capabilities=capabilities)
     assert len(actions) == 1 and isinstance(actions[0], LogInfo)
     summary = json.loads(perform_substitutions(LaunchContext(), actions[0].msg))[0]['sensors'][0]
     assert summary['mode'] == 'node'
@@ -52,41 +63,53 @@ def test_dry_run_shows_sensor_plan_without_vendor_dependencies(tmp_path, monkeyp
     assert '00123' not in str(summary)
 
 
-def test_preflight_rejects_missing_driver_before_constructing_any_process(tmp_path, monkeypatch):
+def test_preflight_rejects_missing_driver_before_constructing_any_process(tmp_path, capabilities,
+                                                                         monkeypatch):
     plan = inventory(tmp_path)
-    monkeypatch.setattr(sensors, 'get_package_prefix', lambda _: (_ for _ in ()).throw(LookupError()))
-    monkeypatch.setattr(launching, 'Node', lambda **kwargs: pytest.fail('created node before preflight'))
-    with pytest.raises(ConfigurationError, match='sensor dependency'):
-        launching.build_launch_actions(plan)
+
+    def missing(package, executable):
+        # Everything of the platform is available, the vendor driver is not.
+        return (package, executable) != ('vendor_camera', 'camera_node')
+
+    capabilities['executable_available'] = missing
+    monkeypatch.setattr(launching, 'Node',
+                        lambda **kwargs: pytest.fail('created node before preflight'))
+    with pytest.raises(ConfigurationError, match='vendor_camera'):
+        launching.build_launch_actions(plan, capabilities=capabilities)
 
 
-def test_mock_override_does_not_require_vendor_driver(tmp_path, monkeypatch):
+def test_mock_override_does_not_require_vendor_driver(tmp_path, capabilities):
     plan = inventory(tmp_path, mode='mock')
     dependencies = []
-    monkeypatch.setattr(sensors, 'require_executable', lambda *pair: dependencies.append(pair))
-    sensors.preflight_sensors(plan)
+    capabilities['executable_available'] = lambda package, executable: dependencies.append(
+        (package, executable)) or True
+    launching.build_launch_actions(plan, capabilities=capabilities)
     assert set(dependencies) == {('chaos_sensors', 'mock_sensor'), ('chaos_sensors', 'sensor_monitor')}
     children = sensors.sensor_processes(plan[0]['asset'], {}, {})
     assert len(children) == 2
     assert all(isinstance(child, ExecuteProcess) for _, child in children)
 
 
-def test_attach_only_starts_monitor(tmp_path, monkeypatch):
+def test_attach_only_starts_monitor(tmp_path, capabilities):
     plan = inventory(tmp_path, driver_mode='attach')
     dependencies = []
-    monkeypatch.setattr(sensors, 'require_executable', lambda *pair: dependencies.append(pair))
-    sensors.preflight_sensors(plan)
+    capabilities['executable_available'] = lambda package, executable: dependencies.append(
+        (package, executable)) or True
+    launching.build_launch_actions(plan, capabilities=capabilities)
     assert dependencies == [('chaos_sensors', 'sensor_monitor')]
     children = sensors.sensor_processes(plan[0]['asset'], {}, {})
     assert [label for label, _ in children] == ['Sensor monitor robot_a']
 
 
-def test_disabled_sensor_has_no_process_or_dependency(tmp_path, monkeypatch):
+def test_disabled_sensor_has_no_process_or_dependency(tmp_path, capabilities):
     plan = inventory(tmp_path)
     items = list(plan)
     items[0]['asset']['sensors']['front']['enabled'] = False
-    monkeypatch.setattr(sensors, 'require_executable', lambda *args: pytest.fail('disabled dependency'))
-    sensors.preflight_sensors(items)
+    dependencies = []
+    capabilities['executable_available'] = lambda package, executable: dependencies.append(
+        (package, executable)) or True
+    launching.build_launch_actions(LaunchPlan.from_items(items), capabilities=capabilities)
+    assert dependencies == []
     assert sensors.sensor_processes(items[0]['asset'], {}, {}) == []
 
 
@@ -99,7 +122,7 @@ def test_parameter_snapshot_is_private_and_survives_source_replacement(tmp_path)
     root.mkdir()
     snapshots = sensors.snapshot_parameter_files(plan, root)
     source.write_text('replaced: true\n')
-    copied = Path(snapshots[('robot_a', 'front')][0])
+    copied = Path(snapshots['robot_a/front'][0])
     assert copied.read_text() == content
     assert copied.stat().st_mode & 0o777 == 0o600
 
@@ -134,9 +157,7 @@ def test_duplicate_parameter_values_rejected():
         sensors.validate_parameter_file(content, '/robots/robot_a/sensors/front/driver', 'test.yaml')
 
 
-def test_gemini335_template_can_run_as_mock_without_orbbec_binary(monkeypatch):
-    import ament_index_python.packages
-    monkeypatch.setattr(ament_index_python.packages, 'get_package_share_directory', lambda _: str(ASSETS))
+def test_gemini335_template_can_run_as_mock_without_orbbec_binary(capabilities):
     plan = prepare_plan(ASSETS / 'config/orbbec_gemini335.example.yaml', 'onboard', mode='mock')
     camera = plan[0]['asset']['sensors']['front_camera']
     assert camera['driver']['mode'] == 'mock'
@@ -144,6 +165,7 @@ def test_gemini335_template_can_run_as_mock_without_orbbec_binary(monkeypatch):
     assert camera['streams']['color_image']['monitor'] is False
     assert camera['streams']['imu']['frame_id'].endswith('_accel_gyro_optical_frame')
     dependencies = []
-    monkeypatch.setattr(sensors, 'require_executable', lambda *pair: dependencies.append(pair))
-    sensors.preflight_sensors(plan)
+    capabilities['executable_available'] = lambda package, executable: dependencies.append(
+        (package, executable)) or True
+    launching.build_launch_actions(plan, capabilities=capabilities)
     assert all(package != 'orbbec_camera' for package, _ in dependencies)

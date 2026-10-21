@@ -16,6 +16,15 @@ find_package(chaos_interfaces REQUIRED)
 
 option(CHAOS_MQTT_SANITIZE "Build unit tests with ASan+UBSan" OFF)
 
+# The sanitizer flags must instrument the library under test, not only the test
+# entry point, so they are attached to the libraries as PUBLIC usage
+# requirements and inherited by every consumer (tests, pybind module, node).
+set(CHAOS_MQTT_SANITIZER_FLAGS "")
+if(CHAOS_MQTT_SANITIZE)
+  set(CHAOS_MQTT_SANITIZER_FLAGS
+    -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+endif()
+
 # --- Imported Rust transport (kept as independent infrastructure) ----------
 find_program(MQTT_ADAPTER_CARGO cargo REQUIRED)
 find_program(MQTT_ADAPTER_RUSTC rustc REQUIRED)
@@ -69,7 +78,10 @@ set(MQTT_ADAPTER_RUST_HOST "${CMAKE_MATCH_1}")
 if(MQTT_ADAPTER_RUST_HOST STREQUAL "")
   message(FATAL_ERROR "Unable to determine the native target from rustc -vV")
 endif()
-set(MQTT_ADAPTER_CARGO_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo")
+# The cargo target directory is a cache: pointing it at an existing directory
+# reuses the compiled Rust artifacts instead of rebuilding them from scratch.
+set(MQTT_ADAPTER_CARGO_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo"
+  CACHE PATH "Cargo target directory of the vendored Rust transport")
 # Preserve the imported crate name and Cargo.lock. Only the installed ROS
 # executable is renamed; transport/ is an implementation directory, not a ROS
 # package of its own.
@@ -103,6 +115,8 @@ target_include_directories(chaos_mqtt_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(chaos_mqtt_core PUBLIC nlohmann_json::nlohmann_json)
+# The pybind module links this static library into a shared object.
+set_target_properties(chaos_mqtt_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # --- Native C++ gateway node -----------------------------------------------
 add_library(chaos_mqtt_gateway STATIC src/gateway_node.cpp)
@@ -120,6 +134,14 @@ target_link_libraries(chaos_mqtt_gateway
     chaos_interfaces::chaos_interfaces__rosidl_generator_cpp
     chaos_interfaces::chaos_interfaces__rosidl_typesupport_cpp)
 add_dependencies(chaos_mqtt_gateway mqtt_adapter_build)
+set_target_properties(chaos_mqtt_gateway PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(CHAOS_MQTT_SANITIZE)
+  foreach(_mqtt_sanitized_target chaos_mqtt_core chaos_mqtt_gateway)
+    target_compile_options(${_mqtt_sanitized_target} PUBLIC ${CHAOS_MQTT_SANITIZER_FLAGS})
+    target_link_options(${_mqtt_sanitized_target} PUBLIC ${CHAOS_MQTT_SANITIZER_FLAGS})
+  endforeach()
+endif()
 
 add_executable(gateway src/gateway_main.cpp)
 target_link_libraries(gateway PRIVATE chaos_mqtt_gateway)
@@ -127,10 +149,24 @@ target_link_libraries(gateway PRIVATE chaos_mqtt_gateway)
 # --- Python thin bindings ---------------------------------------------------
 find_package(pybind11_vendor REQUIRED)
 find_package(pybind11 REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 pybind11_add_module(_chaos_mqtt_core MODULE src/py_bindings.cpp)
 target_link_libraries(_chaos_mqtt_core PRIVATE chaos_mqtt_core)
 
 ament_python_install_package(${PROJECT_NAME})
+
+# Stage the python package inside the build tree: the compiled extension has
+# to sit next to the python sources, exactly like the installed layout. The
+# binding test imports the staged package, so it exercises the same import
+# path as a consumer of the install space.
+set(CHAOS_MQTT_PYTHON_STAGE "${CMAKE_CURRENT_BINARY_DIR}/python/${PROJECT_NAME}")
+add_custom_command(TARGET _chaos_mqtt_core POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CHAOS_MQTT_PYTHON_STAGE}"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}" "${CHAOS_MQTT_PYTHON_STAGE}"
+  COMMAND ${CMAKE_COMMAND} -E copy
+    "$<TARGET_FILE:_chaos_mqtt_core>" "${CHAOS_MQTT_PYTHON_STAGE}"
+  COMMENT "Staging the ${PROJECT_NAME} python package for the binding test")
 
 install(TARGETS
   chaos_mqtt_core
@@ -164,10 +200,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
 
-  set(_sanitizer_flags "")
-  if(CHAOS_MQTT_SANITIZE)
-    set(_sanitizer_flags -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
-  endif()
+  set(_sanitizer_flags ${CHAOS_MQTT_SANITIZER_FLAGS})
 
   ament_add_gtest(test_protocol test/protocol_tests.cpp)
   target_link_libraries(test_protocol chaos_mqtt_core)
@@ -194,9 +227,28 @@ if(BUILD_TESTING)
   target_link_libraries(test_gateway_integration chaos_mqtt_gateway)
   set_tests_properties(test_gateway_integration PROPERTIES TIMEOUT 120 ENVIRONMENT "ROS_DOMAIN_ID=188")
 
-  ament_add_pytest_test(chaos_mqtt_python test/test_python_bindings.py
-    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
-    TIMEOUT 120)
+  # Narrow regression tests of the action observation layer. They link the
+  # instrumented library, so the sanitizer run covers the production code and
+  # not only the test entry point.
+  ament_add_gtest(test_action_observation test/action_observation_tests.cpp)
+  target_link_libraries(test_action_observation chaos_mqtt_gateway)
+  set_tests_properties(test_action_observation PROPERTIES TIMEOUT 120 ENVIRONMENT "ROS_DOMAIN_ID=187")
+  if(CHAOS_MQTT_SANITIZE)
+    target_compile_options(test_action_observation PRIVATE ${_sanitizer_flags})
+    target_link_options(test_action_observation PRIVATE ${_sanitizer_flags})
+  endif()
+
+  # The staged package must precede an already installed chaos_mqtt package
+  # in PYTHONPATH: the installed one carries the python sources but not the
+  # compiled extension.
+  if(NOT CHAOS_MQTT_SANITIZE)
+    # A sanitized extension cannot be loaded into an unsanitized interpreter
+    # unless the sanitizer runtime is preloaded; the binding test is therefore
+    # skipped in the sanitizer build.
+    ament_add_pytest_test(chaos_mqtt_python test/test_python_bindings.py
+      ENV "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}/python:$ENV{PYTHONPATH}"
+      TIMEOUT 120)
+  endif()
   ament_add_test(mqtt_adapter_cargo_test
     COMMAND "${CMAKE_COMMAND}" -DMQTT_ADAPTER_RUN_TESTS=ON
       -P "${CMAKE_CURRENT_BINARY_DIR}/cargo_runner.cmake"

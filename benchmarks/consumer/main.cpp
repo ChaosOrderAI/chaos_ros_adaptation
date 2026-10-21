@@ -3,6 +3,12 @@
 // through the exported CMake targets. It exists to catch export/namespace
 // regressions that in-tree builds cannot see.
 #include <cstdio>
+#include "chaos_assets/yaml.hpp"
+#include "chaos_bringup/planner.hpp"
+#include "chaos_sdk/robot.hpp"
+#include "chaos_mqtt/protocol.hpp"
+#include "chaos_data/export.hpp"
+#include "chaos_data/ros_message.hpp"
 
 #include "chaos_core/errors.hpp"
 #include "chaos_core/time.hpp"
@@ -12,6 +18,19 @@
 #include "chaos_data/timing.hpp"
 
 int main() {
+  // Exercise exported policy APIs without constructing a ROS context or
+  // accessing a device. The volatile function pointers also force link-time
+  // resolution of I/O-facing APIs without running those operations.
+  const auto parsed = chaos::assets::load_yaml_string("enabled: true", "consumer");
+  if (!parsed.at("enabled").get<bool>()) return 2;
+  if (chaos::bringup::LaunchPlan::from_items({}).size() != 0) return 3;
+  if (chaos_sdk::validate_ttl(1.0) != 1.0) return 4;
+  const auto reply = chaos_mqtt::response("consumer_01", "system.describe", true, "OK", "");
+  if (!reply.is_object()) return 5;
+  auto * volatile export_entry = &chaos::data::exportDataset;
+  auto * volatile sdk_entry = &chaos_sdk::Robot::create_standalone;
+  (void)export_entry;
+  (void)sdk_entry;
   std::int64_t ns = 0;
   if (!chaos::rosStampToNs(1, 0, ns)) {
     return 1;

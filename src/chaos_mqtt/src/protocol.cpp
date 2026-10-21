@@ -316,7 +316,10 @@ Command parse_command(
     allowed.push_back("token");
     allowed.push_back("duration_s");
     arguments["owner"] = nonempty(member(payload, "owner"), "owner");
-    const Json & token = member(payload, "token");
+    // An omitted token defaults to the empty string; an explicit JSON null is
+    // kept and rejected below, matching Python's payload.get('token', '').
+    static const Json kEmptyString = "";
+    const Json token = member_or(payload, "token", kEmptyString);
     if (name != "control.acquire") {
       arguments["token"] = nonempty(token, "token");
     } else {
@@ -345,9 +348,13 @@ Command parse_command(
     const Json & velocity_json = fields(
       member(payload, "velocity"), {"linear", "angular"}, "velocity");
     Json velocity = Json::object();
+    // Sub-objects may be omitted (Python defaulted them to {}); an explicit
+    // null is kept and rejected by the vector schema check.
+    static const Json kEmptySubObject = Json(Json::object());
     for (const char * kind : {"linear", "angular"}) {
       const std::string axis_name = std::string("velocity.") + kind;
-      velocity[kind] = vector(member(velocity_json, kind), {"x", "y", "z"}, axis_name.c_str());
+      velocity[kind] = vector(member_or(velocity_json, kind, kEmptySubObject),
+        {"x", "y", "z"}, axis_name.c_str());
     }
     arguments["velocity"] = std::move(velocity);
   } else if (name == "navigation.to_pose") {
@@ -357,9 +364,12 @@ Command parse_command(
     Json target_json = Json::object();
     target_json["frame_id"] = nonempty(member(target, "frame_id"), "target.frame_id");
     target_json["position"] = vector(member(target, "position"), {"x", "y", "z"}, "target.position");
+    static const Json kEmptySubObject2 = Json(Json::object());
     static const Json kOrientationDefault = Json{{"w", 1.0}};
-    target_json["orientation"] = vector(member(target, "orientation"), {"x", "y", "z", "w"},
-        "target.orientation", kOrientationDefault);
+    // Orientation is optional and defaults to the unit quaternion; position
+    // remains required.
+    target_json["orientation"] = vector(member_or(target, "orientation", kEmptySubObject2),
+      {"x", "y", "z", "w"}, "target.orientation", kOrientationDefault);
     double norm_sq = 0.0;
     for (const char * axis : {"x", "y", "z", "w"}) {
       const double component = target_json["orientation"][axis].get<double>();
@@ -457,6 +467,10 @@ void Correlations::finish(const std::string & request_id, const Json & reply, co
     pending_.erase(it);
   }
   auto existing = completed_.find(request_id);
+  if (max_completed_ == 0) {
+    // Replay disabled; completed records are dropped immediately.
+    return;
+  }
   if (existing == completed_.end()) {
     if (completed_.size() >= max_completed_) {
       completed_.erase(completed_order_.front());

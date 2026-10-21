@@ -19,7 +19,7 @@ flowchart TB
     S[chaos_sdk 本机应用] <--> R
     subgraph MQTT[chaos_mqtt 单一 ROS 包]
         T[Rust mqtt_transport 传输与路由]
-        G[Python gateway 业务协议转换]
+        G[原生 C++ gateway 业务协议转换]
         T <--> G
     end
     P[远程平台] <--> T
@@ -52,16 +52,58 @@ flowchart TB
 
 | 包 | 责任 |
 |---|---|
+| `chaos_core` | 共享值对象、错误类型与时间原语；无 ROS 依赖的头文件库，被其他包单向依赖 |
 | `chaos_assets` | 加载型号和实例、合并配置、校验资源与部署约束、生成解析结果 |
 | `chaos_bringup` | 根据解析结果组合本机启动图，设置资产命名空间并选择后端 |
 | `chaos_interfaces` | 定义机器人状态、能力和控制的 ROS 消息、服务等契约 |
-| `chaos_runtime` | 每资产的公共运行时、适配器和独立 Go2 ROS 驱动 |
-| `chaos_sdk` | 面向业务程序封装统一接口 |
-| `chaos_mqtt` | 内置 Rust MQTT / ROS 2 传输与 Python 业务网关，将外部命令、请求编号、结果映射到统一 ROS 接口 |
+| `chaos_runtime` | 每资产的公共运行时、适配器契约和独立 Go2 ROS 驱动 |
+| `chaos_sdk` | 面向业务程序封装统一接口的原生异步客户端 |
+| `chaos_mqtt` | 内置 Rust MQTT / ROS 2 传输与原生 C++ 业务网关，将外部命令、请求编号、结果映射到统一 ROS 接口 |
 | `chaos_sensors` | 模拟传感器、标准流健康诊断、可发现的传感器目录 |
-| `chaos_data` | 原生 rosbag 录制、chrony 时间质量准入、异常分段、磁盘保护、离线审计及任务级训练数据导出 |
+| `chaos_data` | 原生 rosbag2_cpp 录制、chrony 时间质量准入、异常分段、磁盘保护、离线审计及任务级训练数据导出 |
+
+九个包的构建产物中，除 `chaos_mqtt/transport/`（导入的 Rust 实现）与 `chaos_bringup` 的 launch 胶水外，业务逻辑均为 C++17 实现。`src/chaos_benchmarks` 是领域微基准包，不是生产入口，也不参与运行。
 
 设备协议、消息转换和 SDK 调用入口各有一个归属。对现有驱动的补丁应围绕适配所需接口进行，避免将资产管理和远程平台业务塞入硬件 SDK。
+
+### 包边界与依赖方向
+
+依赖是单向的，没有回边。构建系统通过 `find_package` + 导出的 CMake target 强制这个方向，新增依赖会让构建失败而不是悄悄形成环：
+
+| 包 | 依赖的 chaos 包 | 是否含 ROS 节点 |
+|---|---|---|
+| `chaos_core` | 无 | 否（纯 C++ 头文件原语） |
+| `chaos_interfaces` | 无 | 否（IDL 契约） |
+| `chaos_assets` | 无 | 否（配置引擎不依赖 rclcpp 或设备 SDK） |
+| `chaos_runtime` | `chaos_core`、`chaos_interfaces` | 是 |
+| `chaos_sensors` | `chaos_core` | 是 |
+| `chaos_sdk` | `chaos_interfaces` | 否（客户端库） |
+| `chaos_mqtt` | `chaos_interfaces` | 是（网关节点） |
+| `chaos_data` | `chaos_core`、`chaos_interfaces`、`chaos_assets` | 是（采集器、审计、导出） |
+| `chaos_bringup` | `chaos_assets`、`chaos_mqtt`（按包索引定位可执行文件） | 只做 launch 胶水 |
+
+### 领域策略与 I/O 适配器
+
+控制守卫、Go2 状态策略、传感器健康和时间质量判断不依赖 ROS 节点，可以独立测试。运行时协调器通过适配器接口发出控制请求，ROS 类型和厂商 SDK 留在外层实现中。
+
+- 可独立复用的策略：`chaos_control`、`chaos_runtime_core`、`chaos_go2_core`、`chaos_sensors_health`、`chaos_data_timing`。
+- ROS 与设备边界：`chaos_runtime_ros`、`chaos_go2_ros`、`chaos_sensors_ros`、`chaos_mqtt_gateway`。
+- 配置和数据 I/O：资产引擎负责文件加载与校验；数据包将来源验证、类型解码、控制轨迹游标、网格对齐、NPY 写入和原子发布分开实现。这些库包含文件访问，不能视为纯计算库。
+
+规则只有一份，并且可执行验证：`robot_runtime --validate-asset` 调用的 `chaos::runtime::validateAssetJson` 与 launch 预检是同一段原生实现，运行时启动时应用的也是同一段，因此预检与运行时不会给出不同结论。
+
+### 所有权、时序与失败语义
+
+- **进程所有权**：一个可执行文件一个进程边界。统一 launch 监督各节点，数据采集监督器进一步管理自己的录制子进程；`chaos_mqtt` 的传输与网关是两个受管进程，运行时、Go2 驱动、传感器与采集各为独立进程。
+- **状态所有权**：控制租约、速度仲裁和命令去重归运行时所有。适配器维护设备连接和遥测缓存，不拥有控制租约的仲裁权；`chaos_data` 的会话与时间质量状态归监督器所有，录制子进程不拥有会话元数据。
+- **时序**：`robot_runtime` 使用 4 线程 `MultiThreadedExecutor`，`go2_driver` 与 `chaos_sdk` 客户端使用单线程 executor；Action 由运行时内单一常驻工作线程串行执行，其队列有界（最多 4 个待处理任务，队列满时直接回绝并给客户端终态）；厂商 SDK 写入在适配器内部串行化，避免 watchdog 与关停写入互相交错。健康与看门狗计时使用 steady clock 的墙钟定时器，不受 `/clock` 暂停或回拨影响。
+- **失败分层**：配置错误在启动任何节点之前拒绝；运行期错误降级或拒绝受影响的命令，不伪造成功；辅助采集器退出只报错，不连带终止机器人控制；进程非零退出会结束本机 launch，由外部服务管理器决定是否重启。
+
+### 没有硬实时保证
+
+框架运行在通用 Linux 与 ROS 2 Jazzy 之上，使用多线程 executor 和周期定时器。**本框架不提供硬实时或确定性时延保证**：周期回调的实际间隔受调度、内存分配、内存带宽、磁盘 I/O 和 DDS 传输影响。停止语义是"发出零速度/受控停止"的软件控制输出，不是硬件急停，也不能证明其他控制源不会继续写入设备。
+
+任何关于时延或吞吐的结论都必须来自具体平台上的实测。仓库自带的 `src/chaos_benchmarks` 只测量领域纯函数，不是端到端时延基准；端到端 ROS 测量工具及统计口径见 [性能验收](../benchmarks/README.md)，实际结果见 [验证记录](validation.md)。
 
 ## 2. 配置模型
 
@@ -85,7 +127,7 @@ flowchart TB
 
 ### 主机部署
 
-主机配置明确 ROS Domain 与运行位置。统一 launch 在当前主机启动被选中的资产；它不是远程登录和部署工具。同一进程中的 rclpy 上下文、启动环境与 Domain 必须一致，不能靠资产 namespace 跨 Domain 通信。
+主机配置明确 ROS Domain 与运行位置。统一 launch 在当前主机启动被选中的资产；它不是远程登录和部署工具。同一进程中的 ROS 2 上下文、启动环境与 Domain 必须一致，不能靠资产 namespace 跨 Domain 通信。
 
 现有多机部署可以保留各自 ROS Domain，通过 MQTT 汇总状态和命令。远程主机的安装、systemd 管理和滚动升级属于后续部署管理范围。
 
@@ -153,7 +195,7 @@ Go2 驱动只在收到新 DDS 状态时发布 Odometry，ROS 时间戳是新包�
 
 停止失败保留独立的待停止状态，按 0.1 秒至 1 秒退避重试；新的运动被拒绝，成功输出停止后仍保留故障锁止。`release` 返回 `STOP_FAILED` 时租约已经撤销，SDK 会清除本地 token；不能根据租约已释放推断停止成功。排除原因后重启运行时并重新申请控制权。Action 同样在最终停止检查之后确定成功、取消或失败结果。
 
-Jazzy 某些版本在受理响应发送失败时不会交付 goal handle。兼容层集中处理这一分支，让失败目标走正常的 typed result 和过期回收；升级 rclpy 后需运行对应回归测试。适配器方法必须非阻塞且耗时有界；共用锁无法中断永久阻塞的厂商 SDK。此类 SDK 应放入独立驱动进程，由设备侧 watchdog 提供失联保护。
+Jazzy 某些版本在受理响应发送失败时不会交付 goal handle。兼容层集中处理这一分支，让失败目标走正常的 typed result 和过期回收；升级 ROS 2 Jazzy / rclcpp 后需运行对应回归测试。适配器方法必须非阻塞且耗时有界；共用锁无法中断永久阻塞的厂商 SDK。此类 SDK 应放入独立驱动进程，由设备侧 watchdog 提供失联保护。
 
 该仲裁约束经过框架入口的命令。真实底盘若仍接受其他程序直写原始 `cmd_vel`，则还需要统一原始控制链路，才能把同样的控制权保证扩展到整个设备。
 
@@ -166,7 +208,7 @@ Jazzy 某些版本在受理响应发送失败时不会交付 goal handle。兼�
 | `mock` | UGV、UAV、quadruped 共同验证状态、控制租约、速度、停止、导航；无人机增加起飞/降落，机器狗支持平面横移 | 真实动力学、导航避障、飞行安全性、足端接触与地形 |
 | 无人车真实接入 | 连接已有 ROS 驱动的有限状态、速度和停止接口 | Nav2 全任务封装、全部车载设备、实机标定 |
 | 旧 DJI 网关接入 | 状态读取 | 起飞、降落、返航、速度或其他飞行控制 |
-| Unitree Go2 接入 | 受管 `go2_driver` 经 SDK 读取状态并执行平面速度、停止；适配器复用统一接口 | 实机导航、自动站起/趴下、姿态控制、视频、整机 URDF，以及目标设备验收 |
+| Unitree Go2 接入 | 受管 `go2_driver` 经**原生 Unitree SDK2** 读取状态并执行平面速度、停止；适配器复用统一接口 | 实机导航、自动站起/趴下、姿态控制、视频、整机 URDF，以及目标设备验收（SDK-ON 只验证了编译与链接） |
 
 无人车适配通过配置中的 `odom_topic` 读取 Odometry，通过 `cmd_vel_topic` 发布 Twist。Go2 适配读取独立的 `/go2/odom`，经 `/go2/cmd_vel` 的 TwistStamped 向受管驱动发令。旧 DJI 适配读取 `status_topic` 上的 JSON 字符串；它遵循上文的接收时效限制，统一位姿保持无效。mock 通过 `kind: ugv`、`kind: uav` 或 `kind: quadruped` 区分机器人类型。
 
@@ -174,7 +216,7 @@ Jazzy 某些版本在受理响应发送失败时不会交付 goal handle。兼�
 
 无人车的停止能力以当前适配器和底盘链路实际保证为限。将零速度发送到话题，不等于独立硬件急停，也不能证明另一个控制源不会继续发送命令。后续接入导航、遥控和跟随时，应在设备端建立统一控制权和速度仲裁。
 
-车辆与 DJI 真实后端采用 attach：现有底盘驱动和 DJI 网关由原有服务先行启动，统一 launch 启动框架接入节点。Go2 real 后端由统一 launch 同时启动 runtime 与独立 `go2_driver`，不启动旧 `sbdog` 网关。切换前应退出旧 SDK、MQTT 与导航控制源，避免多个程序同时控制同一设备。SDK、网卡、独立 DDS domain 与资产模板见 [Go2 接入说明](unitree-go2.md)。
+车辆与 DJI 真实后端采用 attach：现有底盘驱动和 DJI 网关由原有服务先行启动，统一 launch 启动框架接入节点。Go2 real 后端由统一 launch 同时启动 runtime 与独立 `go2_driver`，不启动旧 `sbdog` 网关。切换前应退出旧 SDK、MQTT 与导航控制源，避免多个程序同时控制同一设备。原生 SDK2 的构建选项（默认 OFF）、运行时库搜索顺序、网卡、独立 DDS domain 与资产模板见 [Go2 接入说明](unitree-go2.md)。
 
 ## 5. 统一启动与生命周期
 
@@ -186,7 +228,7 @@ Jazzy 某些版本在受理响应发送失败时不会交付 goal handle。兼�
 
 运行时、Go2 驱动、MQTT、传感器驱动或模型发布器退出会结束当前主机的 launch；正常运行期间这些进程以非零状态退出时，launch 同样报告失败，方便外部服务管理器识别。辅助采集器 `chaos_data` 退出只报错，不连带终止机器人控制；采集没有自动重启，需要查看状态、日志与 manifest。首版不自动重放动作或恢复控制租约。解析快照和生成配置保存在临时目录，退出时清理；需要保留时使用 `asset_config --output` 单独导出。
 
-可选 `data_collection` 与资产一起解析并生成精确话题清单。Python 监督器只处理质量和会话信息，独立原生 rosbag2 子进程处理高带宽消息。统一 chrony/NTP 方案先统一各主机 UTC，严格模式时间质量失效或墙钟跳变会关闭当前 bag，稳定后重新订阅并记录新段；消息源时间戳保留原值，硬件时间域和标定仍需驱动保证。原始 bag 与时间质量日志用于回放、训练筛选和故障追溯，详见 [数据采集说明](data-collection.md)。
+可选 `data_collection` 与资产一起解析并生成精确话题清单。原生 C++ 监督器只处理质量和会话信息，独立原生 rosbag2_cpp 子进程处理高带宽消息。统一 chrony/NTP 方案先统一各主机 UTC，严格模式时间质量失效或墙钟跳变会关闭当前 bag，稳定后重新订阅并记录新段；消息源时间戳保留原值，硬件时间域和标定仍需驱动保证。原始 bag 与时间质量日志用于回放、训练筛选和故障追溯，详见 [数据采集说明](data-collection.md)。
 
 推荐的长期状态流程是：
 
@@ -198,13 +240,13 @@ Jazzy 某些版本在受理响应发送失败时不会交付 goal handle。兼�
                              降级或拒绝受影响命令
 ```
 
-首版采用普通 `rclpy.Node`，显式报告就绪状态，并在关闭时执行受控停止；没有实现 `LifecycleNode` 或自动生命周期管理器。后续可使用标准 configure、activate、deactivate 管理阶段。启动进程成功本身不表示硬件就绪。
+首版采用普通 `rclcpp::Node` 派生节点，显式报告就绪状态，并在关闭时执行受控停止；没有实现 `LifecycleNode` 或自动生命周期管理器。后续可使用标准 configure、activate、deactivate 管理阶段。启动进程成功本身不表示硬件就绪。
 
 实现硬件后端时，失联后的行为应在设备端可执行。不能把远端 MQTT 在线作为唯一的控制有效性判断，也不能让 launch 无条件重启产生重复动作。
 
 ## 6. MQTT 与 SDK 边界
 
-MQTT 功能全部归属于 `src/chaos_mqtt` 这一个 ROS 包：`transport/` 保存完整 Rust 源码和锁文件，`chaos_mqtt/` 保存 Python 业务网关。通过 ament_cmake 与 ament_cmake_python 统一构建、安装，两个可执行入口为 `lib/chaos_mqtt/mqtt_transport` 和 `lib/chaos_mqtt/gateway`。Rust crate 内部保留 `mqtt_ros2_adapter` 名称，不再注册同名 ROS 包。运行时仍为两个受管进程，分别处理传输和 ROS 服务、Action 的业务映射。旧协议与新协议使用显式路由配置，避免给每台车自动启用无人机命令。
+MQTT 功能全部归属于 `src/chaos_mqtt` 这一个 ROS 包：`transport/` 保存完整 Rust 源码和锁文件，业务网关是原生 C++ 可执行文件。通过 ament_cmake 与 ament_cmake_python 统一构建、安装，两个可执行入口为 `lib/chaos_mqtt/mqtt_transport` 和 `lib/chaos_mqtt/gateway`。Rust crate 内部保留 `mqtt_ros2_adapter` 名称，不再注册同名 ROS 包。运行时仍为两个受管进程，分别处理传输和 ROS 服务、Action 的业务映射。旧协议与新协议使用显式路由配置，避免给每台车自动启用无人机命令。
 
 launch 默认通过 `chaos_mqtt` 的 ament 包索引定位 `mqtt_transport`，不依赖源码、兄弟目录或 `PATH` 中的同名程序；旧配置中的裸名称 `mqtt_ros2_adapter` 也解析到这个入口，显式可执行文件路径仍可覆盖。设备部署使用同一安装空间和 `chaos-edge.service` 管理整个本机框架。开发用 symlink 安装和生产普通安装共用包入口，x86_64 / ARM64 分别在匹配的环境构建。由原来的两个 ROS 包升级时，使用新的构建和安装前缀，避免加载旧包索引；操作见 [部署说明](onboard-deployment.md)。
 
@@ -227,7 +269,7 @@ Action 请求先通过响应主题返回受理结果；反馈和终态通过 `ta
 
 SDK 和 MQTT API 都调用每资产的统一接口。两者应得到一致的能力拒绝、状态有效性和结果语义。协议版本升级不能只改变 JSON 字段而不同时处理设备能力和终态契约。
 
-Python SDK 使用调用方提供的 rclpy Node，以异步 Service / Action future 接入应用已有 executor；业务程序仍负责执行该节点。
+SDK 是原生 C++ 异步客户端，通过 Service / Action future 接入应用已有的 executor；业务程序仍负责执行承载节点的线程模型。`chaos_sdk` 的 Python 模块只是同一实现的薄绑定，不含第二套业务逻辑。
 
 默认 demo 不需要 MQTT broker。`chaos_assets/config/mqtt.example.yaml` 是可选通信模板，使用统一构建的 Rust 程序，启用时需要配置可用的 broker 和证书。服务器端 `zkdx` 是独立的任务与协同主脑，其面向当前 MQTT 命令、租约和结果语义的设备适配器尚待接入。
 
@@ -236,8 +278,8 @@ Python SDK 使用调用方提供的 rclpy Node，以异步 Service / Action futu
 ## 7. 接入新机器人
 
 1. 为型号及版本新增资源文件，声明可用后端、能力和默认参数。
-2. 编写后端适配器，将现有 SDK 或 ROS 接口转换为公共契约；转换坐标、单位和错误码。
-3. 在适配器注册机制中登记实现；同一型号的新增实例不应修改核心运行时。
+2. 编写后端适配器，实现原生 C++ 契约 `chaos::runtime::Adapter`，将现有 SDK 或 ROS 接口转换为公共契约；转换坐标、单位和错误码。
+3. 在运行时的后端工厂中登记实现；同一型号的新增实例不应修改核心运行时。
 4. 添加实例与主机配置，并用统一入口检查解析结果。
 5. 验证真实状态有效性、支持/不支持能力、超时和停止语义，再开放控制能力。
 

@@ -43,7 +43,7 @@
 | `LeTools-dev` | 继续作为接口抽象、配置和可扩展结构的参考 |
 | `chaos_ws` | 新增 ROS 2 Jazzy 统一配置、接口、运行时、启动、SDK 和协议适配 |
 
-框架中的传输实现是独立源码副本，不通过软链接或构建时读取依赖原兄弟目录。后续传输修改在 `chaos_ws/src/chaos_mqtt/transport` 维护，与同包的 Python 业务网关共同交付；内部 Cargo crate 名仍为 `mqtt_ros2_adapter`，对外只注册 `chaos_mqtt` ROS 包，安装入口为 `ros2 run chaos_mqtt mqtt_transport`。原项目需要同步更新时单独核对变更，避免两份源码无意分叉。
+框架中的传输实现是独立源码副本，不通过软链接或构建时读取依赖原兄弟目录。后续传输修改在 `chaos_ws/src/chaos_mqtt/transport` 维护，与同包的原生 C++ 业务网关共同交付；内部 Cargo crate 名仍为 `mqtt_ros2_adapter`，对外只注册 `chaos_mqtt` ROS 包，安装入口为 `ros2 run chaos_mqtt mqtt_transport`。原项目需要同步更新时单独核对变更，避免两份源码无意分叉。
 
 上游展示的是一个机器人产品家族的控制工程。多机器人资产实例、主机选择、能力探测、统一 MQTT 命令和无人机异步动作完成语义，是本项目为当前需求增加的设计，不应称为 Kuavo 已经提供的功能。
 

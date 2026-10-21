@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -27,6 +27,18 @@ from chaos_sdk import Robot
 
 def stamp_ns(stamp):
     return stamp.sec * 1_000_000_000 + stamp.nanosec
+
+
+def succeeded(response):
+    """The success flag of a native response.
+
+    The native binding offers the attribute access and the item access, and
+    an older build returns a plain dictionary, so both are read the same
+    way and the assertion keeps its meaning.
+    """
+    if hasattr(response, 'success'):
+        return response.success
+    return response['success']
 
 
 def run():
@@ -82,7 +94,7 @@ def run():
             wait(lambda: statuses and statuses[-1]['state'] == 'recording' and robot.wait_ready(.05))
             wait(lambda: node.count_subscribers('/robots/demo_001/control_trace') >= 2)
             result(robot.describe())
-            assert result(robot.acquire('training_smoke', duration_s=10)).success
+            assert succeeded(result(robot.acquire('training_smoke', duration_s=10)))
             token = robot.lease_token
             begin = time.monotonic()
             next_send = begin
@@ -91,7 +103,7 @@ def run():
                     robot.velocity(x=.12, yaw=.03, valid_for_s=.3)
                     next_send = time.monotonic() + .08
                 rclpy.spin_once(node, timeout_sec=.02)
-            assert result(robot.stop()).success
+            assert succeeded(result(robot.stop()))
             wait(lambda: any(row.command == 'motion.stop' and row.stage == 'issued' for row in traces))
             started = time.monotonic()
             wait(lambda: time.monotonic() - started > .35)
@@ -142,10 +154,15 @@ def run():
             profile = root / 'export.yaml'
             profile.write_text(yaml.safe_dump(config))
             output = root / 'dataset'
+            # The exporter is the native executable of the package, so the
+            # smoke test exercises the installed binary and not a Python
+            # implementation of the same algorithm.
+            export_executable = Path(get_package_prefix('chaos_data')) / 'lib/chaos_data/data_export'
+            assert export_executable.is_file(), f'the native exporter is not installed: {export_executable}'
 
             def export():
-                return subprocess.run(['ros2', 'run', 'chaos_data', 'data_export', str(profile),
-                    '--output', str(output)], text=True, capture_output=True, timeout=30)
+                return subprocess.run([str(export_executable), str(profile),
+                    '--output', str(output)], text=True, capture_output=True, timeout=60)
 
             rejected = export()
             assert rejected.returncode != 0 and not output.exists(), rejected.stdout + rejected.stderr

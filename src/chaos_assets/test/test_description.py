@@ -1,13 +1,17 @@
 from copy import deepcopy
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
 import pytest
 import yaml
+
+import ament_index_python.packages
 
 from chaos_assets import ConfigurationError, load_inventory
 from chaos_assets import description as descriptions
@@ -123,7 +127,7 @@ def test_fifo_description_source_is_rejected_without_blocking(tmp_path):
     ({'arguments': {'bad-name': 1}}, 'arguments name'),
     ({'arguments': {'width': []}}, 'finite scalar'),
     ({'arguments': {'width': float('nan')}}, 'finite scalar'),
-    ({'arguments': {'width': 10 ** 400}}, 'finite scalar'),
+    ({'arguments': {'width': 10 ** 400}}, 'finite scalar|64-bit range'),
     ({'frame_prefix': 'car'}, 'frame_prefix'),
     ({'frame_prefix': '/car/'}, 'frame_prefix'),
     ({'frame_prefix': 'car//'}, 'frame_prefix'),
@@ -156,11 +160,17 @@ def test_enabled_description_requires_existing_file_and_valid_format(tmp_path):
         load_inventory(write_inventory(tmp_path, description={'file': 'robot.urdf', 'arguments': {'width': 1}}))
 
 
-def test_description_accepts_installed_package_resources(tmp_path, monkeypatch):
-    packages = pytest.importorskip('ament_index_python.packages')
-    monkeypatch.setattr(packages, 'get_package_share_directory', lambda name: str(tmp_path))
-    result = load_inventory(write_inventory(tmp_path, description={'file': 'package://fixture/robot.urdf'}))
-    assert result.assets[0]['description']['file'] == str(tmp_path / 'robot.urdf')
+def test_description_accepts_installed_package_resources(tmp_path):
+    # The package index is the only source of a package resource, so the test
+    # uses a resource of an installed package. The native engine reads the
+    # index of the sourced ROS installation.
+    share = Path(ament_index_python.packages.get_package_share_directory('chaos_assets'))
+    resource = share / 'models/demo_ugv/v1/urdf/robot.urdf'
+    result = load_inventory(
+        write_inventory(tmp_path, description={'file': 'package://chaos_assets/models/demo_ugv/v1/urdf/robot.urdf'}))
+    # The engine reports the real path of the resource, so a symlinked
+    # installation and its source tree name the same file.
+    assert result.assets[0]['description']['file'] == os.path.realpath(resource)
 
 
 def test_custom_empty_prefix_and_relative_joint_state_topic(tmp_path):
@@ -186,10 +196,10 @@ def test_root_must_match_robot_base(tmp_path):
     (SIMPLE.replace('name="imu_link"', 'name="bad link"'), 'link frame'),
     (SIMPLE.replace('type="fixed"', 'type="floating"'), 'unsupported type'),
     (SIMPLE.replace('type="fixed"', 'type="planar"'), 'unsupported type'),
-    (SIMPLE.replace('type="fixed"', 'type="revolute"'), 'validation/expansion failed'),
+    (SIMPLE.replace('type="fixed"', 'type="revolute"'), 'invalid URDF'),
     (SIMPLE.replace('<parent link="base_link"/>', '<parent link="missing"/>'), 'unknown link'),
     (SIMPLE.replace('<parent link="base_link"/>', ''), 'requires parent and child'),
-    (SIMPLE.replace('xyz="0 0 0.2"', 'xyz="not-number 0 0"'), 'validation/expansion failed'),
+    (SIMPLE.replace('xyz="0 0 0.2"', 'xyz="not-number 0 0"'), 'invalid URDF'),
 ])
 def test_rejects_invalid_urdf_before_launch(tmp_path, xml, match):
     with pytest.raises(ConfigurationError, match=match):
@@ -221,22 +231,14 @@ def test_duplicate_joint_child_and_cycle_are_rejected_before_native_parser(tmp_p
         load_inventory(write_inventory(tmp_path, description={'file': 'robot.urdf'}, xml=cycle))
 
 
-def test_native_validator_missing_is_actionable(tmp_path, monkeypatch):
-    monkeypatch.setattr(descriptions.shutil, 'which', lambda _: None)
-    with pytest.raises(ConfigurationError, match='install ros-jazzy-urdfdom'):
-        load_inventory(write_inventory(tmp_path, description={'file': 'robot.urdf'}))
-
-
-def test_source_size_and_process_limits(tmp_path, monkeypatch):
+def test_source_size_and_process_limits(tmp_path):
     path = write_inventory(tmp_path, description={'file': 'robot.urdf'})
     (tmp_path / 'robot.urdf').write_bytes(b' ' * (1024 * 1024 + 1))
     with pytest.raises(ConfigurationError, match='exceeds 1 MiB'):
         load_inventory(path)
-    with pytest.raises(ConfigurationError, match='output exceeds'):
-        descriptions._run_bounded([sys.executable, '-c', 'print("x" * 4096)'], 'test', limit=512)
-    monkeypatch.setattr(descriptions, '_PROCESS_TIMEOUT', 0.05)
-    with pytest.raises(ConfigurationError, match='timed out'):
-        descriptions._run_bounded([sys.executable, '-c', 'import time; time.sleep(5)'], 'test')
+    # The output limit and the deadline of the native process runner are
+    # covered by the native suite: test_process.cpp, "EnforcesTheOutputLimit"
+    # and "EnforcesTheDeadline".
 
 
 def mesh_xml(resource):
@@ -245,15 +247,17 @@ def mesh_xml(resource):
 
 
 @pytest.mark.parametrize('kind', ['relative', 'absolute', 'file', 'package'])
-def test_mesh_resources_are_checked_and_portable_paths_preserved(tmp_path, monkeypatch, kind):
-    packages = pytest.importorskip('ament_index_python.packages')
-    monkeypatch.setattr(packages, 'get_package_share_directory', lambda name: str(tmp_path))
+def test_mesh_resources_are_checked_and_portable_paths_preserved(tmp_path, kind):
     mesh = tmp_path / 'shape.stl'
     mesh.write_text('solid test\nendsolid test\n')
-    resource = {'relative': 'shape.stl', 'absolute': str(mesh), 'file': mesh.as_uri(),
-                'package': 'package://fixture/shape.stl'}[kind]
+    if kind == 'package':
+        # A resource of an installed package keeps its portable form.
+        resource = 'package://chaos_assets/models/demo_ugv/v1/urdf/robot.urdf'
+        expected = resource
+    else:
+        resource = {'relative': 'shape.stl', 'absolute': str(mesh), 'file': mesh.as_uri()}[kind]
+        expected = mesh.as_uri()
     result = load_inventory(write_inventory(tmp_path, description={'file': 'robot.urdf'}, xml=mesh_xml(resource)))
-    expected = resource if kind == 'package' else mesh.as_uri()
     assert ET.fromstring(result.assets[0]['description']['xml']).find('.//mesh').get('filename') == expected
 
 
@@ -404,11 +408,22 @@ def test_direct_mimic_relation_is_supported(tmp_path):
                                           xml=moving_xml('<mimic joint="b" multiplier="-1"/>')))
 
 
-def test_xacro_missing_dependency_is_actionable(tmp_path, monkeypatch):
-    (tmp_path / 'robot.xacro').write_text(SIMPLE)
-    monkeypatch.setattr(descriptions, '_XACRO_PROGRAM', 'import sys; sys.modules["xacro"] = None\n' + descriptions._XACRO_PROGRAM)
-    with pytest.raises(ConfigurationError, match='install ros-jazzy-xacro'):
-        load_inventory(write_inventory(tmp_path, description={'file': 'robot.xacro'}))
+def test_xacro_missing_dependency_is_actionable(tmp_path):
+    # The bridge reports the missing dependency, so a deployment without the
+    # xacro package gets an actionable message instead of a traceback. The
+    # bridge is started with an empty module path, so the case does not
+    # depend on the xacro package of the machine.
+    bridge = Path(__file__).resolve().parents[1] / 'tools' / 'xacro_expand.py'
+    request = tmp_path / 'request.json'
+    request.write_text(json.dumps({'file': str(tmp_path / 'robot.xacro'),
+                                   'source': SIMPLE, 'arguments': {}}))
+    environment = dict(os.environ)
+    environment['PYTHONPATH'] = str(tmp_path / 'empty')
+    environment['PYTHONNOUSERSITE'] = '1'
+    completed = subprocess.run([sys.executable, str(bridge), str(request)],
+                               capture_output=True, text=True, env=environment)
+    assert completed.returncode != 0
+    assert 'install ros-jazzy-xacro' in completed.stderr
 
 
 @pytest.mark.skipif(importlib.util.find_spec('xacro') is None, reason='xacro is an optional local test dependency')
@@ -455,4 +470,15 @@ def test_xacro_fifo_include_is_rejected(tmp_path):
     (tmp_path / 'robot.xacro').write_text('''<robot name="xacro_test" xmlns:xacro="http://www.ros.org/wiki/xacro">
       <xacro:include filename="pipe.xacro"/><link name="base_link"/></robot>''')
     with pytest.raises(ConfigurationError, match='regular file'):
+        load_inventory(write_inventory(tmp_path, description={'file': 'robot.xacro'}))
+
+
+@pytest.mark.skipif(importlib.util.find_spec('xacro') is None, reason='xacro is an optional local test dependency')
+def test_xacro_oversized_include_is_rejected(tmp_path):
+    # An include is bounded, so a huge file never reaches the memory of the
+    # launcher.
+    (tmp_path / 'huge.xacro').write_bytes(b' ' * (1024 * 1024 + 1))
+    (tmp_path / 'robot.xacro').write_text('''<robot name="xacro_test" xmlns:xacro="http://www.ros.org/wiki/xacro">
+      <xacro:include filename="huge.xacro"/><link name="base_link"/></robot>''')
+    with pytest.raises(ConfigurationError, match='exceeds 1 MiB'):
         load_inventory(write_inventory(tmp_path, description={'file': 'robot.xacro'}))

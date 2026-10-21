@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "source": "/home/yunze/chaos_ros_control/chaos_ws/src/chaos_assets/config/go2.demo.yaml",
+  "hosts": {
+    "dev": {
+      "ros_domain_id": 87
+    }
+  },
+  "assets": [
+    {
+      "id": "dog_001",
+      "model": "unitree_go2",
+      "model_version": "v1",
+      "kind": "quadruped",
+      "host": "dev",
+      "ros_domain_id": 87,
+      "namespace": "/robots/dog_001",
+      "enabled": true,
+      "mode": "mock",
+      "driver": {
+        "plugin": "mock",
+        "options": {
+          "kind": "quadruped"
+        }
+      },
+      "capabilities": [
+        "state",
+        "motion.velocity",
+        "motion.stop",
+        "navigation.pose"
+      ],
+      "frames": {
+        "base": "dog_001/base_link",
+        "odom": "dog_001/odom",
+        "map": "dog_001/map"
+      },
+      "limits": {
+        "linear_mps": 0.3,
+        "angular_rps": 0.5,
+        "command_timeout_s": 0.3,
+        "state_timeout_s": 1.0,
+        "lease_max_s": 30.0,
+        "action_timeout_s": 120.0,
+        "max_altitude_m": 20.0
+      },
+      "resources": {},
+      "transport": null,
+      "model_file": "/home/yunze/chaos_ros_control/chaos_ws/src/chaos_assets/models/unitree_go2/v1/model.yaml",
+      "description": null,
+      "sensors": {},
+      "data_collection": null,
+      "config_digest": "9f86a443766f44c00ae9635870789ffdbc4a9f385a1c048077bfb191387092ae"
+    }
+  ],
+  "transports": {}
+}

@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "source": "/home/yunze/chaos_ros_control/chaos_ws/src/chaos_assets/config/data_collection.demo.yaml",
+  "hosts": {
+    "dev": {
+      "ros_domain_id": 87
+    }
+  },
+  "assets": [
+    {
+      "id": "demo_001",
+      "model": "demo_ugv",
+      "model_version": "v1",
+      "kind": "ugv",
+      "host": "dev",
+      "ros_domain_id": 87,
+      "namespace": "/robots/demo_001",
+      "enabled": true,
+      "mode": "mock",
+      "driver": {
+        "plugin": "mock",
+        "options": {
+          "kind": "ugv"
+        }
+      },
+      "capabilities": [
+        "state",
+        "motion.velocity",
+        "motion.stop",
+        "navigation.pose"
+      ],
+      "frames": {
+        "base": "demo_001/base_link",
+        "odom": "demo_001/odom",
+        "map": "demo_001/map"
+      },
+      "limits": {
+        "linear_mps": 1.0,
+        "angular_rps": 1.0,
+        "command_timeout_s": 0.5,
+        "state_timeout_s": 2.0,
+        "lease_max_s": 30.0,
+        "action_timeout_s": 120.0,
+        "max_altitude_m": 20.0
+      },
+      "resources": {},
+      "transport": null,
+      "model_file": "/home/yunze/chaos_ros_control/chaos_ws/src/chaos_assets/models/demo_ugv/v1/model.yaml",
+      "description": {
+        "enabled": true,
+        "file": "/home/yunze/chaos_ros_control/chaos_ws/src/chaos_assets/models/demo_ugv/v1/urdf/robot.urdf",
+        "format": "urdf",
+        "arguments": {},
+        "frame_prefix": "demo_001/",
+        "publish_frequency": 30.0,
+        "joint_states_topic": "/robots/demo_001/joint_states",
+        "use_sim_time": false,
+        "xml": "<robot name=\"chaos_demo_ugv\">\n  <material name=\"body_blue\"><color rgba=\"0.12 0.35 0.60 1\" /></material>\n  <material name=\"wheel_gray\"><color rgba=\"0.15 0.15 0.15 1\" /></material>\n  <material name=\"sensor_orange\"><color rgba=\"0.95 0.45 0.10 1\" /></material>\n\n  <link name=\"base_link\">\n    <visual>\n      <geometry><box size=\"0.6 0.4 0.2\" /></geometry>\n      <material name=\"body_blue\" />\n    </visual>\n  </link>\n  <link name=\"left_wheel_link\">\n    <visual>\n      <origin rpy=\"1.5707963267948966 0 0\" />\n      <geometry><cylinder radius=\"0.08\" length=\"0.04\" /></geometry>\n      <material name=\"wheel_gray\" />\n    </visual>\n  </link>\n  <joint name=\"left_wheel_joint\" type=\"continuous\">\n    <parent link=\"base_link\" /><child link=\"left_wheel_link\" />\n    <origin xyz=\"0 0.23 -0.1\" /><axis xyz=\"0 1 0\" />\n    <limit effort=\"1\" velocity=\"4\" />\n  </joint>\n  <link name=\"right_wheel_link\">\n    <visual>\n      <origin rpy=\"1.5707963267948966 0 0\" />\n      <geometry><cylinder radius=\"0.08\" length=\"0.04\" /></geometry>\n      <material name=\"wheel_gray\" />\n    </visual>\n  </link>\n  <joint name=\"right_wheel_joint\" type=\"continuous\">\n    <parent link=\"base_link\" /><child link=\"right_wheel_link\" />\n    <origin xyz=\"0 -0.23 -0.1\" /><axis xyz=\"0 1 0\" />\n    <limit effort=\"1\" velocity=\"4\" />\n  </joint>\n  <link name=\"body_imu_link\">\n    <visual>\n      <geometry><box size=\"0.03 0.02 0.01\" /></geometry>\n      <material name=\"sensor_orange\" />\n    </visual>\n  </link>\n  <joint name=\"body_imu_mount\" type=\"fixed\">\n    <parent link=\"base_link\" /><child link=\"body_imu_link\" />\n    <origin xyz=\"0.1 0 0.11\" />\n  </joint>\n</robot>",
+        "root": "demo_001/base_link",
+        "links": [
+          "demo_001/base_link",
+          "demo_001/left_wheel_link",
+          "demo_001/right_wheel_link",
+          "demo_001/body_imu_link"
+        ],
+        "joints": [
+          {
+            "name": "left_wheel_joint",
+            "type": "continuous",
+            "parent": "demo_001/base_link",
+            "child": "demo_001/left_wheel_link"
+          },
+          {
+            "name": "right_wheel_joint",
+            "type": "continuous",
+            "parent": "demo_001/base_link",
+            "child": "demo_001/right_wheel_link"
+          },
+          {
+            "name": "body_imu_mount",
+            "type": "fixed",
+            "parent": "demo_001/base_link",
+            "child": "demo_001/body_imu_link"
+          }
+        ],
+        "sha256": "d1e746e4ff3290f79aa2b14e5455de9b5351b9e1c599202683bbc5eb04671284",
+        "source_sha256": "e84b5e55b23ebf3aed45e6c150a0b65d6f2d4c2516fad601ce725acac98e2b31"
+      },
+      "sensors": {
+        "body_imu": {
+          "kind": "imu",
+          "driver": {
+            "mode": "mock",
+            "declared_mode": "mock"
+          },
+          "streams": {
+            "imu": {
+              "type": "sensor_msgs/msg/Imu",
+              "topic": "/robots/demo_001/sensors/body_imu/data",
+              "rate_hz": 20.0,
+              "frame_id": "demo_001/body_imu_link",
+              "qos": "sensor_data",
+              "monitor": true,
+              "timeout_s": 2.0
+            }
+          },
+          "id": "body_imu",
+          "enabled": true,
+          "namespace": "/robots/demo_001/sensors/body_imu",
+          "frame_id": "demo_001/body_imu_link"
+        }
+      },
+      "data_collection": {
+        "enabled": true,
+        "output_dir": "/tmp/chaos-recordings",
+        "storage_id": "mcap",
+        "include_state": true,
+        "include_sensors": true,
+        "include_tf": true,
+        "max_bagfile_duration_s": 300,
+        "max_bagfile_size_mb": 1024,
+        "max_cache_size_mb": 64,
+        "min_free_space_mb": 1024,
+        "time_sync": {
+          "require_sync": false,
+          "max_uncertainty_ms": 10.0,
+          "max_reference_age_s": 120.0,
+          "poll_interval_s": 1.0,
+          "probe_timeout_s": 0.5,
+          "stable_samples": 3,
+          "jump_threshold_ms": 100.0
+        },
+        "topics": [
+          "/robots/demo_001/state",
+          "/robots/demo_001/command_results",
+          "/robots/demo_001/control_trace",
+          "/robots/demo_001/sensors/body_imu/data",
+          "/robots/demo_001/sensors/description",
+          "/robots/demo_001/sensors/diagnostics",
+          "/tf",
+          "/tf_static",
+          "/robots/demo_001/robot_description",
+          "/robots/demo_001/joint_states",
+          "/robots/demo_001/data_collection/status"
+        ]
+      },
+      "config_digest": "93ed5a7320fdab28d7230cbaac7b00ee94798848c1596da90fca80e9e94cc358"
+    }
+  ],
+  "transports": {}
+}

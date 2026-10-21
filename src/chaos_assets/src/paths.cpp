@@ -13,15 +13,20 @@ std::regex package_name_re(R"(^[a-z][a-z0-9_]*$)");
 
 bool valid_package_uri(const std::string& value, std::string& package, std::string& relative) {
   // package://netloc/path — reject query/fragment, empty path, escaping.
+  // Like the original pathlib-based code, the resource path is anchored in
+  // the package share directory after stripping every leading slash, so a
+  // crafted "//abs" path can never become an absolute filesystem path.
   if (value.rfind("package://", 0) != 0) return false;
   std::string rest = value.substr(std::string("package://").size());
   const size_t slash = rest.find('/');
   if (slash == std::string::npos) return false;
   package = rest.substr(0, slash);
   relative = rest.substr(slash + 1);
+  const size_t first = relative.find_first_not_of('/');
+  if (first == std::string::npos) return false;  // path of only slashes
+  relative = relative.substr(first);
   if (!std::regex_match(package, package_name_re)) return false;
-  if (relative.empty() || relative.find('?') != std::string::npos ||
-      relative.find('#') != std::string::npos) {
+  if (relative.find('?') != std::string::npos || relative.find('#') != std::string::npos) {
     return false;
   }
   std::filesystem::path rel(relative);
@@ -32,6 +37,14 @@ bool valid_package_uri(const std::string& value, std::string& package, std::stri
 }
 
 }  // namespace
+
+std::string expand_user(const std::string& path) {
+  if (path == "~" || path.rfind("~/", 0) == 0) {
+    const char* home = std::getenv("HOME");
+    if (home != nullptr) return std::string(home) + path.substr(1);
+  }
+  return path;
+}
 
 std::string resolve_path(const Json& value, const std::string& base, const std::string& where) {
   const std::string& raw = text(value, where);
@@ -49,7 +62,7 @@ std::string resolve_path(const Json& value, const std::string& base, const std::
     }
     return std::filesystem::weakly_canonical(std::filesystem::path(share) / relative).string();
   }
-  std::filesystem::path path(raw);
+  std::filesystem::path path(expand_user(raw));
   std::filesystem::path joined = path.is_absolute() ? path : std::filesystem::path(base) / path;
   std::error_code ec;
   std::string resolved = std::filesystem::weakly_canonical(joined, ec).string();

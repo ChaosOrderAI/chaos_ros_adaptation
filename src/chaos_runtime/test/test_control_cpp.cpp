@@ -265,6 +265,14 @@ TEST(ControlGuardTest, OwnerUnicodeSemantics) {
   expectRejectedStatic("INVALID_ARGUMENT", [&] {
     guard.lease("acquire", std::string("\xff\xfe", 2));
   });
+  // Overlong encodings and surrogate code points are rejected, not
+  // silently re-decoded.
+  expectRejectedStatic("INVALID_ARGUMENT", [&] {
+    guard.lease("acquire", std::string("\xc0\xaf", 2));  // overlong '/'
+  });
+  expectRejectedStatic("INVALID_ARGUMENT", [&] {
+    guard.lease("acquire", std::string("\xed\xa0\x80", 3));  // U+D800 surrogate
+  });
   // 129 characters exceed the limit even when they fit in fewer bytes.
   expectRejectedStatic("INVALID_ARGUMENT", [&] {
     guard.lease("acquire", std::string(129, 'a'));

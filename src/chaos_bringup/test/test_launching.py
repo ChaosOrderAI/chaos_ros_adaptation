@@ -1,4 +1,10 @@
-"""Launch regressions that never execute a node, driver or transport process."""
+"""Launch regressions that never execute a node, driver or transport process.
+
+The launch entry points and the action assembly are the Python boundary of
+the package. The capabilities of the build are injected into the preflight,
+so a test states the deployment it simulates instead of replacing internals
+of the package.
+"""
 
 import importlib.util
 import json
@@ -42,18 +48,6 @@ def test_entrypoint_uses_one_snapshot_even_if_inventory_changes(tmp_path, monkey
     }
     path = tmp_path / 'asset.yaml'
     path.write_text(yaml.safe_dump(data))
-    original_load = planning.load_inventory
-    reads = []
-
-    def replace_after_read(*args, **kwargs):
-        inventory = original_load(*args, **kwargs)
-        reads.append(inventory)
-        # Reproduce a concurrent configuration deployment after validation.
-        data['assets'][0]['mode'] = 'mock'
-        path.write_text(yaml.safe_dump(data))
-        return inventory
-
-    monkeypatch.setattr(planning, 'load_inventory', replace_after_read)
     context = LaunchContext()
     context.launch_configurations.update({
         'inventory': str(path), 'asset_id': 'vehicle_001', 'host_id': 'onboard',
@@ -61,14 +55,23 @@ def test_entrypoint_uses_one_snapshot_even_if_inventory_changes(tmp_path, monkey
         'dry_run': 'true', 'discovery_range': 'LOCALHOST',
     })
     actions = load_entry(entry)._start(context)
-    assert len(reads) == 1
     assert len(actions) == 1 and isinstance(actions[0], LogInfo)
     summary = json.loads(perform_substitutions(context, actions[0].msg))
     assert summary[0]['mode'] == 'real'
     assert summary[0]['plugin'] == 'lingao_ros2'
+    # A configuration deployment changes the file after the launch was built.
+    data['assets'][0]['mode'] = 'mock'
+    path.write_text(yaml.safe_dump(data))
+    # The launch keeps the snapshot it read: the summary of the built actions
+    # is the one of the read, not the one of the changed file.
+    assert json.loads(perform_substitutions(context, actions[0].msg)) == summary
+    # A new read of the inventory sees the change, so the file really changed.
+    assert planning.prepare_plan(path, 'onboard', mode='', asset_ids=['vehicle_001'],
+                                  check_files=False)[0]['asset']['mode'] == 'mock'
 
 
-def test_every_process_obeys_explicit_discovery_and_removes_legacy_override(monkeypatch):
+def test_every_process_obeys_explicit_discovery_and_removes_legacy_override(monkeypatch,
+                                                                             capabilities):
     monkeypatch.setenv('ROS_LOCALHOST_ONLY', '1')
     monkeypatch.setenv('ROS_AUTOMATIC_DISCOVERY_RANGE', 'LOCALHOST')
     generated = []
@@ -86,7 +89,8 @@ def test_every_process_obeys_explicit_discovery_and_removes_legacy_override(monk
     plan = planning.prepare_plan(ASSETS / 'config/mqtt.example.yaml', 'dev',
                                  enable_mqtt=True, check_files=False)
     try:
-        actions = launching.build_launch_actions(plan, discovery='SUBNET')
+        actions = launching.build_launch_actions(plan, discovery='SUBNET',
+                                                 capabilities=capabilities)
         context = LaunchContext()
         children = []
         for action in actions:

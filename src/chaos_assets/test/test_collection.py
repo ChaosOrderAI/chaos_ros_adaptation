@@ -73,7 +73,7 @@ def test_explicit_topics_scope_and_status_without_auto_topics(tmp_path):
     ({'time_sync': {'require_sync': 1}}, 'boolean'),
     ({'time_sync': {'stable_samples': False}}, 'integer'),
     ({'time_sync': {'max_uncertainty_ms': float('nan')}}, 'finite'),
-    ({'time_sync': {'max_uncertainty_ms': 10 ** 500}}, 'finite'),
+    ({'time_sync': {'max_uncertainty_ms': 10 ** 500}}, 'finite|64-bit range'),
     ({'time_sync': {'poll_interval_s': .1, 'probe_timeout_s': .2}}, 'timeout'),
     ({'topics': []}, 'nonempty'), ({'topics': ['state', '/robots/unit/state']}, 'duplicate'),
     ({'topics': ['bad-topic']}, 'invalid'), ({'topics': ['/']}, 'invalid'),

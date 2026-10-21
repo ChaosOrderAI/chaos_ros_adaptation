@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstddef>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -18,6 +20,7 @@
 #include "chaos_interfaces/srv/get_description.hpp"
 #include "chaos_interfaces/srv/stop.hpp"
 
+#include "chaos_mqtt/action_observer.hpp"
 #include "chaos_mqtt/protocol.hpp"
 
 namespace chaos_mqtt
@@ -30,7 +33,13 @@ namespace chaos_mqtt
 /// Telemetry and responses are validated upstream by the Rust transport
 /// (16 KiB bound); this node re-applies the wire protocol validation and never
 /// logs tokens or payloads.
-class GatewayNode : public rclcpp::Node
+///
+/// Threading contract: the node is designed for a MutuallyExclusive executor.
+/// Every ROS callback of this node therefore runs on the same thread and the
+/// correlation records are additionally guarded by `records_mutex_` so the
+/// code stays correct if the executor is ever reconfigured. No pointer into
+/// the correlation map is used outside of the lock.
+class GatewayNode : public rclcpp::Node, private ActionSink
 {
 public:
   using Flight = chaos_interfaces::action::Flight;
@@ -46,6 +55,15 @@ public:
   ~GatewayNode() override;
 
 private:
+  // --- ActionSink ------------------------------------------------------------
+  // The action observer reports the goal lifecycle here. Every callback first
+  // checks that the correlation record still exists: a late acknowledgment or
+  // a late result of a goal that already timed out must never resurrect a
+  // record, publish a second terminal state or change the replay cache.
+  void on_action_accepted(const std::string & request_id, const std::string & goal_id_hex) override;
+  void on_action_rejected(const std::string & request_id) override;
+  void on_action_result(const std::string & request_id, const ActionOutcome & outcome) override;
+
   static void publish_json(const rclcpp::Publisher<std_msgs::msg::String>::SharedPtr & publisher,
     const Json & value);
 
@@ -54,22 +72,26 @@ private:
   void dispatch(const Command & command);
   void service_error(const std::string & request_id, const std::string & code,
     const std::string & message);
-  void complete_action(Pending & pending, const Json & event);
-  void action_done(const std::string & request_id, const std::string & command_name,
-    const rclcpp_action::ResultCode & code, const Json & result_data);
-  Json event(const std::string & request_id, const std::string & phase, const Json & data);
+  /// Publish the terminal state of an accepted action goal.
+  void action_done(const std::string & request_id, const Json & result_data);
+  /// Build a task event. Returns null when the request is not correlated any
+  /// more. The caller publishes the returned value.
+  Json build_event(const std::string & request_id, const std::string & phase, const Json & data);
+  /// Build the correlated reply of a finished action.
+  Json build_action_reply(const Pending & pending, const Json & terminal_event);
   void expire();
-
   template<typename ServiceT>
   void send_service(const Command & command, typename rclcpp::Client<ServiceT>::SharedPtr client,
     typename ServiceT::Request request);
   void send_action(const Command & command);
   template<typename ActionT>
-  void send_typed_action(const Command & command,
-    typename rclcpp_action::Client<ActionT>::SharedPtr client);
+  void send_typed_action(const Command & command, ActionSlotPool<ActionT> & pool);
   template<typename ActionT>
   void feedback_callback(const std::string & command_name,
     const typename ActionT::Impl::FeedbackMessage::SharedPtr message);
+
+  /// True while the gateway still correlates `request_id`.
+  bool still_tracked(const std::string & request_id);
 
   Json asset_;
   std::string asset_id_;
@@ -82,6 +104,13 @@ private:
   // request_id -> accepted goal UUID hex, for feedback correlation and events.
   std::map<std::string, std::string> goal_ids_;
 
+  // Bounded action observation pools. Every in-flight goal owns a dedicated
+  // action client, so retiring one observation never affects another goal.
+  // The capacity bounds the number of simultaneously observed goals.
+  ActionSlotPool<NavigatePose> navigation_pool_;
+  ActionSlotPool<Flight> takeoff_pool_;
+  ActionSlotPool<Flight> land_pool_;
+
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr result_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr event_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state_pub_;
@@ -92,9 +121,6 @@ private:
   rclcpp::Client<chaos_interfaces::srv::GetDescription>::SharedPtr describe_client_;
   rclcpp::Client<chaos_interfaces::srv::ControlLease>::SharedPtr lease_client_;
   rclcpp::Client<chaos_interfaces::srv::Stop>::SharedPtr stop_client_;
-  rclcpp_action::Client<NavigatePose>::SharedPtr navigation_client_;
-  rclcpp_action::Client<Flight>::SharedPtr takeoff_client_;
-  rclcpp_action::Client<Flight>::SharedPtr land_client_;
   rclcpp::Subscription<NavigatePose::Impl::FeedbackMessage>::SharedPtr navigation_feedback_sub_;
   rclcpp::Subscription<Flight::Impl::FeedbackMessage>::SharedPtr takeoff_feedback_sub_;
   rclcpp::Subscription<Flight::Impl::FeedbackMessage>::SharedPtr land_feedback_sub_;

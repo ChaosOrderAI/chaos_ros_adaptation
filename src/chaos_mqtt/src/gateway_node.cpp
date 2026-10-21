@@ -1,6 +1,6 @@
 #include "chaos_mqtt/gateway_node.hpp"
 
-#include <array>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -16,27 +16,19 @@ namespace chaos_mqtt
 namespace
 {
 
+/// Unix milliseconds; the command deadline is an absolute UTC instant and is
+/// never derived from the ROS clock (which may be simulated or paused).
 std::int64_t epoch_ms_now()
 {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+/// Monotonic seconds; used for every timeout and lease so that a wall clock
+/// step can neither shorten nor extend a deadline.
 double monotonic_now_s()
 {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-std::string goal_id_hex(const std::array<uint8_t, 16> & uuid)
-{
-  std::ostringstream hex;
-  hex << std::hex;
-  for (uint8_t byte : uuid) {
-    hex.width(2);
-    hex.fill('0');
-    hex << static_cast<int>(byte);
-  }
-  return hex.str();
 }
 
 Json header_json(const std_msgs::msg::Header & header)
@@ -133,24 +125,37 @@ Json response_data(const chaos_interfaces::srv::Stop::Response & result)
 builtin_interfaces::msg::Time GatewayNode::deadline_time(double deadline_ms)
 {
   // Unix UTC, deliberately independent of /clock. Rounding down cannot grant
-  // the remote command any additional validity.
-  const auto deadline_ns = static_cast<std::int64_t>(deadline_ms) * 1000000;
-  builtin_interfaces::msg::Time time;
-  time.sec = static_cast<std::int32_t>(deadline_ns / 1000000000);
-  time.nanosec = static_cast<std::uint32_t>(deadline_ns % 1000000000);
-  if (time.sec <= 0 || time.sec >= (std::int32_t{1} << 31)) {
+  // the remote command any additional validity. Validate in 64-bit before
+  // narrowing into the ROS Time message: the upper bound is 2^31 seconds
+  // (2038), and zero/negative deadlines are rejected per the wire contract.
+  if (!std::isfinite(deadline_ms)) {
     throw CommandError("INVALID_ARGUMENT", "command deadline is outside ROS Time range");
   }
+  const auto deadline_ns = static_cast<std::int64_t>(deadline_ms) * 1000000;
+  const auto seconds = deadline_ns / 1000000000;
+  if (seconds <= 0 || seconds >= (std::int64_t{1} << 31)) {
+    throw CommandError("INVALID_ARGUMENT", "command deadline is outside ROS Time range");
+  }
+  builtin_interfaces::msg::Time time;
+  time.sec = static_cast<std::int32_t>(seconds);
+  time.nanosec = static_cast<std::uint32_t>(deadline_ns % 1000000000);
   return time;
 }
 
 GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
-: rclcpp::Node("mqtt_gateway", options)
+: rclcpp::Node("mqtt_gateway", options),
+  navigation_pool_(this, "navigation/to_pose", "navigation.to_pose", this, 48),
+  takeoff_pool_(this, "flight/takeoff", "flight.takeoff", this, 48),
+  land_pool_(this, "flight/land", "flight.land", this, 48)
 {
   declare_parameter<std::string>("asset_json", "{}");
   declare_parameter<std::int64_t>("maximum_clock_skew_ms", 5000);
   declare_parameter<double>("request_timeout_s", 5.0);
   declare_parameter<double>("action_timeout_s", 300.0);
+  // Upper bound of goals that may be observed at the same time. Every
+  // observation owns a dedicated action client, so this parameter bounds the
+  // number of live action clients and of pending middleware requests.
+  declare_parameter<int64_t>("action_slot_capacity", 48);
   try {
     asset_ = Json::parse(get_parameter("asset_json").as_string());
   } catch (const std::exception & error) {
@@ -173,14 +178,22 @@ GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
   clock_skew_ms_ = get_parameter("maximum_clock_skew_ms").as_int();
   request_timeout_s_ = get_parameter("request_timeout_s").as_double();
   action_timeout_s_ = get_parameter("action_timeout_s").as_double();
+  const auto slot_capacity = get_parameter("action_slot_capacity").as_int();
   if (clock_skew_ms_ < 100 || clock_skew_ms_ > 30000) {
     throw std::invalid_argument("maximum_clock_skew_ms must be in 100..30000");
   }
-  if (request_timeout_s_ < 0.1 || request_timeout_s_ > 600 ||
+  if (!std::isfinite(request_timeout_s_) || !std::isfinite(action_timeout_s_) ||
+    request_timeout_s_ < 0.1 || request_timeout_s_ > 600 ||
     action_timeout_s_ < 1 || action_timeout_s_ > 86400)
   {
     throw std::invalid_argument("invalid gateway timeout");
   }
+  if (slot_capacity < 1 || slot_capacity > 256) {
+    throw std::invalid_argument("action_slot_capacity must be in 1..256");
+  }
+  navigation_pool_.set_capacity(static_cast<std::size_t>(slot_capacity));
+  takeoff_pool_.set_capacity(static_cast<std::size_t>(slot_capacity));
+  land_pool_.set_capacity(static_cast<std::size_t>(slot_capacity));
 
   result_pub_ = create_publisher<std_msgs::msg::String>("mqtt/command/result", 32);
   event_pub_ = create_publisher<std_msgs::msg::String>("mqtt/task_events", 32);
@@ -192,15 +205,26 @@ GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
     });
   velocity_result_sub_ = create_subscription<chaos_interfaces::msg::CommandResult>(
     "command_results", 32, [this](chaos_interfaces::msg::CommandResult::SharedPtr message) {
-      const std::lock_guard<std::mutex> guard(records_mutex_);
-      Pending * pending = records_.pending(message->request_id);
-      if (!pending || pending->command.name != "motion.velocity") {
+      Json reply;
+      bool matched = false;
+      {
+        const std::lock_guard<std::mutex> guard(records_mutex_);
+        const Pending * pending = records_.pending(message->request_id);
+        if (pending && pending->command.name == "motion.velocity") {
+          reply = response(
+            message->request_id, pending->command.name, message->success, message->code,
+            message->message);
+          matched = true;
+        }
+      }
+      if (!matched) {
         return;
       }
-      Json reply = response(
-        message->request_id, pending->command.name, message->success, message->code,
-        message->message);
+      // Publish outside of the lock: a publisher must never be called while
+      // the correlation records are held, otherwise an intra-process
+      // subscriber could re-enter this node and deadlock.
       publish_json(result_pub_, reply);
+      const std::lock_guard<std::mutex> guard(records_mutex_);
       records_.finish(message->request_id, reply);
     });
   state_sub_ = create_subscription<chaos_interfaces::msg::RobotState>(
@@ -210,11 +234,10 @@ GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
   describe_client_ = create_client<chaos_interfaces::srv::GetDescription>("description");
   lease_client_ = create_client<chaos_interfaces::srv::ControlLease>("control/lease");
   stop_client_ = create_client<chaos_interfaces::srv::Stop>("motion/stop");
-  navigation_client_ = rclcpp_action::create_client<NavigatePose>(this, "navigation/to_pose");
-  takeoff_client_ = rclcpp_action::create_client<Flight>(this, "flight/takeoff");
-  land_client_ = rclcpp_action::create_client<Flight>(this, "flight/land");
   // Subscribe directly so a missing goal acknowledgment does not leave a
-  // per-request feedback callback registered in the shared action client.
+  // per-request feedback callback registered in an action client. The topic
+  // is shared by every goal of that action, independent of the client that
+  // sent it, so one subscription per action type is enough.
   navigation_feedback_sub_ = create_subscription<NavigatePose::Impl::FeedbackMessage>(
     "navigation/to_pose/_action/feedback", 32,
     [this](NavigatePose::Impl::FeedbackMessage::SharedPtr message) {
@@ -235,6 +258,9 @@ GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
 
 GatewayNode::~GatewayNode()
 {
+  // Report the shutdown for every still pending correlation. The execution
+  // state stays unknown: the gateway stops observing, it does not stop the
+  // robot.
   std::vector<std::string> request_ids;
   {
     const std::lock_guard<std::mutex> guard(records_mutex_);
@@ -249,9 +275,16 @@ GatewayNode::~GatewayNode()
         "gateway shutting down; execution state is unknown");
     } else {
       const std::lock_guard<std::mutex> guard(records_mutex_);
+      goal_ids_.erase(request_id);
       records_.finish(request_id, nullptr);
     }
   }
+  // Stop every action callback and destroy the dedicated clients. Destroying a
+  // client drops the pending SendGoal/GetResult requests of exactly that
+  // goal, so no middleware bookkeeping survives the gateway.
+  navigation_pool_.shutdown();
+  takeoff_pool_.shutdown();
+  land_pool_.shutdown();
 }
 
 void GatewayNode::publish_json(
@@ -272,19 +305,28 @@ void GatewayNode::command_callback(const std_msgs::msg::String::SharedPtr messag
   const auto identity = recover_identity(message->data);
   if (identity) {
     const auto & request_id = identity->first;
-    std::lock_guard<std::mutex> guard(records_mutex_);
-    if (const auto * record = records_.completed(request_id)) {
-      if (!record->first.is_null()) {
-        publish_json(result_pub_, record->first);
+    Json replay_reply;
+    Json replay_event;
+    bool replay = false;
+    {
+      const std::lock_guard<std::mutex> guard(records_mutex_);
+      if (const auto * record = records_.completed(request_id)) {
+        replay = true;
+        replay_reply = record->first;
+        replay_event = record->second;
+      } else if (const Pending * pending = records_.pending(request_id)) {
+        replay = true;
+        if (pending->reply.has_value()) {
+          replay_reply = *pending->reply;
+        }
       }
-      if (!record->second.is_null()) {
-        publish_json(event_pub_, record->second);
-      }
-      return;
     }
-    if (const Pending * pending = records_.pending(request_id)) {
-      if (pending->reply.has_value()) {
-        publish_json(result_pub_, *pending->reply);
+    if (replay) {
+      if (!replay_reply.is_null()) {
+        publish_json(result_pub_, replay_reply);
+      }
+      if (!replay_event.is_null()) {
+        publish_json(event_pub_, replay_event);
       }
       return;
     }
@@ -294,11 +336,14 @@ void GatewayNode::command_callback(const std_msgs::msg::String::SharedPtr messag
     command = parse_command(message->data, capabilities_, epoch_ms_now(), clock_skew_ms_);
   } catch (const CommandError & error) {
     if (identity) {
-      const std::lock_guard<std::mutex> guard(records_mutex_);
-      Json reply = response(
-        identity->first, identity->second, false, error.code(), error.what());
+      Json reply;
+      {
+        const std::lock_guard<std::mutex> guard(records_mutex_);
+        reply = response(
+          identity->first, identity->second, false, error.code(), error.what());
+        records_.finish(identity->first, reply);
+      }
       publish_json(result_pub_, reply);
-      records_.finish(identity->first, reply);
     } else {
       // Never log payloads or tokens; the error code is sufficient to debug.
       RCLCPP_WARN(get_logger(), "Dropped uncorrelatable MQTT command: %s", error.code().c_str());
@@ -311,8 +356,8 @@ void GatewayNode::command_callback(const std_msgs::msg::String::SharedPtr messag
       records_.start(command, monotonic_now_s(), request_timeout_s_);
     } catch (const CommandError & error) {
       Json reply = response(command.request_id, command.name, false, error.code(), error.what());
-      publish_json(result_pub_, reply);
       records_.finish(command.request_id, reply);
+      publish_json(result_pub_, reply);
       return;
     }
   }
@@ -404,25 +449,25 @@ void GatewayNode::send_service(
     return;
   }
   auto cancelled = std::make_shared<std::atomic_bool>(false);
-  {
-    const std::lock_guard<std::mutex> guard(records_mutex_);
-    if (Pending * pending = records_.pending(request_id)) {
-      // Cancels local observation only; the runtime still executes.
-      pending->cancel = [cancelled]() { cancelled->store(true); };
-    }
-  }
-  client->async_send_request(
+  // The gateway's executor runs MutuallyExclusive callbacks (default), so
+  // state access is serialized; the mutex still guards against a future
+  // Reentrant configuration. Never dereference Pending outside the lock.
+  auto pending_call = client->async_send_request(
     std::make_shared<typename ServiceT::Request>(std::move(request)),
     [this, request_id, cancelled](typename rclcpp::Client<ServiceT>::SharedFutureWithRequest future) {
       if (cancelled->load()) {
         return;
       }
-      Pending * pending = nullptr;
+      std::string command_name;
+      bool tracked = false;
       {
         const std::lock_guard<std::mutex> guard(records_mutex_);
-        pending = records_.pending(request_id);
+        if (const Pending * pending = records_.pending(request_id)) {
+          tracked = true;
+          command_name = pending->command.name;
+        }
       }
-      if (!pending) {
+      if (!tracked) {
         return;
       }
       try {
@@ -430,43 +475,73 @@ void GatewayNode::send_service(
         const bool success = data.value("success", true);
         const std::string code = data.value("code", "OK");
         const std::string message = data.value("message", "");
+        // The original gateway popped success/code/message out of the service
+        // payload before nesting the remainder under response.data; the wire
+        // ABI therefore carries the payload fields, not the envelope fields.
         data.erase("success");
         data.erase("code");
         data.erase("message");
-        const std::string command_name = pending->command.name;
         Json reply = response(
-          request_id, command_name, success, code, message, "result", data);
+          request_id, command_name, success, code, message, "result",
+          Json{{"data", std::move(data)}});
         publish_json(result_pub_, reply);
         const std::lock_guard<std::mutex> guard(records_mutex_);
+        goal_ids_.erase(request_id);
         records_.finish(request_id, reply);
       } catch (const std::exception & error) {
         service_error(request_id, "RUNTIME_ERROR", error.what());
       }
     });
+  // Bound rclcpp's internal pending-request bookkeeping: when the correlation
+  // finishes elsewhere (timeout, replay, shutdown), drop the client's pending
+  // entry so a permanently silent service cannot accumulate requests.
+  const auto inner_request_id = pending_call.request_id;
+  const std::lock_guard<std::mutex> guard(records_mutex_);
+  if (Pending * pending = records_.pending(request_id)) {
+    pending->cancel = [client, inner_request_id, cancelled]() {
+      cancelled->store(true);
+      try {
+        client->remove_pending_request(inner_request_id);
+      } catch (const std::exception &) {
+        // The request may already be completed/removed; cancellation of the
+        // local observation is best-effort and must never throw here.
+      }
+    };
+  } else {
+    try {
+      client->remove_pending_request(inner_request_id);
+    } catch (const std::exception &) {
+    }
+  }
 }
 
 void GatewayNode::send_action(const Command & command)
 {
   const auto & name = command.name;
   if (name == "navigation.to_pose") {
-    send_typed_action<NavigatePose>(command, navigation_client_);
+    send_typed_action<NavigatePose>(command, navigation_pool_);
   } else if (name == "flight.takeoff") {
-    send_typed_action<Flight>(command, takeoff_client_);
+    send_typed_action<Flight>(command, takeoff_pool_);
   } else if (name == "flight.land") {
-    send_typed_action<Flight>(command, land_client_);
+    send_typed_action<Flight>(command, land_pool_);
   } else {
     service_error(command.request_id, "UNSUPPORTED", "unknown command");
   }
 }
 
 template<typename ActionT>
-void GatewayNode::send_typed_action(
-  const Command & command,
-  typename rclcpp_action::Client<ActionT>::SharedPtr client)
+void GatewayNode::send_typed_action(const Command & command, ActionSlotPool<ActionT> & pool)
 {
   const std::string request_id = command.request_id;
-  const std::string command_name = command.name;
-  if (!client->action_server_is_ready()) {
+  // Reserve an exclusive observation slot. Each slot owns a dedicated action
+  // client, so a later timeout of a different goal can never remove the
+  // callbacks of this goal.
+  auto observer = pool.acquire(request_id);
+  if (!observer) {
+    service_error(request_id, "BUSY", "too many concurrent action goals");
+    return;
+  }
+  if (!observer->server_ready()) {
     service_error(request_id, "UNAVAILABLE", "runtime action is not ready");
     return;
   }
@@ -487,52 +562,62 @@ void GatewayNode::send_typed_action(
   }
   goal.lease_token = command.arguments.at("lease_token").get<std::string>();
   goal.expires_at = deadline_time(command.deadline_ms);
+  try {
+    observer->set_goal(std::move(goal));
+    if (!observer->send_if_ready()) {
+      // The action server of this dedicated client is not discovered yet.
+      // The dispatch is deferred instead of blocking the executor; the
+      // correlation deadline bounds the wait.
+      pool.defer(request_id);
+      return;
+    }
+  } catch (const std::exception & error) {
+    service_error(request_id, "DISPATCH_ERROR", error.what());
+  }
+}
 
-  typename rclcpp_action::Client<ActionT>::SendGoalOptions options;
-  options.goal_response_callback =
-    [this, request_id, command_name](
-      typename rclcpp_action::ClientGoalHandle<ActionT>::SharedPtr handle) {
-      if (!handle) {
-        service_error(request_id, "REJECTED", "runtime rejected action goal");
-        return;
-      }
-      try {
-        std::lock_guard<std::mutex> guard(records_mutex_);
-        Pending * pending = records_.pending(request_id);
-        if (!pending) {
-          return;
-        }
-        pending->accepted = true;
-        pending->expires_at = monotonic_now_s() + action_timeout_s_;
-        const std::string goal_hex = goal_id_hex(handle->get_goal_id());
-        goal_ids_[request_id] = goal_hex;
-        Json reply = response(
-          request_id, command_name, true, "ACCEPTED",
-          "action accepted; completion arrives on task_events", "accepted",
-          Json{{"goal_id", goal_hex}});
-        pending->reply = reply;
-        publish_json(result_pub_, reply);
-      } catch (const std::exception & error) {
-        service_error(request_id, "RUNTIME_ERROR", error.what());
-      }
-    };
-  options.result_callback =
-    [this, request_id, command_name](
-      const typename rclcpp_action::ClientGoalHandle<ActionT>::WrappedResult & wrapped) {
-      // Jazzy delivers the result as a shared pointer; it is null when the
-      // final status is UNKNOWN (server vanished before a result existed).
-      const bool success = wrapped.code == rclcpp_action::ResultCode::SUCCEEDED &&
-        wrapped.result && wrapped.result->success;
-      Json data{
-        {"ok", success},
-        {"code", wrapped.result ? wrapped.result->code : ""},
-        {"message", wrapped.result ? wrapped.result->message : ""},
-        {"ros_goal_status", static_cast<int>(wrapped.code)},
-        {"execution_state", "known"},
-      };
-      action_done(request_id, command_name, wrapped.code, data);
-    };
-  client->async_send_goal(goal, options);
+void GatewayNode::on_action_accepted(const std::string & request_id, const std::string & goal_id_hex)
+{
+  Json reply;
+  {
+    const std::lock_guard<std::mutex> guard(records_mutex_);
+    Pending * pending = records_.pending(request_id);
+    if (!pending) {
+      // The correlation was already retired (timeout). The goal may still run
+      // on the robot, but the gateway no longer reports it: an expired
+      // observation never resurrects a finished record.
+      return;
+    }
+    pending->accepted = true;
+    // The action deadline starts when the server accepted the goal.
+    pending->expires_at = monotonic_now_s() + action_timeout_s_;
+    goal_ids_[request_id] = goal_id_hex;
+    reply = response(
+      request_id, pending->command.name, true, "ACCEPTED",
+      "action accepted; completion arrives on task_events", "accepted",
+      Json{{"goal_id", goal_id_hex}});
+    pending->reply = reply;
+  }
+  publish_json(result_pub_, reply);
+}
+
+void GatewayNode::on_action_rejected(const std::string & request_id)
+{
+  service_error(request_id, "REJECTED", "runtime rejected action goal");
+}
+
+void GatewayNode::on_action_result(const std::string & request_id, const ActionOutcome & outcome)
+{
+  // A terminal status without a result payload keeps the execution state
+  // unknown; only a known result may claim that the operation finished.
+  Json data{
+    {"ok", outcome.success},
+    {"code", outcome.code},
+    {"message", outcome.message},
+    {"ros_goal_status", outcome.ros_goal_status},
+    {"execution_state", outcome.known ? "known" : "unknown"},
+  };
+  action_done(request_id, data);
 }
 
 template<typename ActionT>
@@ -540,7 +625,7 @@ void GatewayNode::feedback_callback(
   const std::string & command_name,
   const typename ActionT::Impl::FeedbackMessage::SharedPtr message)
 {
-  const std::string goal_hex = goal_id_hex(message->goal_id.uuid);
+  const std::string goal_hex = action_goal_id_hex(message->goal_id.uuid);
   Json feedback;
   if constexpr (std::is_same_v<ActionT, NavigatePose>) {
     feedback = Json{
@@ -554,22 +639,29 @@ void GatewayNode::feedback_callback(
     };
   }
   (void)command_name;
-  std::lock_guard<std::mutex> guard(records_mutex_);
-  for (const auto & item : records_.pending_map()) {
-    if (item.second.command.name != command_name) {
-      continue;
+  Json event_value;
+  {
+    const std::lock_guard<std::mutex> guard(records_mutex_);
+    for (const auto & item : records_.pending_map()) {
+      if (item.second.command.name != command_name) {
+        continue;
+      }
+      const auto goal = goal_ids_.find(item.first);
+      if (goal != goal_ids_.end() && goal->second == goal_hex) {
+        event_value = build_event(item.first, "feedback", Json{{"feedback", feedback}});
+        break;
+      }
     }
-    const auto goal = goal_ids_.find(item.first);
-    if (goal != goal_ids_.end() && goal->second == goal_hex) {
-      event(item.first, "feedback", Json{{"feedback", std::move(feedback)}});
-      break;
-    }
+  }
+  if (!event_value.is_null()) {
+    publish_json(event_pub_, event_value);
   }
 }
 
-Json GatewayNode::event(const std::string & request_id, const std::string & phase, const Json & data)
+Json GatewayNode::build_event(const std::string & request_id, const std::string & phase,
+  const Json & data)
 {
-  Pending * pending = records_.pending(request_id);
+  const Pending * pending = records_.pending(request_id);
   if (!pending) {
     return nullptr;
   }
@@ -582,6 +674,8 @@ Json GatewayNode::event(const std::string & request_id, const std::string & phas
     {"phase", phase},
     {"terminal", phase == "result"},
   };
+  // The payload overrides the base fields, exactly like the original
+  // ``{**base, **data}`` dictionary merge.
   for (const auto & item : data.items()) {
     value[item.key()] = item.value();
   }
@@ -589,28 +683,10 @@ Json GatewayNode::event(const std::string & request_id, const std::string & phas
   if (goal != goal_ids_.end()) {
     value["goal_id"] = goal->second;
   }
-  publish_json(event_pub_, value);
   return value;
 }
 
-void GatewayNode::action_done(
-  const std::string & request_id,
-  const std::string & command_name,
-  const rclcpp_action::ResultCode & code,
-  const Json & data)
-{
-  (void)command_name;
-  (void)code;
-  std::lock_guard<std::mutex> guard(records_mutex_);
-  Pending * pending = records_.pending(request_id);
-  if (!pending) {
-    return;
-  }
-  const Json terminal_event = event(request_id, "result", data);
-  complete_action(*pending, terminal_event);
-}
-
-void GatewayNode::complete_action(Pending & pending, const Json & terminal_event)
+Json GatewayNode::build_action_reply(const Pending & pending, const Json & terminal_event)
 {
   // Task events remain compatible, while the correlated response path also
   // receives completion. The Rust bridge can replace ACCEPTED in its replay
@@ -621,35 +697,78 @@ void GatewayNode::complete_action(Pending & pending, const Json & terminal_event
       extra[key] = terminal_event.at(key);
     }
   }
-  const std::string request_id = pending.command.request_id;
-  Json reply = response(
-    request_id, pending.command.name, terminal_event.at("ok").get<bool>(),
+  return response(
+    pending.command.request_id, pending.command.name, terminal_event.at("ok").get<bool>(),
     terminal_event.at("code").get<std::string>(), terminal_event.at("message").get<std::string>(),
     "result", extra);
+}
+
+void GatewayNode::action_done(const std::string & request_id, const Json & data)
+{
+  Json terminal_event;
+  Json reply;
+  {
+    const std::lock_guard<std::mutex> guard(records_mutex_);
+    Pending * pending = records_.pending(request_id);
+    if (!pending) {
+      // Late result of an observation that was already retired: it must not
+      // publish a second terminal state.
+      return;
+    }
+    terminal_event = build_event(request_id, "result", data);
+    if (terminal_event.is_null()) {
+      return;
+    }
+    reply = build_action_reply(*pending, terminal_event);
+    goal_ids_.erase(request_id);
+    records_.finish(request_id, reply, terminal_event);
+  }
+  publish_json(event_pub_, terminal_event);
   publish_json(result_pub_, reply);
-  records_.finish(request_id, reply, terminal_event);
 }
 
 void GatewayNode::service_error(const std::string & request_id, const std::string & code,
   const std::string & message)
 {
-  std::lock_guard<std::mutex> guard(records_mutex_);
-  Pending * pending = records_.pending(request_id);
-  if (!pending) {
-    return;
+  Json terminal_event;
+  Json reply;
+  {
+    const std::lock_guard<std::mutex> guard(records_mutex_);
+    Pending * pending = records_.pending(request_id);
+    if (!pending) {
+      return;
+    }
+    if (pending->accepted) {
+      // The goal was accepted, so the robot may still be executing it. The
+      // terminal state stays unknown: the gateway lost the observation, it
+      // did not stop the robot.
+      terminal_event = build_event(
+        request_id, "result",
+        Json{{"ok", false}, {"code", code}, {"message", message}, {"execution_state", "unknown"}});
+      if (terminal_event.is_null()) {
+        return;
+      }
+      reply = build_action_reply(*pending, terminal_event);
+      goal_ids_.erase(request_id);
+      records_.finish(request_id, reply, terminal_event);
+    } else {
+      reply = response(
+        request_id, pending->command.name, false, code, message, "result",
+        Json{{"execution_state", "unknown"}});
+      goal_ids_.erase(request_id);
+      records_.finish(request_id, reply);
+    }
   }
-  if (pending->accepted) {
-    const Json terminal_event = event(
-      request_id, "result",
-      Json{{"ok", false}, {"code", code}, {"message", message}, {"execution_state", "unknown"}});
-    complete_action(*pending, terminal_event);
-  } else {
-    Json reply = response(
-      request_id, pending->command.name, false, code, message, "result",
-      Json{{"execution_state", "unknown"}});
-    publish_json(result_pub_, reply);
-    records_.finish(request_id, reply);
+  if (!terminal_event.is_null()) {
+    publish_json(event_pub_, terminal_event);
   }
+  publish_json(result_pub_, reply);
+}
+
+bool GatewayNode::still_tracked(const std::string & request_id)
+{
+  const std::lock_guard<std::mutex> guard(records_mutex_);
+  return records_.pending(request_id) != nullptr;
 }
 
 void GatewayNode::expire()
@@ -664,6 +783,18 @@ void GatewayNode::expire()
       request_id, "RESPONSE_TIMEOUT",
       "runtime result timed out; execution state is unknown, not stopped");
   }
+  const auto tracked = [this](const std::string & request_id) {return still_tracked(request_id);};
+  // Dispatch the goals whose action server became available in the meantime.
+  // A request that already timed out is never sent to the robot.
+  navigation_pool_.flush_ready(tracked);
+  takeoff_pool_.flush_ready(tracked);
+  land_pool_.flush_ready(tracked);
+  // Release the action observations that finished or whose correlation was
+  // retired. This runs outside of every action client callback, so destroying
+  // a dedicated client is safe here.
+  navigation_pool_.release_inactive(tracked);
+  takeoff_pool_.release_inactive(tracked);
+  land_pool_.release_inactive(tracked);
 }
 
 template void GatewayNode::send_service<chaos_interfaces::srv::GetDescription>(
@@ -676,9 +807,9 @@ template void GatewayNode::send_service<chaos_interfaces::srv::Stop>(
   const Command &, rclcpp::Client<chaos_interfaces::srv::Stop>::SharedPtr,
   chaos_interfaces::srv::Stop::Request);
 template void GatewayNode::send_typed_action<chaos_interfaces::action::NavigatePose>(
-  const Command &, rclcpp_action::Client<chaos_interfaces::action::NavigatePose>::SharedPtr);
+  const Command &, ActionSlotPool<chaos_interfaces::action::NavigatePose> &);
 template void GatewayNode::send_typed_action<chaos_interfaces::action::Flight>(
-  const Command &, rclcpp_action::Client<chaos_interfaces::action::Flight>::SharedPtr);
+  const Command &, ActionSlotPool<chaos_interfaces::action::Flight> &);
 template void GatewayNode::feedback_callback<chaos_interfaces::action::NavigatePose>(
   const std::string &, chaos_interfaces::action::NavigatePose::Impl::FeedbackMessage::SharedPtr);
 template void GatewayNode::feedback_callback<chaos_interfaces::action::Flight>(

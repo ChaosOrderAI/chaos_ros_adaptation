@@ -1,33 +1,39 @@
-"""Read-only config validation / deterministic resolved inventory output."""
+"""Compatibility shim for the ``asset_config`` command line entry point.
+
+The installed command is the native ``asset_config`` executable; this module
+keeps ``python -m chaos_assets.cli`` and the historical ``main`` callable
+working. Argument handling and output formatting stay here, every
+validation is performed by the native engine.
+"""
 
 import argparse
-import json
-from pathlib import Path
 import sys
 
-from .inventory import ConfigurationError, load_inventory
+from ._chaos_assets_core import ConfigurationError
+from ._chaos_assets_core import resolve_inventory_json
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description='Validate a configuration and print it.')
     parser.add_argument('inventory')
     parser.add_argument('--host')
     parser.add_argument('--mode', choices=('mock', 'real'))
     parser.add_argument('--output', help='Write resolved JSON instead of stdout')
     args = parser.parse_args(argv)
     try:
-        inventory = load_inventory(args.inventory, mode=args.mode)
-        result = inventory.as_dict()
-        if args.host:
-            result['assets'] = inventory.select(args.host)
-        content = json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + '\n'
-        if args.output:
-            Path(args.output).write_text(content, encoding='utf-8')
-        else:
-            print(content, end='')
-    except (ConfigurationError, OSError) as error:
+        content = resolve_inventory_json(args.inventory, args.mode or '', args.host or '')
+    except ConfigurationError as error:
         print(f'configuration error: {error}', file=sys.stderr)
         return 2
+    if args.output:
+        try:
+            with open(args.output, 'w', encoding='utf-8') as stream:
+                stream.write(content)
+        except OSError as error:
+            print(f'configuration error: {error}', file=sys.stderr)
+            return 2
+    else:
+        print(content, end='')
     return 0
 
 

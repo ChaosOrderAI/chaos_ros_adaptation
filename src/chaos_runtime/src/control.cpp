@@ -62,25 +62,29 @@ bool is_ascii(const std::string & value) {
   return true;
 }
 
-// Python str.strip() whitespace, restricted to the Unicode whitespace set
-// that matters for owner identifiers (ASCII plus the common BMP spaces).
+// Whitespace matched against Python's str.strip() behavior for the ranges
+// relevant to owner identifiers. Note: U+FEFF (BOM) is NOT Python
+// whitespace and must not be stripped; U+001C..U+001F are.
 bool is_unicode_whitespace(std::uint32_t code_point) {
-  if (code_point == ' ' || (code_point >= 0x09 && code_point <= 0x0d) ||
-      code_point == 0x85) {
+  if (code_point == ' ' || (code_point >= 0x09 && code_point <= 0x0d)) {
     return true;
   }
-  if (code_point < 0xa0) {
+  if (code_point >= 0x1c && code_point <= 0x1f) {
+    return true;
+  }
+  if (code_point < 0x85) {
     return false;
   }
-  return code_point == 0xa0 || code_point == 0x1680 ||
+  return code_point == 0x85 || code_point == 0xa0 || code_point == 0x1680 ||
          (code_point >= 0x2000 && code_point <= 0x200a) ||
          code_point == 0x2028 || code_point == 0x2029 ||
          code_point == 0x202f || code_point == 0x205f ||
-         code_point == 0x3000 || code_point == 0xfeff;
+         code_point == 0x3000;
 }
 
-// Decodes one UTF-8 sequence; returns false for malformed input, which is
-// rejected at the owner-validation boundary.
+// Decodes one UTF-8 sequence, rejecting overlong encodings, surrogate code
+// points, and values above U+10FFFF. Malformed input is rejected at the
+// owner-validation boundary rather than being silently re-interpreted.
 bool decode_utf8(const std::string & value, std::size_t & position,
                  std::uint32_t & code_point) {
   const auto byte = [&](std::size_t i) {
@@ -94,15 +98,25 @@ bool decode_utf8(const std::string & value, std::size_t & position,
   }
   int length = 0;
   std::uint32_t code = 0;
+  std::uint32_t minimum = 0;
   if ((lead >> 5) == 0x6) {
+    if (lead < 0xc2) {
+      return false;  // overlong 2-byte sequence
+    }
     length = 2;
     code = lead & 0x1f;
+    minimum = 0x80;
   } else if ((lead >> 4) == 0xe) {
     length = 3;
     code = lead & 0x0f;
+    minimum = 0x800;
   } else if ((lead >> 3) == 0x1e) {
+    if (lead > 0xf4) {
+      return false;  // above U+10FFFF
+    }
     length = 4;
     code = lead & 0x07;
+    minimum = 0x10000;
   } else {
     return false;
   }
@@ -115,6 +129,10 @@ bool decode_utf8(const std::string & value, std::size_t & position,
       return false;
     }
     code = (code << 6) | (next & 0x3f);
+  }
+  if (code < minimum || code > 0x10ffff ||
+      (code >= 0xd800 && code <= 0xdfff)) {
+    return false;
   }
   position += static_cast<std::size_t>(length);
   code_point = code;

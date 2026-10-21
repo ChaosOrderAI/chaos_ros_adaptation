@@ -1,25 +1,36 @@
 <?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>chaos_data</name><version>0.1.0</version>
   <description>Asset-scoped rosbag recording and offline episode export with clock quality and provenance.</description>
   <maintainer email="maintainer@example.com">Chaos maintainers</maintainer><license>Proprietary</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
   <depend>chaos_core</depend>
-  <depend>rclpy</depend>
-  <depend>rosbag2_py</depend>
-  <depend>rosbag2_transport</depend>
+  <depend>chaos_interfaces</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>keyboard_handler</depend>
+  <depend>rclcpp</depend>
+  <depend>rosbag2_cpp</depend>
+  <depend>rosbag2_storage</depend>
   <depend>rosbag2_storage_mcap</depend>
   <depend>rosbag2_storage_sqlite3</depend>
-  <depend>std_msgs</depend>
-  <depend>diagnostic_msgs</depend>
-  <depend>rosidl_runtime_py</depend>
-  <depend>chaos_interfaces</depend>
+  <depend>rosbag2_transport</depend>
+  <depend>rosidl_runtime_cpp</depend>
+  <depend>rosidl_typesupport_cpp</depend>
+  <depend>rosidl_typesupport_introspection_cpp</depend>
+  <depend>chaos_assets</depend>
+  <depend>boost</depend>
+  <depend>openssl</depend>
   <depend>sensor_msgs</depend>
-  <depend>python3-yaml</depend>
-  <depend>python3-numpy</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>libyaml-cpp-dev</exec_depend>
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-numpy</test_depend>
   <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
+  <test_depend>rosbag2_py</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

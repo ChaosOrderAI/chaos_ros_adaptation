@@ -1,8 +1,11 @@
 from copy import deepcopy
+import os
 from pathlib import Path
 
 import pytest
 import yaml
+
+import ament_index_python.packages
 
 from chaos_assets import ConfigurationError, load_inventory
 
@@ -83,14 +86,16 @@ def test_model_instance_merge_paths_are_relative_to_declaration(tmp_path):
     assert sensors['first']['streams']['imu']['topic'].endswith('/first/data')
 
 
-def test_sensor_parameter_files_accept_installed_package_uri(tmp_path, monkeypatch):
-    packages = pytest.importorskip('ament_index_python.packages')
-    (tmp_path / 'params.yaml').write_text('/**:\n  ros__parameters: {}\n')
-    monkeypatch.setattr(packages, 'get_package_share_directory', lambda name: str(tmp_path))
+def test_sensor_parameter_files_accept_installed_package_uri(tmp_path):
+    # A parameter file of an installed package is resolved through the
+    # package index of the sourced ROS installation.
+    share = Path(ament_index_python.packages.get_package_share_directory('chaos_assets'))
     sensor = imu('node')
-    sensor['driver'].update(package='vendor', executable='imu_node', parameter_files=['package://vendor/params.yaml'])
+    sensor['driver'].update(package='chaos_sensors', executable='imu_node',
+                            parameter_files=['package://chaos_assets/config/demo.yaml'])
     result = load_inventory(write_assets(tmp_path, {'imu': sensor})).assets[0]['sensors']['imu']
-    assert result['driver']['parameter_files'] == [str(tmp_path / 'params.yaml')]
+    assert result['driver']['parameter_files'] == [
+        os.path.realpath(share / 'config/demo.yaml')]
 
 
 @pytest.mark.parametrize('mutate,match', [
@@ -109,7 +114,7 @@ def test_sensor_parameter_files_accept_installed_package_uri(tmp_path, monkeypat
     (lambda s: s.update(driver={'mode': 'attach', 'parameters': {}}), 'attach'),
     (lambda s: s['driver'].update(parameters={'value': float('nan')}), 'finite'),
     (lambda s: s['driver'].update(parameters={'value': float('inf')}), 'finite'),
-    (lambda s: s['driver'].update(parameters={'value': 2 ** 63}), 'ROS scalar'),
+    (lambda s: s['driver'].update(parameters={'value': 2 ** 63}), 'ROS scalar|64-bit range'),
     (lambda s: s['driver'].update(parameters={'value': [1, 1.0]}), 'homogeneous'),
     (lambda s: s['driver'].update(parameters={'value': []}), 'homogeneous'),
     (lambda s: s['driver'].update(parameters={'value': {'nested': 1}}), 'ROS scalar'),

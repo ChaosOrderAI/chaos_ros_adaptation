@@ -4,12 +4,12 @@
 
 #include <cerrno>
 #include <cctype>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
 #include <regex>
-#include <set>
 #include <vector>
 
 #include <yaml-cpp/yaml.h>
@@ -20,6 +20,9 @@ namespace {
 
 constexpr size_t kSourceLimit = 1024 * 1024;
 constexpr int kMaxDepth = 200;
+// Total-node budget guards against exponential alias expansion in small
+// documents (a pathological alias tree can double node count per level).
+constexpr size_t kMaxNodes = 200000;
 
 // PyYAML SafeResolver implicit scalar resolution (YAML 1.1 core schema).
 std::regex bool_re(R"(^(?:yes|Yes|YES|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)$)");
@@ -43,127 +46,261 @@ std::string strip_underscores(const std::string& s) {
 }
 
 bool resolve_bool(const std::string& s) {
-  char c = static_cast<char>(std::tolower(static_cast<unsigned char>(s[0])));
-  return c == 'y' || c == 't' || c == 'o' && (s.size() > 1 && std::tolower(static_cast<unsigned char>(s[1])) == 'n');
+  const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(s[0])));
+  return c == 'y' || c == 't' || (c == 'o' && s.size() > 1 &&
+                                  std::tolower(static_cast<unsigned char>(s[1])) == 'n');
 }
 
+// Checked integer parse in an arbitrary base; rejects out-of-range values
+// instead of narrowing. Accepts a leading '-' but not '+' (handled by caller).
 int64_t parse_base(const std::string& digits, int base, const std::string& where) {
-  errno = 0;
-  char* end = nullptr;
-  long long value = std::strtoll(digits.c_str(), &end, base);
-  if (errno == ERANGE || end == nullptr || *end != '\0') {
+  int64_t value = 0;
+  const char* first = digits.data();
+  const char* last = digits.data() + digits.size();
+  if (first != last && *first == '+') ++first;
+  const auto result = std::from_chars(first, last, value, base);
+  if (result.ec == std::errc::result_out_of_range) {
     throw ConfigurationError(where + ": integer exceeds signed 64-bit range");
   }
-  return static_cast<int64_t>(value);
+  if (result.ec != std::errc() || result.ptr != last) {
+    throw ConfigurationError(where + ": invalid integer");
+  }
+  return value;
 }
 
-int64_t parse_sexagesimal_int(const std::string& raw) {
-  bool negative = raw[0] == '-';
+// Multi-component sexagesimal with overflow checks. Each non-first component
+// must be a minute/second in 0..59; only the last may carry a fraction.
+double parse_sexagesimal(const std::string& raw, const std::string& where) {
+  const bool negative = raw[0] == '-';
   size_t pos = (raw[0] == '-' || raw[0] == '+') ? 1 : 0;
-  int64_t value = 0;
-  while (pos < raw.size()) {
-    size_t colon = raw.find(':', pos);
-    std::string part = raw.substr(pos, colon == std::string::npos ? std::string::npos : colon - pos);
-    value = value * 60 + std::strtoll(part.c_str(), nullptr, 10);
+  double total = 0.0;
+  bool first = true;
+  while (pos <= raw.size()) {
+    const size_t colon = raw.find(':', pos);
+    const std::string part = raw.substr(pos, colon == std::string::npos ? std::string::npos : colon - pos);
+    if (part.empty()) throw ConfigurationError(where + ": invalid sexagesimal number");
+    const size_t dot = part.find('.');
+    const std::string whole = dot == std::string::npos ? part : part.substr(0, dot);
+    if (whole.empty()) throw ConfigurationError(where + ": invalid sexagesimal number");
+    int64_t whole_value = 0;
+    const auto parsed = std::from_chars(whole.data(), whole.data() + whole.size(), whole_value, 10);
+    if (parsed.ec != std::errc() || parsed.ptr != whole.data() + whole.size()) {
+      throw ConfigurationError(where + ": invalid sexagesimal number");
+    }
+    if (!first && (whole_value < 0 || whole_value > 59)) {
+      throw ConfigurationError(where + ": invalid sexagesimal number");
+    }
+    double component = static_cast<double>(whole_value);
+    if (dot != std::string::npos) {
+      // A fraction is allowed only in the final component.
+      if (colon != std::string::npos || part.find('.', dot + 1) != std::string::npos) {
+        throw ConfigurationError(where + ": invalid sexagesimal number");
+      }
+      const std::string frac = part.substr(dot + 1);
+      double place = 1.0;
+      for (char c : frac) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) {
+          throw ConfigurationError(where + ": invalid sexagesimal number");
+        }
+        place /= 10.0;
+        component += (c - '0') * place;
+      }
+    }
+    total = total * 60.0 + component;
+    first = false;
     if (colon == std::string::npos) break;
     pos = colon + 1;
   }
-  return negative ? -value : value;
+  return negative ? -total : total;
+}
+
+// Checked integer sexagesimal: value = c0*60^n + c1*60^(n-1) + ... with all
+// arithmetic range-checked before it happens.
+int64_t parse_sexagesimal_int(const std::string& raw, const std::string& where) {
+  const bool negative = raw[0] == '-';
+  size_t pos = (raw[0] == '-' || raw[0] == '+') ? 1 : 0;
+  int64_t total = 0;
+  bool first = true;
+  while (pos <= raw.size()) {
+    const size_t colon = raw.find(':', pos);
+    const std::string part = raw.substr(pos, colon == std::string::npos ? std::string::npos : colon - pos);
+    if (part.empty() || part.find('.') != std::string::npos) {
+      throw ConfigurationError(where + ": invalid sexagesimal number");
+    }
+    int64_t component = 0;
+    const auto parsed = std::from_chars(part.data(), part.data() + part.size(), component, 10);
+    if (parsed.ec != std::errc() || parsed.ptr != part.data() + part.size()) {
+      throw ConfigurationError(where + ": invalid sexagesimal number");
+    }
+    if (!first && (component < 0 || component > 59)) {
+      throw ConfigurationError(where + ": invalid sexagesimal number");
+    }
+    if (total > (std::numeric_limits<int64_t>::max() - component) / 60) {
+      throw ConfigurationError(where + ": integer exceeds signed 64-bit range");
+    }
+    total = total * 60 + component;
+    first = false;
+    if (colon == std::string::npos) break;
+    pos = colon + 1;
+  }
+  return negative ? -total : total;
+}
+
+
+// Strict converters for explicit !!int / !!float tags: the scalar must match
+// the corresponding YAML 1.1 production and converts exactly.
+int64_t strict_int(const std::string& raw, const std::string& where) {
+  if (std::regex_match(raw, int_dec_re)) return parse_base(strip_underscores(raw), 10, where);
+  if (std::regex_match(raw, int_oct_re)) {
+    std::string digits = strip_underscores(raw);
+    const bool negative = digits[0] == '-';
+    if (digits[0] == '-' || digits[0] == '+') digits = digits.substr(1);
+    const int64_t value = parse_base(digits, 8, where);
+    return negative ? -value : value;
+  }
+  if (std::regex_match(raw, int_hex_re)) {
+    std::string digits = strip_underscores(raw);
+    const bool negative = digits[0] == '-';
+    if (digits[0] == '-' || digits[0] == '+') digits = digits.substr(1);
+    const int64_t value = parse_base(digits.substr(2), 16, where);
+    return negative ? -value : value;
+  }
+  if (std::regex_match(raw, int_bin_re)) {
+    std::string digits = strip_underscores(raw);
+    const bool negative = digits[0] == '-';
+    if (digits[0] == '-' || digits[0] == '+') digits = digits.substr(1);
+    const int64_t value = parse_base(digits.substr(2), 2, where);
+    return negative ? -value : value;
+  }
+  if (std::regex_match(raw, int_sex_re)) return parse_sexagesimal_int(strip_underscores(raw), where);
+  throw ConfigurationError(where + ": invalid value for explicit YAML tag 'int'");
+}
+
+double strict_float(const std::string& raw, const std::string& where) {
+  if (std::regex_match(raw, float_dec_re)) {
+    return std::strtod(strip_underscores(raw).c_str(), nullptr);
+  }
+  if (std::regex_match(raw, float_sex_re)) {
+    return parse_sexagesimal(strip_underscores(raw), where);
+  }
+  if (std::regex_match(raw, float_special_re)) {
+    const bool negative = raw[0] == '-';
+    const bool infinite = std::tolower(static_cast<unsigned char>(raw[raw.size() - 3])) == 'i';
+    double value = infinite ? std::numeric_limits<double>::infinity()
+                            : std::numeric_limits<double>::quiet_NaN();
+    return negative ? -value : value;
+  }
+  // Integer productions are valid !!float sources (e.g. !!float 1 -> 1.0).
+  if (std::regex_match(raw, int_dec_re) || std::regex_match(raw, int_oct_re) ||
+      std::regex_match(raw, int_hex_re) || std::regex_match(raw, int_bin_re) ||
+      std::regex_match(raw, int_sex_re)) {
+    return static_cast<double>(strict_int(raw, where));
+  }
+  throw ConfigurationError(where + ": invalid value for explicit YAML tag 'float'");
 }
 
 // Convert one already-loaded yaml-cpp node. `ancestors` guards against
-// recursive anchors/aliases, which yaml-cpp otherwise resolves silently.
+// recursive anchors/aliases; `budget` bounds alias expansion.
 Json convert(const YAML::Node& node, const std::string& where, int depth,
-             std::vector<const YAML::Node*>& ancestors) {
-  if (depth > kMaxDepth) {
+             std::vector<const YAML::Node*>& ancestors, size_t& budget) {
+  if (depth > kMaxDepth || budget == 0) {
     throw ConfigurationError(where + ": configuration nesting is too deep or recursive");
   }
+  --budget;
   switch (node.Type()) {
     case YAML::NodeType::Null:
       return nullptr;
     case YAML::NodeType::Scalar: {
       const std::string raw = node.Scalar();
-      // Quoted scalars keep their verbatim string form.
-      if (node.Tag() == "!") return Json(raw);
+      const std::string tag = node.Tag();
+      // Quoted scalars are verbatim strings.
+      if (tag == "!") return Json(raw);
+      // Explicit safe-schema tags dispatch strictly: the declared type is
+      // enforced instead of falling through to implicit resolution.
+      if (tag == "tag:yaml.org,2002:str") return Json(raw);
+      if (tag == "tag:yaml.org,2002:null") return nullptr;
+      if (tag == "tag:yaml.org,2002:bool") {
+        if (!std::regex_match(raw, bool_re)) {
+          throw ConfigurationError(where + ": invalid value for explicit YAML tag 'bool'");
+        }
+        return Json(resolve_bool(raw));
+      }
+      if (tag == "tag:yaml.org,2002:int") {
+        return Json(strict_int(raw, where));
+      }
+      if (tag == "tag:yaml.org,2002:float") {
+        return Json(strict_float(raw, where));
+      }
+      if (tag != "?") {
+        throw ConfigurationError(where + ": unsupported YAML tag '" + tag + "'");
+      }
+      // Plain scalar: full PyYAML-compatible implicit resolution.
       if (std::regex_match(raw, null_re)) return nullptr;
       if (std::regex_match(raw, bool_re)) return Json(resolve_bool(raw));
       if (std::regex_match(raw, int_dec_re)) return Json(parse_base(strip_underscores(raw), 10, where));
       if (std::regex_match(raw, int_oct_re)) {
         std::string digits = strip_underscores(raw);
-        bool negative = digits[0] == '-';
+        const bool negative = digits[0] == '-';
         if (digits[0] == '-' || digits[0] == '+') digits = digits.substr(1);
-        int64_t value = parse_base(digits, 8, where);
+        const int64_t value = parse_base(digits, 8, where);
         return Json(negative ? -value : value);
       }
       if (std::regex_match(raw, int_hex_re)) {
         std::string digits = strip_underscores(raw);
-        bool negative = digits[0] == '-';
+        const bool negative = digits[0] == '-';
         if (digits[0] == '-' || digits[0] == '+') digits = digits.substr(1);
-        int64_t value = parse_base(digits, 16, where);
+        const int64_t value = parse_base(digits.substr(2), 16, where);
         return Json(negative ? -value : value);
       }
       if (std::regex_match(raw, int_bin_re)) {
         std::string digits = strip_underscores(raw);
-        bool negative = digits[0] == '-';
+        const bool negative = digits[0] == '-';
         if (digits[0] == '-' || digits[0] == '+') digits = digits.substr(1);
-        int64_t value = parse_base(digits, 2, where);
+        const int64_t value = parse_base(digits.substr(2), 2, where);
         return Json(negative ? -value : value);
       }
-      if (std::regex_match(raw, int_sex_re)) return Json(parse_sexagesimal_int(strip_underscores(raw)));
+      if (std::regex_match(raw, int_sex_re)) {
+        return Json(parse_sexagesimal_int(strip_underscores(raw), where));
+      }
       if (std::regex_match(raw, float_special_re)) {
-        bool negative = raw[0] == '-';
-        bool infinite = std::tolower(static_cast<unsigned char>(raw[raw.size() - 3])) == 'i';
+        const bool negative = raw[0] == '-';
+        const bool infinite = std::tolower(static_cast<unsigned char>(raw[raw.size() - 3])) == 'i';
         double value = infinite ? std::numeric_limits<double>::infinity()
                                 : std::numeric_limits<double>::quiet_NaN();
         return Json(negative ? -value : value);
       }
-      if (std::regex_match(raw, float_dec_re) || std::regex_match(raw, float_sex_re)) {
-        std::string digits = strip_underscores(raw);
-        double value;
-        if (std::regex_match(raw, float_sex_re)) {
-          bool negative = digits[0] == '-';
-          size_t pos = (digits[0] == '-' || digits[0] == '+') ? 1 : 0;
-          double base = 0.0, frac = 0.0, scale = 1.0;
-          while (pos < digits.size() && digits[pos] != ':') {
-            base = base * 10 + (digits[pos] - '0');
-            ++pos;
-          }
-          bool after_colon = false;
-          for (; pos < digits.size(); ++pos) {
-            char c = digits[pos];
-            if (c == ':') {
-              after_colon = true;
-              continue;
-            }
-            if (!after_colon) {
-              base = base * 10 + (c - '0');
-            } else {
-              frac = frac * 60 + (c - '0');
-              scale *= 60;
-            }
-          }
-          value = base + frac / scale;
-          if (negative) value = -value;
-        } else {
-          errno = 0;
-          value = std::strtod(digits.c_str(), nullptr);
-          if (errno == ERANGE && std::isinf(value)) {
-            // Overflow to infinity mirrors Python's float("1e500") == inf;
-            // downstream finite checks reject it with a clear error.
-          }
-        }
-        return Json(value);
+      if (std::regex_match(raw, float_dec_re)) {
+        const std::string digits = strip_underscores(raw);
+        // Overflow to infinity mirrors Python float("1e500"); downstream
+        // finite checks reject it with a clear error.
+        return Json(std::strtod(digits.c_str(), nullptr));
+      }
+      if (std::regex_match(raw, float_sex_re)) {
+        return Json(parse_sexagesimal(strip_underscores(raw), where));
       }
       return Json(raw);
     }
     case YAML::NodeType::Sequence: {
+      if (node.Tag() != "?" && node.Tag() != "tag:yaml.org,2002:seq") {
+        throw ConfigurationError(where + ": unsupported YAML tag '" + node.Tag() + "'");
+      }
+      for (const YAML::Node* ancestor : ancestors) {
+        if (node.is(*ancestor)) {
+          throw ConfigurationError(where + ": configuration nesting is too deep or recursive");
+        }
+      }
+      ancestors.push_back(&node);
       Json result = Json::array();
       for (const auto& item : node) {
-        result.push_back(convert(item, where, depth + 1, ancestors));
+        result.push_back(convert(item, where, depth + 1, ancestors, budget));
       }
+      ancestors.pop_back();
       return result;
     }
     case YAML::NodeType::Map: {
+      if (node.Tag() != "?" && node.Tag() != "tag:yaml.org,2002:map") {
+        throw ConfigurationError(where + ": unsupported YAML tag '" + node.Tag() + "'");
+      }
       for (const YAML::Node* ancestor : ancestors) {
         if (node.is(*ancestor)) {
           throw ConfigurationError(where + ": configuration nesting is too deep or recursive");
@@ -176,11 +313,15 @@ Json convert(const YAML::Node& node, const std::string& where, int depth,
         if (key_node.Type() != YAML::NodeType::Scalar) {
           throw ConfigurationError(where + ": YAML mapping keys must be strings");
         }
-        const std::string key = key_node.Scalar();
+        const Json typed_key = convert(key_node, where, depth + 1, ancestors, budget);
+        if (!typed_key.is_string()) {
+          throw ConfigurationError(where + ": YAML mapping keys must be strings");
+        }
+        const std::string key = typed_key.get_ref<const std::string&>();
         if (result.contains(key)) {
           throw ConfigurationError(where + ": duplicate YAML key: " + key);
         }
-        result[key] = convert(pair.second, where, depth + 1, ancestors);
+        result[key] = convert(pair.second, where, depth + 1, ancestors, budget);
       }
       ancestors.pop_back();
       return result;
@@ -194,7 +335,7 @@ Json convert(const YAML::Node& node, const std::string& where, int depth,
 bool valid_utf8(const std::string& s) {
   size_t i = 0;
   while (i < s.size()) {
-    unsigned char c = static_cast<unsigned char>(s[i]);
+    const unsigned char c = static_cast<unsigned char>(s[i]);
     if (c < 0x80) {
       ++i;
       continue;
@@ -213,9 +354,9 @@ bool valid_utf8(const std::string& s) {
     } else {
       return false;
     }
-    if (i + need >= s.size()) return false;
+    if (i + static_cast<size_t>(need) >= s.size()) return false;
     for (int k = 1; k <= need; ++k) {
-      unsigned char cc = static_cast<unsigned char>(s[i + k]);
+      const unsigned char cc = static_cast<unsigned char>(s[i + k]);
       if ((cc & 0xc0) != 0x80) return false;
       code = (code << 6) | (cc & 0x3f);
     }
@@ -223,7 +364,7 @@ bool valid_utf8(const std::string& s) {
         (need == 3 && code < 0x10000) || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) {
       return false;
     }
-    i += need + 1;
+    i += static_cast<size_t>(need) + 1;
   }
   return true;
 }
@@ -244,7 +385,8 @@ Json load_yaml_string(const std::string& content, const std::string& where) {
     return nullptr;
   }
   std::vector<const YAML::Node*> ancestors;
-  return convert(root, where, 0, ancestors);
+  size_t budget = kMaxNodes;
+  return convert(root, where, 0, ancestors, budget);
 }
 
 Json load_yaml_file(const std::string& path) {

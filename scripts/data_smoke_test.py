@@ -13,15 +13,26 @@ import subprocess
 import tempfile
 import time
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
 import yaml
 
-from chaos_data.audit import audit_bag
 from chaos_interfaces.msg import RobotState
+
+
+def audit_bag(executable, bag, index):
+    """Runs the native audit entry point and returns its report.
+
+    The audit is the native executable, so the report is the one of the
+    installed binary and not the one of a Python implementation.
+    """
+    done = subprocess.run([str(executable), str(bag), '--index', str(index)],
+                          text=True, capture_output=True, timeout=180)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return json.loads(done.stdout)
 
 
 def run():
@@ -31,6 +42,8 @@ def run():
     with tempfile.TemporaryDirectory(prefix='chaos-data-smoke-') as directory:
         root = Path(directory)
         share = Path(get_package_share_directory('chaos_assets'))
+        audit_executable = Path(get_package_prefix('chaos_data')) / 'lib/chaos_data/audit'
+        assert audit_executable.is_file(), f'the native audit is not installed: {audit_executable}'
         data = yaml.safe_load((share / 'config/data_collection.demo.yaml').read_text())
         data['hosts'] = {'smoke': {'ros_domain_id': 192}}
         asset = data['assets'][0]
@@ -134,7 +147,7 @@ else:
                 assert segment['status'] == 'closed', segment
                 bag = session / segment['relative_path']
                 assert len(list(bag.glob('*.mcap'))) >= 2, 'duration splitting was not exercised'
-                report = audit_bag(bag, index=root / f'index-{segment["index"]}.jsonl')
+                report = audit_bag(audit_executable, bag, root / f'index-{segment["index"]}.jsonl')
                 topics = report['topics']
                 for topic in ('/tf_static', '/robots/demo_001/robot_description',
                               '/robots/demo_001/sensors/description', '/robots/demo_001/state',
