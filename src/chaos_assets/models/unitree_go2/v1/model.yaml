@@ -1,0 +1,28 @@
+schema_version: 1
+model: unitree_go2
+model_version: v1
+kind: quadruped
+capabilities: [state, motion.velocity, motion.stop, navigation.pose]
+limits:
+  linear_mps: 0.3
+  angular_rps: 0.5
+  command_timeout_s: 0.3
+  state_timeout_s: 1.0
+  lease_max_s: 30.0
+  action_timeout_s: 120.0
+resources: {}
+backends:
+  mock:
+    plugin: mock
+    options: {kind: quadruped}
+    capabilities: [state, motion.velocity, motion.stop, navigation.pose]
+  real:
+    plugin: unitree_go2
+    options:
+      network_interface: eno1
+      dds_domain_id: 0
+      sport_state_topic: rt/sportmodestate
+      cmd_vel_topic: /go2/cmd_vel
+      odom_topic: /go2/odom
+      velocity_frame: odom
+    capabilities: [state, motion.velocity, motion.stop]

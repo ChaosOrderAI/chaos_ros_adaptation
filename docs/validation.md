@@ -1,5 +1,22 @@
 # 首版验证记录
 
+## Go2 机器狗接入验证（2026-10-21）
+
+本轮新增 `unitree_go2` 型号、独立模拟和机载配置、ROS 适配器、独立 SDK 驱动及统一启动管理。在本机 ROS 2 Jazzy / Python 3.12 环境完成以下检查：
+
+- 重建 `chaos_interfaces` 及相关七个 ROS 包成功；`chaos_runtime`、`chaos_bringup` 最终增量构建成功。现有安装空间原先缺少源码已有的 `ControlTrace`，重建后全量测试可运行。本轮未修改或重建 Rust MQTT 实现。
+- `python3 -m pytest -q src -rs`：**704 通过，4 跳过**。跳过项为缺少可选 Xacro 依赖的原有模型测试。
+- Go2 mock 与机载模板的 `system.launch.py` / `edge.launch.py` dry run 均成功；后者无需 SDK 或设备即可确认真实后端只开放状态、速度和停止。
+- `scripts/go2_smoke_test.py`：本机 Domain 186 的机器狗 mock 验证描述、控制租约、前后/横移/转向、超时和显式停止、平面导航、垂直指令拒绝与租约释放。
+- `scripts/go2_driver_smoke_test.py`：本机 Domain 185 的实际 Go2Driver、Go2Adapter、runtime 和 SDK API 通过 ROS 互通；厂商 SDK 强制替换为内存实现，并阻止真实 SDK 导入。验证世界系速度转机体系、实际能力拒绝、运动指令映射、暂停 runtime 后驱动独立超时归零、遥测过期拒绝运动及显式停止。
+- 原有 `scripts/smoke_test.py` 的无人车/无人机 mock 回归通过。
+
+回归覆盖重复 DDS 状态不延长在线时间、冻结/跳变 ROS 时钟、旧速度消息重放、停止后迟到命令、SDK 输出失败和停止重试，以及跨资产 DDS 连接、速度与里程计话题冲突。模拟与替身测试使用本机 socket，沙箱禁止 socket 后在获准的本机环境执行；所有测试均回收进程和 ROS 资源。
+
+未连接真实 Go2、远端 broker 或旧平台；未启动或修改 `sbdog`，未安装 systemd 服务。厂商 SDK 在目标机的依赖兼容性、实际动作和停机效果仍需机载验收，详见 [Go2 接入说明](unitree-go2.md)。
+
+## 首版记录
+
 日期：2026-10-16（Asia/Shanghai）。环境：当前开发机 ROS 2 Jazzy / Python 3.12。
 
 | 检查 | 结果 |

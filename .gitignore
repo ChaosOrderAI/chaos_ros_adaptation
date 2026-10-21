@@ -6,6 +6,10 @@ log-onboard/
 build-mqtt-merged/
 install-mqtt-merged/
 log-mqtt-merged/
+.venv-go2/
+build-go2/
+install-go2/
+log-go2/
 .pytest_cache/
 __pycache__/
 *.pyc

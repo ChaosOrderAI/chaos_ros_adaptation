@@ -18,6 +18,7 @@ from .description import (
     component_asset, description_processes, description_summary, preflight_descriptions,
 )
 from .sensors import preflight_sensors, sensor_processes, sensor_summary, snapshot_parameter_files
+from .drivers import driver_processes, preflight_drivers
 
 
 def parse_bool(value, name):
@@ -67,6 +68,7 @@ def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST'):
                for p in plan]
     if dry_run:
         return [LogInfo(msg=json.dumps(summary, ensure_ascii=False, indent=2))]
+    preflight_drivers(plan)
     preflight_descriptions(plan)
     preflight_sensors(plan)
     preflight_collection(plan)
@@ -114,6 +116,9 @@ def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST'):
         actions.append(RegisterEventHandler(OnProcessExit(target_action=runtime,
             on_exit=_on_exit(f'Runtime {asset["id"]}'))))
         actions.append(runtime)
+        for label, child in driver_processes(node_asset, environment):
+            actions.append(RegisterEventHandler(OnProcessExit(target_action=child, on_exit=_on_exit(label))))
+            actions.append(child)
         for label, child in description_processes(asset, environment):
             actions.append(RegisterEventHandler(OnProcessExit(target_action=child, on_exit=_on_exit(label))))
             actions.append(child)

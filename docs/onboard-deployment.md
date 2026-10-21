@@ -1,6 +1,6 @@
-# 无人车 / 无人机机载部署
+# 无人车 / 无人机 / 机器狗机载部署
 
-本工程运行在每台机器人上的 Linux 计算机。部署基线为 Ubuntu 24.04 + ROS 2 Jazzy，CPU 可以是 x86_64 或 ARM64。无人机侧对应伴随计算机，例如运行 PSDK 网关的 Orin；无人车侧对应车载工控机。框架为各自设备提供统一接口。
+本工程运行在每台机器人上的 Linux 计算机。部署基线为 Ubuntu 24.04 + ROS 2 Jazzy，CPU 可以是 x86_64 或 ARM64。无人机侧对应伴随计算机，例如运行 PSDK 网关的 Orin；无人车侧对应车载工控机；Go2 侧使用连接机器狗网络的机载计算机。框架为各自设备提供统一接口。机器狗的 SDK 依赖和专用流程见 [Go2 接入说明](unitree-go2.md)。
 
 ```text
 无人车计算机                         无人机伴随计算机
@@ -84,7 +84,7 @@ ldd /opt/chaos/ros/lib/chaos_mqtt/mqtt_transport
 /var/log/chaos/                 ROS 日志
 ```
 
-无人车使用 [vehicle.onboard.example.yaml](../src/chaos_assets/config/vehicle.onboard.example.yaml)，无人机使用 [drone.onboard.example.yaml](../src/chaos_assets/config/drone.onboard.example.yaml)。将适用的一个模板复制为 `/etc/chaos/asset.yaml`，设置自己的资产 ID、ROS Domain、broker 和证书。模板中的域号和 broker 仅为示例。
+无人车使用 [vehicle.onboard.example.yaml](../src/chaos_assets/config/vehicle.onboard.example.yaml)，无人机使用 [drone.onboard.example.yaml](../src/chaos_assets/config/drone.onboard.example.yaml)，机器狗使用 [go2.onboard.example.yaml](../src/chaos_assets/config/go2.onboard.example.yaml)。将适用的一个模板复制为 `/etc/chaos/asset.yaml`，设置自己的资产 ID、ROS Domain、broker 和证书；Go2 另需核实连接网卡和独立的 Unitree DDS domain。模板中的域号和 broker 需按设备调整。
 
 通信配置中的 `executable` 可省略，launch 默认从 `chaos_mqtt` 的 ament 包索引定位安装空间中的 `mqtt_transport`。旧裸名称 `mqtt_ros2_adapter` 兼容解析到该入口；以前配置的 `/opt/chaos/bin/mqtt_ros2_adapter` 等显式路径仍作为覆盖值生效。迁移到统一安装时移除该项，即可使用随框架构建的版本。原兄弟目录可以保留，不参与本框架的构建和部署。
 
@@ -103,7 +103,7 @@ ros2 launch chaos_bringup edge.launch.py \
   inventory:=/etc/chaos/asset.yaml asset_id:=vehicle_001 dry_run:=true
 ```
 
-无人机填写实际的 `drone_001` 或自定义 ID。`dry_run` 只检查结构和启动计划；不会连接底盘、飞控或 broker。真实启动时去掉 `dry_run:=true`，MQTT 的二进制、证书文件与原生配置会在任何节点启动前检查。只需本机 ROS 功能时显式指定 `enable_mqtt:=false`。
+无人机填写实际的 `drone_001`，机器狗填写 `dog_001`，或使用自定义 ID。`dry_run` 只检查结构和启动计划；不会连接底盘、飞控、机器狗或 broker。真实启动时去掉 `dry_run:=true`，MQTT 的二进制、证书文件与原生配置会在任何节点启动前检查。只需本机 ROS 功能时显式指定 `enable_mqtt:=false`。
 
 启用数据采集时，在设备资产增加 `data_collection`，默认写入 `/var/lib/chaos/recordings`。部署 rosbag2 存储插件、准备数据盘权限，并让各机器人与主脑使用同一 chrony/NTP 服务器；缺少 chronyc 或时间质量未达标时，严格采集会等待。配置、只读验收命令与服务器/客户端模板见 [数据采集说明](data-collection.md)。服务已有 `StateDirectory=chaos`，自定义磁盘路径仍需对应挂载和用户权限。
 
@@ -111,12 +111,13 @@ ros2 launch chaos_bringup edge.launch.py \
 
 ## 3. 与已有驱动的归属
 
-运动适配器采用 attach，底盘和 DJI 网关继续由设备上的既有服务管理。传感器可以通过资产的 `sensors.*.driver.mode: node` 交给统一 launch；已由其他服务运行的传感器则使用 attach。将驱动和本框架的 ROS Domain、发现范围、话题、frame 配置为一致。
+车辆与 DJI 运动适配器采用 attach，底盘和 DJI 网关继续由设备上的既有服务管理。Go2 real 后端由统一 launch 管理独立 `go2_driver`，无需启动旧 `sbdog` 网关。传感器可以通过资产的 `sensors.*.driver.mode: node` 交给统一 launch；已由其他服务运行的传感器则使用 attach。将驱动和本框架的 ROS Domain、发现范围、话题、frame 配置为一致。
 
 Gemini 335 使用 [专用模板](../src/chaos_assets/config/orbbec_gemini335.example.yaml) 和 [官方驱动构建说明](orbbec-driver.md)。独立驱动安装后，在 `edge.env` 设置 `CHAOS_DRIVER_SETUP=/opt/chaos/drivers/local_setup.bash`；服务入口依次加载 ROS、驱动、框架环境。真实启动会在任何节点运行前检查受管传感器的包与可执行文件。需要相应 USB/串口权限时由目标机部署流程配置。
 
 - 无人车：连接已有底盘的 Odometry / Twist，提供状态、速度和软件受控停止。旧 MQTT 桥、导航、跟随等其他直写底盘的控制源需要按实际接管方案管理。
 - 无人机：订阅旧 PSDK 网关的状态；现阶段没有统一飞控接管。旧网关内置 MQTT 保持其现有归属，与新框架使用不同 client ID / 主题；当前 PSDK 飞行控制仍属于旧网关。
+- Go2：使用 SDK 状态与平面速度/停止接口，不自动站起或导航。启动前退出旧 SDK、MQTT、导航控制源，服务环境需安装 `unitree_sdk2py`；驱动与 runtime 由同一个 launch 负责启动和退出。
 - launch 管理某资产的 Rust 中间件后，同一资产不再由独立 `mqtt_ros2_adapter.service` 启动第二份中间件；从旧部署迁移时，在既定切换窗口停用该资产的独立服务，保留其他资产的服务。
 
 `src/chaos_mqtt/transport/deploy` 保留原传输实现的独立部署模板，供兼容旧部署时参考。当前框架使用本节的统一 launch 和下面的 `chaos-edge.service`，无需另行安装这些独立模板。

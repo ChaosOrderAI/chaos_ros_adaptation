@@ -1,0 +1,10 @@
+schema_version: 1
+hosts:
+  dev:
+    ros_domain_id: 87
+assets:
+  - id: dog_001
+    model_file: ../models/unitree_go2/v1/model.yaml
+    host: dev
+    mode: mock
+    frames: {base: dog_001/base_link, odom: dog_001/odom, map: dog_001/map}

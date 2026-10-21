@@ -1,6 +1,6 @@
 # Chaos ROS 2 多机器人框架
 
-部署在无人车或无人机机载计算机上的 ROS 2 Jazzy 框架，面向 Ubuntu 24.04 的 x86_64 / ARM64 环境。每台设备通过自己的资产配置加载适配器、提供统一 API，并经 MQTT 与平台通信。参考 Kuavo 的版本化资产包、公共接口和后端组织方式，使用 ROS 2 原生接口实现。
+部署在无人车、无人机或机器狗机载计算机上的 ROS 2 Jazzy 框架，面向 Ubuntu 24.04 的 x86_64 / ARM64 环境。每台设备通过自己的资产配置加载适配器、提供统一 API，并经 MQTT 与平台通信。参考 Kuavo 的版本化资产包、公共接口和后端组织方式，使用 ROS 2 原生接口实现。
 
 机载部署使用 `edge.launch.py` 和单设备配置，见 [机载部署说明](docs/onboard-deployment.md)。下方双 mock 的 `system.launch.py` 用于开发验证。
 
@@ -8,13 +8,14 @@
 - [Kuavo 上游参考与采用范围](docs/upstream-reference.md)
 - [构建与验证记录](docs/validation.md)
 - [机载部署、架构构建与 systemd](docs/onboard-deployment.md)
+- [Unitree Go2 机器狗配置、驱动与部署](docs/unitree-go2.md)
 - [传感器配置、标准接口与诊断](docs/sensors.md)
 - [奥比中光 Gemini 335 官方驱动](docs/orbbec-driver.md)
 - [URDF / Xacro 导入、TF 归属与 RViz](docs/robot-description.md)
 - [数据采集、时间同步与离线审计](docs/data-collection.md)
 - [训练数据规范、任务片段与离线导出](docs/training-data.md)
 - [示例资产清单](src/chaos_assets/config/demo.yaml)
-- [无人车型号](src/chaos_assets/models/lingao_vehicle/v1/model.yaml) / [无人机型号](src/chaos_assets/models/dji_m3td/v1/model.yaml)
+- [无人车型号](src/chaos_assets/models/lingao_vehicle/v1/model.yaml) / [无人机型号](src/chaos_assets/models/dji_m3td/v1/model.yaml) / [机器狗型号](src/chaos_assets/models/unitree_go2/v1/model.yaml)
 
 ## 开发环境构建与启动
 
@@ -103,10 +104,19 @@ ros2 launch chaos_bringup system.launch.py \
 |---|---|---|
 | mock UGV | 状态、控制租约、速度、停止、导航 Action | 无设备 |
 | mock UAV | 上述能力及起飞、降落 Action | 无设备 |
+| mock quadruped | 状态、控制租约、前后/横移/转向、停止、导航 Action | 无设备 |
 | `lingao_ros2` | 新鲜 Odometry 状态、经校验的 Twist 速度与受控停止 | 现有底盘驱动已运行，配置实际 topic 和 frame |
 | `dji_psdk_legacy` | 订阅旧网关 ROS 状态 | 旧网关已经产生 `system/status`；暂无统一飞行控制 |
+| `unitree_go2` | 新鲜 Odometry 状态、平面速度与受控停止；统一 launch 启动 `go2_driver` | 目标 Python 环境安装 `unitree_sdk2py`，配置设备网卡和 DDS domain |
 
-[edge.example.yaml](src/chaos_assets/config/edge.example.yaml) 是接入模板，域号、话题和 frame 必须与目标设备核对。运动后端采用 attach：底盘驱动和旧 DJI 网关仍由既有服务管理。传感器可另选 node 模式纳入统一 launch。无人车旧部署使用 Humble，Jazzy 下的底盘驱动构建与实机验证仍需完成。
+[edge.example.yaml](src/chaos_assets/config/edge.example.yaml) 是接入模板，域号、话题和 frame 必须与目标设备核对。车辆和 DJI 运动后端采用 attach：底盘驱动和旧 DJI 网关仍由既有服务管理。Go2 驱动由统一 launch 管理，传感器可另选 node 模式纳入统一 launch。无人车旧部署使用 Humble，Jazzy 下的底盘驱动构建与实机验证仍需完成。
+
+机器狗使用独立的 [go2.demo.yaml](src/chaos_assets/config/go2.demo.yaml) 和 [go2.onboard.example.yaml](src/chaos_assets/config/go2.onboard.example.yaml)，默认双 mock 示例保持不变。Go2 real 后端只提供状态、速度与停止；实机导航、站起/趴下、姿态控制、视频和整机 URDF 尚未接入。SDK 安装、控制源切换及机载验收见 [Go2 说明](docs/unitree-go2.md)。
+
+```bash
+ros2 launch chaos_bringup system.launch.py \
+  inventory:="$PWD/src/chaos_assets/config/go2.demo.yaml"
+```
 
 DJI 的旧 `system/status` 仅在状态请求时发布，没有请求时会变为离线。适配器不会伪造周期遥测或把未知 GPS 坐标转换成有效本地位姿。接入飞行控制前，需要改造旧网关的请求关联、终态事件和 ROS-only 运行模式。框架租约不替代原飞控授权。
 
@@ -190,6 +200,7 @@ python3 -m pytest -q src
 colcon test --packages-select chaos_mqtt
 colcon test-result --verbose
 python3 scripts/smoke_test.py
+python3 scripts/go2_smoke_test.py
 python3 scripts/mqtt_smoke_test.py
 python3 scripts/transport_smoke_test.py
 python3 scripts/sensor_smoke_test.py
@@ -201,6 +212,8 @@ python3 scripts/training_data_smoke_test.py
 使用上面的迁移目录时，先加载 `install-mqtt-merged/local_setup.bash`；`colcon test` 追加 `--build-base build-mqtt-merged --install-base install-mqtt-merged`，`colcon test-result` 追加 `--test-result-base build-mqtt-merged`，确保检查的是本次构建。
 
 smoke test 只构造 mock 资产，使用 localhost 和 Domain 187，启动实际 launch 后检查多机器人隔离、能力发现、控制租约、过期速度、导航完成与取消、起降和租约到期。测试会关闭其启动的所有进程，不连接厂商设备或远程 broker。
+
+`go2_smoke_test.py` 使用独立的 Go2 mock 清单，通过统一 launch 和 SDK 验证机器狗的横移、转向、垂直运动拒绝、停止、导航及命令超时；不加载 Unitree SDK 或连接机器狗。配置与启动命令见 [Go2 说明](docs/unitree-go2.md)。
 
 `mqtt_smoke_test.py` 使用 localhost 和 Domain 188，验证 ROS 侧 MQTT 命令门面的请求关联、去重、过期拒绝、Action 终态和未知遥测。它没有启动 MQTT broker，不作为实际 TLS 网络链路的验收。
 

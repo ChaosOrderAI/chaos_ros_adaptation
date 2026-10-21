@@ -93,12 +93,22 @@ def _plan_inventory(inventory, host_id, asset_ids=None, enable_mqtt=False,
                     check_files=True):
     """Validate and freeze the exact inventory already selected by the caller."""
     selected_ids = {a['id'] for a in inventory.select(host_id, asset_ids)}
-    client_ids, topics, outputs = set(), set(), set()
+    client_ids, topics, outputs, go2_connections = set(), set(), set(), set()
+    go2_state_outputs = set()
     plan = []
     for asset in inventory.assets:
         if not asset['enabled']:
             continue
         options = asset['driver']['options']
+        if asset['mode'] == 'real' and asset['driver']['plugin'] == 'unitree_go2':
+            connection = (asset['host'], options.get('network_interface'), options.get('dds_domain_id'))
+            if connection in go2_connections:
+                raise ConfigurationError(f'multiple Go2 assets own the same DDS connection: {connection}')
+            go2_connections.add(connection)
+            state_output = (asset['ros_domain_id'], options.get('odom_topic'))
+            if state_output in go2_state_outputs:
+                raise ConfigurationError(f'multiple Go2 assets own the same odometry output: {state_output}')
+            go2_state_outputs.add(state_output)
         if asset['mode'] == 'real' and 'cmd_vel_topic' in options:
             output = (asset['ros_domain_id'], options['cmd_vel_topic'])
             if output in outputs:
@@ -135,4 +145,6 @@ def _plan_inventory(inventory, host_id, asset_ids=None, enable_mqtt=False,
             item['mqtt'] = {'executable': executable, 'config': config}
         if asset['id'] in selected_ids:
             plan.append(item)
+    if go2_state_outputs & outputs:
+        raise ConfigurationError('Go2 odometry output conflicts with a velocity output')
     return LaunchPlan.from_items(plan)

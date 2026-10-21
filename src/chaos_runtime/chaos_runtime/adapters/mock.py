@@ -15,7 +15,7 @@ class MockAdapter(Adapter):
     @classmethod
     def capabilities_for(cls, asset):
         kind = asset['driver'].get('options', {}).get('kind', asset.get('kind', 'ugv'))
-        if kind == 'ugv':
+        if kind in ('ugv', 'quadruped'):
             return cls.supported_capabilities - {'flight.takeoff', 'flight.land'}
         return cls.supported_capabilities
 
@@ -23,8 +23,8 @@ class MockAdapter(Adapter):
     def validate_options(cls, asset):
         super().validate_options(asset)
         kind = asset['driver'].get('options', {}).get('kind', asset.get('kind', 'ugv'))
-        if kind not in ('ugv', 'uav'):
-            raise ValueError('mock kind must be ugv or uav')
+        if kind not in ('ugv', 'uav', 'quadruped'):
+            raise ValueError('mock kind must be ugv, uav or quadruped')
         if asset.get('kind', kind) != kind:
             raise ValueError('mock options.kind must agree with the asset kind')
 
@@ -55,6 +55,8 @@ class MockAdapter(Adapter):
             raise Rejected('UNSUPPORTED', 'Mock velocity supports yaw angular velocity only')
         if self.kind == 'ugv' and (abs(values[1]) > 1e-9 or abs(values[2]) > 1e-9):
             raise Rejected('UNSUPPORTED', 'Ground velocity supports linear x and angular z only')
+        if self.kind == 'quadruped' and abs(values[2]) > 1e-9:
+            raise Rejected('UNSUPPORTED', 'Quadruped velocity supports linear x/y and angular z only')
 
     def set_velocity(self, values):
         self.validate_velocity(values)

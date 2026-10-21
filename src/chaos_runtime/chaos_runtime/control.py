@@ -151,7 +151,7 @@ def validate_pose(frame, expected_frame, position, quaternion, kind, max_altitud
     # First adapters support planar yaw, never silently discard roll/pitch.
     if abs(quaternion[0]) > 1e-6 or abs(quaternion[1]) > 1e-6:
         raise Rejected('UNSUPPORTED', 'Navigation orientation supports yaw only')
-    if kind == 'ugv' and abs(position[2]) > 1e-6:
+    if kind in ('ugv', 'quadruped') and abs(position[2]) > 1e-6:
         raise Rejected('UNSUPPORTED', 'Ground navigation requires z=0')
     if kind == 'uav' and not 0 <= position[2] <= max_altitude:
         raise Rejected('OUT_OF_RANGE', 'Navigation altitude exceeds limits')

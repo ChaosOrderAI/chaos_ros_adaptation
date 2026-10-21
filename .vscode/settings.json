@@ -1,0 +1,25 @@
+{
+    "ROS2.distro": "jazzy",
+    "ros.distro": "jazzy",
+    "python.autoComplete.extraPaths": [
+        "/home/yunze/chaos_ros_control/chaos_ws/build/chaos_bringup",
+        "/home/yunze/chaos_ros_control/chaos_ws/install/chaos_bringup/lib/python3.12/site-packages",
+        "/home/yunze/chaos_ros_control/chaos_ws/build/chaos_sensors",
+        "/home/yunze/chaos_ros_control/chaos_ws/install/chaos_sensors/lib/python3.12/site-packages",
+        "/home/yunze/chaos_ros_control/chaos_ws/build/chaos_sdk",
+        "/home/yunze/chaos_ros_control/chaos_ws/install/chaos_sdk/lib/python3.12/site-packages",
+        "/home/yunze/chaos_ros_control/chaos_ws/build/chaos_runtime",
+        "/home/yunze/chaos_ros_control/chaos_ws/install/chaos_runtime/lib/python3.12/site-packages",
+        "/home/yunze/chaos_ros_control/chaos_ws/build/chaos_mqtt",
+        "/home/yunze/chaos_ros_control/chaos_ws/install/chaos_mqtt/lib/python3.12/site-packages",
+        "/home/yunze/chaos_ros_control/chaos_ws/install/chaos_interfaces/lib/python3.12/site-packages",
+        "/home/yunze/chaos_ros_control/chaos_ws/build/chaos_assets",
+        "/home/yunze/chaos_ros_control/chaos_ws/install/chaos_assets/lib/python3.12/site-packages",
+        "/opt/ros/jazzy/opt/gz_sim_vendor/lib/python",
+        "/opt/ros/jazzy/opt/sdformat_vendor/lib/python",
+        "/opt/ros/jazzy/opt/gz_transport_vendor/lib/python",
+        "/opt/ros/jazzy/opt/gz_msgs_vendor/lib/python",
+        "/opt/ros/jazzy/opt/gz_math_vendor/lib/python",
+        "/opt/ros/jazzy/lib/python3.12/site-packages"
+    ]
+}
