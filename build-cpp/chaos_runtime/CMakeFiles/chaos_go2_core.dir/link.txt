@@ -1,0 +1,2 @@
+/usr/bin/ar qc libchaos_go2_core.a CMakeFiles/chaos_go2_core.dir/src/go2_driver_core.cpp.o
+/usr/bin/ranlib libchaos_go2_core.a

@@ -1,0 +1,32 @@
+// generated from rosidl_adapter/resource/action.idl.em
+// with input from chaos_interfaces/action/NavigatePose.action
+// generated code does not contain a copyright notice
+
+#include "builtin_interfaces/msg/Time.idl"
+#include "geometry_msgs/msg/PoseStamped.idl"
+
+module chaos_interfaces {
+  module action {
+    struct NavigatePose_Goal {
+      string lease_token;
+
+      geometry_msgs::msg::PoseStamped target;
+
+      @verbatim (language="comment", text=
+        "Unix UTC deadline for starting this goal, not for completing it; zero disables it.")
+      builtin_interfaces::msg::Time expires_at;
+    };
+    struct NavigatePose_Result {
+      boolean success;
+
+      string code;
+
+      string message;
+    };
+    struct NavigatePose_Feedback {
+      geometry_msgs::msg::PoseStamped current_pose;
+
+      float progress;
+    };
+  };
+};

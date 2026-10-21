@@ -1,0 +1,4 @@
+source;share/chaos_interfaces/local_setup.bash
+source;share/chaos_interfaces/local_setup.dsv
+source;share/chaos_interfaces/local_setup.sh
+source;share/chaos_interfaces/local_setup.zsh

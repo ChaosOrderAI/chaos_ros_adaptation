@@ -1,0 +1,33 @@
+// generated from rosidl_adapter/resource/action.idl.em
+// with input from chaos_interfaces/action/Flight.action
+// generated code does not contain a copyright notice
+
+#include "builtin_interfaces/msg/Time.idl"
+
+module chaos_interfaces {
+  module action {
+    struct Flight_Goal {
+      string lease_token;
+
+      @verbatim (language="comment", text=
+        "Local altitude above the mock ground; used only for takeoff. Metres.")
+      double altitude_m;
+
+      @verbatim (language="comment", text=
+        "Unix UTC deadline for starting this goal, not for completing it; zero disables it.")
+      builtin_interfaces::msg::Time expires_at;
+    };
+    struct Flight_Result {
+      boolean success;
+
+      string code;
+
+      string message;
+    };
+    struct Flight_Feedback {
+      double altitude_m;
+
+      float progress;
+    };
+  };
+};

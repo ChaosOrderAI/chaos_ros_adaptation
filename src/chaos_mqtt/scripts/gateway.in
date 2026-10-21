@@ -1,8 +1,0 @@
-#!@Python3_EXECUTABLE@
-"""ROS executable for the unified MQTT command gateway."""
-
-from chaos_mqtt.gateway import main
-
-
-if __name__ == '__main__':
-    main()

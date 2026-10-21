@@ -1,0 +1,5 @@
+[console_scripts]
+collector = chaos_data.recorder:main
+audit = chaos_data.audit:main
+data_audit = chaos_data.audit:main
+data_export = chaos_data.dataset:main

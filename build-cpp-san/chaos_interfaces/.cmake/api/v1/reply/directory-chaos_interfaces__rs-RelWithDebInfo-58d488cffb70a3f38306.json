@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "chaos_interfaces__rs",
+		"source" : "/home/yunze/chaos_ros_control/chaos_ws/build-cpp-san/chaos_interfaces/chaos_interfaces__rs"
+	}
+}

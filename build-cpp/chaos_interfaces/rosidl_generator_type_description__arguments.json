@@ -1,0 +1,23 @@
+{
+  "package_name": "chaos_interfaces",
+  "output_dir": "/home/yunze/chaos_ros_control/chaos_ws/build-cpp/chaos_interfaces/rosidl_generator_type_description/chaos_interfaces",
+  "idl_tuples": [
+    "/home/yunze/chaos_ros_control/chaos_ws/build-cpp/chaos_interfaces/rosidl_adapter/chaos_interfaces:msg/RobotState.idl",
+    "/home/yunze/chaos_ros_control/chaos_ws/build-cpp/chaos_interfaces/rosidl_adapter/chaos_interfaces:msg/CommandResult.idl",
+    "/home/yunze/chaos_ros_control/chaos_ws/build-cpp/chaos_interfaces/rosidl_adapter/chaos_interfaces:msg/VelocityCommand.idl",
+    "/home/yunze/chaos_ros_control/chaos_ws/build-cpp/chaos_interfaces/rosidl_adapter/chaos_interfaces:msg/ControlTrace.idl",
+    "/home/yunze/chaos_ros_control/chaos_ws/build-cpp/chaos_interfaces/rosidl_adapter/chaos_interfaces:srv/GetDescription.idl",
+    "/home/yunze/chaos_ros_control/chaos_ws/build-cpp/chaos_interfaces/rosidl_adapter/chaos_interfaces:srv/ControlLease.idl",
+    "/home/yunze/chaos_ros_control/chaos_ws/build-cpp/chaos_interfaces/rosidl_adapter/chaos_interfaces:srv/Stop.idl",
+    "/home/yunze/chaos_ros_control/chaos_ws/build-cpp/chaos_interfaces/rosidl_adapter/chaos_interfaces:action/NavigatePose.idl",
+    "/home/yunze/chaos_ros_control/chaos_ws/build-cpp/chaos_interfaces/rosidl_adapter/chaos_interfaces:action/Flight.idl"
+  ],
+  "include_paths": [
+    "builtin_interfaces:/opt/ros/jazzy/share/builtin_interfaces",
+    "std_msgs:/opt/ros/jazzy/share/std_msgs",
+    "geometry_msgs:/opt/ros/jazzy/share/geometry_msgs",
+    "service_msgs:/opt/ros/jazzy/share/service_msgs",
+    "action_msgs:/opt/ros/jazzy/share/action_msgs",
+    "unique_identifier_msgs:/opt/ros/jazzy/share/unique_identifier_msgs"
+  ]
+}

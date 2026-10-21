@@ -1,0 +1,36 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from chaos_interfaces/srv/ControlLease.srv
+// generated code does not contain a copyright notice
+
+#include "builtin_interfaces/msg/Time.idl"
+
+module chaos_interfaces {
+  module srv {
+    @verbatim (language="comment", text=
+      "acquire | renew | release; owner is required. Renew/release require token.")
+    struct ControlLease_Request {
+      string operation;
+
+      string owner;
+
+      string token;
+
+      double duration_s;
+
+      @verbatim (language="comment", text=
+        "Unix UTC deadline for accepting this request; zero means no transport deadline.")
+      builtin_interfaces::msg::Time expires_at;
+    };
+    struct ControlLease_Response {
+      boolean success;
+
+      string code;
+
+      string message;
+
+      string token;
+
+      double remaining_s;
+    };
+  };
+};

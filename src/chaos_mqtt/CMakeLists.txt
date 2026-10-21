@@ -1,8 +1,22 @@
 cmake_minimum_required(VERSION 3.20)
-project(chaos_mqtt LANGUAGES C)
+project(chaos_mqtt LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
+find_package(nlohmann_json REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(chaos_interfaces REQUIRED)
+
+option(CHAOS_MQTT_SANITIZE "Build unit tests with ASan+UBSan" OFF)
+
+# --- Imported Rust transport (kept as independent infrastructure) ----------
 find_program(MQTT_ADAPTER_CARGO cargo REQUIRED)
 find_program(MQTT_ADAPTER_RUSTC rustc REQUIRED)
 
@@ -46,8 +60,6 @@ foreach(_package IN LISTS _mqtt_adapter_required_packages)
   find_package(${_package} REQUIRED)
 endforeach()
 
-# Select the native Rust host explicitly so CARGO_BUILD_TARGET cannot silently
-# move the binary outside the directory that gets installed.
 execute_process(
   COMMAND "${MQTT_ADAPTER_RUSTC}" -vV
   OUTPUT_VARIABLE _mqtt_adapter_rust_version
@@ -63,9 +75,6 @@ set(MQTT_ADAPTER_CARGO_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo")
 # package of its own.
 set(MQTT_ADAPTER_BINARY "${MQTT_ADAPTER_CARGO_TARGET_DIR}/${MQTT_ADAPTER_RUST_HOST}/release/mqtt_ros2_adapter")
 
-# GCC's intrinsic headers can be outside libclang's default search path on
-# Ubuntu. Ask the selected native compiler instead of assuming an architecture
-# or GCC version. An explicit user setting takes precedence in the runner.
 execute_process(
   COMMAND "${CMAKE_C_COMPILER}" -print-file-name=include
   OUTPUT_VARIABLE MQTT_ADAPTER_COMPILER_INCLUDE
@@ -79,9 +88,6 @@ endif()
 
 configure_file(cmake/cargo_runner.cmake.in cargo_runner.cmake @ONLY)
 
-# Let Cargo check its complete dependency graph on each build. This handles
-# changed/added/deleted Rust files, Cargo.lock and generated message bindings,
-# without CMake attempting to duplicate Cargo's freshness rules.
 add_custom_target(mqtt_adapter_build ALL
   COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_BINARY_DIR}/cargo_runner.cmake"
   BYPRODUCTS "${MQTT_ADAPTER_BINARY}"
@@ -89,9 +95,53 @@ add_custom_target(mqtt_adapter_build ALL
   COMMENT "Building locked mqtt_ros2_adapter Rust release"
   VERBATIM USES_TERMINAL)
 
+# --- Native C++ business logic (no rclcpp) ---------------------------------
+add_library(chaos_mqtt_core STATIC
+  src/protocol.cpp
+  src/adapter_config.cpp)
+target_include_directories(chaos_mqtt_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(chaos_mqtt_core PUBLIC nlohmann_json::nlohmann_json)
+
+# --- Native C++ gateway node -----------------------------------------------
+add_library(chaos_mqtt_gateway STATIC src/gateway_node.cpp)
+target_include_directories(chaos_mqtt_gateway PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(chaos_mqtt_gateway
+  PUBLIC
+    chaos_mqtt_core
+    rclcpp::rclcpp
+    rclcpp_action::rclcpp_action
+    ${std_msgs_TARGETS}
+    ${builtin_interfaces_TARGETS}
+    ${geometry_msgs_TARGETS}
+    chaos_interfaces::chaos_interfaces__rosidl_generator_cpp
+    chaos_interfaces::chaos_interfaces__rosidl_typesupport_cpp)
+add_dependencies(chaos_mqtt_gateway mqtt_adapter_build)
+
+add_executable(gateway src/gateway_main.cpp)
+target_link_libraries(gateway PRIVATE chaos_mqtt_gateway)
+
+# --- Python thin bindings ---------------------------------------------------
+find_package(pybind11_vendor REQUIRED)
+find_package(pybind11 REQUIRED)
+pybind11_add_module(_chaos_mqtt_core MODULE src/py_bindings.cpp)
+target_link_libraries(_chaos_mqtt_core PRIVATE chaos_mqtt_core)
+
 ament_python_install_package(${PROJECT_NAME})
-configure_file(scripts/gateway.in gateway @ONLY)
-install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/gateway" DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS
+  chaos_mqtt_core
+  chaos_mqtt_gateway
+  EXPORT export_chaos_mqtt
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin)
+install(TARGETS gateway DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY include/ DESTINATION include)
+install(TARGETS _chaos_mqtt_core DESTINATION ${PYTHON_INSTALL_DIR}/${PROJECT_NAME})
 install(PROGRAMS "${MQTT_ADAPTER_BINARY}" DESTINATION lib/${PROJECT_NAME}
   RENAME mqtt_transport)
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
@@ -105,10 +155,46 @@ install(DIRECTORY transport/examples transport/scripts transport/deploy
   PATTERN "__pycache__" EXCLUDE
   PATTERN "*.pyc" EXCLUDE)
 
+ament_export_targets(export_chaos_mqtt HAS_LIBRARY_TARGET)
+ament_export_dependencies(nlohmann_json rclcpp rclcpp_action std_msgs
+  builtin_interfaces geometry_msgs chaos_interfaces)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)
+  find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(chaos_mqtt_python test
+
+  set(_sanitizer_flags "")
+  if(CHAOS_MQTT_SANITIZE)
+    set(_sanitizer_flags -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+  endif()
+
+  ament_add_gtest(test_protocol test/protocol_tests.cpp)
+  target_link_libraries(test_protocol chaos_mqtt_core)
+  if(CHAOS_MQTT_SANITIZE)
+    target_compile_options(test_protocol PRIVATE ${_sanitizer_flags})
+    target_link_options(test_protocol PRIVATE ${_sanitizer_flags})
+  endif()
+
+  ament_add_gtest(test_adapter_config test/adapter_config_tests.cpp)
+  target_link_libraries(test_adapter_config chaos_mqtt_core)
+  if(CHAOS_MQTT_SANITIZE)
+    target_compile_options(test_adapter_config PRIVATE ${_sanitizer_flags})
+    target_link_options(test_adapter_config PRIVATE ${_sanitizer_flags})
+  endif()
+
+  ament_add_gtest(test_gateway_unit test/gateway_unit_tests.cpp)
+  target_link_libraries(test_gateway_unit chaos_mqtt_gateway)
+  if(CHAOS_MQTT_SANITIZE)
+    target_compile_options(test_gateway_unit PRIVATE ${_sanitizer_flags})
+    target_link_options(test_gateway_unit PRIVATE ${_sanitizer_flags})
+  endif()
+
+  ament_add_gtest(test_gateway_integration test/gateway_integration_tests.cpp)
+  target_link_libraries(test_gateway_integration chaos_mqtt_gateway)
+  set_tests_properties(test_gateway_integration PROPERTIES TIMEOUT 120 ENVIRONMENT "ROS_DOMAIN_ID=188")
+
+  ament_add_pytest_test(chaos_mqtt_python test/test_python_bindings.py
     APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
     TIMEOUT 120)
   ament_add_test(mqtt_adapter_cargo_test

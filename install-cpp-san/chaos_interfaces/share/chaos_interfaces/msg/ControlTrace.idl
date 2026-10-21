@@ -1,0 +1,51 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from chaos_interfaces/msg/ControlTrace.msg
+// generated code does not contain a copyright notice
+
+#include "geometry_msgs/msg/Twist.idl"
+#include "std_msgs/msg/Header.idl"
+
+module chaos_interfaces {
+  module msg {
+    @verbatim (language="comment", text=
+      "Runtime evidence for offline training; never a hardware execution confirmation." "\n"
+      "Event publication time and the configured robot base frame.")
+    struct ControlTrace {
+      std_msgs::msg::Header header;
+
+      string asset_id;
+
+      @verbatim (language="comment", text=
+        "Strictly increasing within one runtime process, including failed publications." "\n"
+        "A discontinuity or reset invalidates any previously held training action.")
+      uint64 sequence;
+
+      uint64 monotonic_ns;
+
+      string request_id;
+
+      @verbatim (language="comment", text=
+        "motion.velocity, motion.stop, navigation.pose, flight.takeoff, or flight.land.")
+      string command;
+
+      @verbatim (language="comment", text=
+        "issued, rejected, or invalidated.")
+      string stage;
+
+      @verbatim (language="comment", text=
+        "Only issued motion.velocity events may carry a usable velocity label.")
+      boolean velocity_valid;
+
+      geometry_msgs::msg::Twist velocity;
+
+      @verbatim (language="comment", text=
+        "Remaining seconds from header.stamp, bounded by command and lease expiration." "\n"
+        "Zero supplies no valid action interval. Invalidation always ends the interval.")
+      double valid_for_s;
+
+      @verbatim (language="comment", text=
+        "Machine-readable code only. No lease token, owner, or exception message.")
+      string code;
+    };
+  };
+};

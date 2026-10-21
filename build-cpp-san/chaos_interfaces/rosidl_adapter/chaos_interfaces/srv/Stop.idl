@@ -1,0 +1,26 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from chaos_interfaces/srv/Stop.srv
+// generated code does not contain a copyright notice
+
+#include "builtin_interfaces/msg/Time.idl"
+
+module chaos_interfaces {
+  module srv {
+    struct Stop_Request {
+      string request_id;
+
+      string lease_token;
+
+      @verbatim (language="comment", text=
+        "Unix UTC deadline for accepting this request; zero means no transport deadline.")
+      builtin_interfaces::msg::Time expires_at;
+    };
+    struct Stop_Response {
+      boolean success;
+
+      string code;
+
+      string message;
+    };
+  };
+};

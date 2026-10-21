@@ -1,0 +1,12 @@
+string lease_token
+# Local altitude above the mock ground; used only for takeoff. Metres.
+float64 altitude_m
+# Unix UTC deadline for starting this goal, not for completing it; zero disables it.
+builtin_interfaces/Time expires_at
+---
+bool success
+string code
+string message
+---
+float64 altitude_m
+float32 progress

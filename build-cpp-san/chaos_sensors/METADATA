@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: chaos-sensors
+Version: 0.1.0
+Summary: Mock sensor publishers and asset-scoped sensor health diagnostics.
