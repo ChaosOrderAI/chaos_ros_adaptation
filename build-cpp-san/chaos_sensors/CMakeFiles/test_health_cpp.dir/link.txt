@@ -1,1 +1,0 @@
-/usr/bin/c++ -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -O2 -g -DNDEBUG CMakeFiles/test_health_cpp.dir/test/test_health_cpp.cpp.o -o test_health_cpp  gtest/libgtest_main.a gtest/libgtest.a libchaos_sensors_health.a -pthread 

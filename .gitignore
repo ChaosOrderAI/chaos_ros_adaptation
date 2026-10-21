@@ -16,3 +16,6 @@ __pycache__/
 *.egg-info/
 generated/
 
+build-cpp*/
+install-cpp*/
+log-cpp*/

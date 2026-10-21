@@ -1,3 +1,0 @@
-[console_scripts]
-mock_sensor = chaos_sensors.mock:main
-sensor_monitor = chaos_sensors.monitor:main

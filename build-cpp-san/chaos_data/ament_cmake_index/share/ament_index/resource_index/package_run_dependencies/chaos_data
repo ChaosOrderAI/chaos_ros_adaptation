@@ -1,1 +1,0 @@
-chaos_core;rclpy;rosbag2_py;rosbag2_transport;rosbag2_storage_mcap;rosbag2_storage_sqlite3;std_msgs;diagnostic_msgs;rosidl_runtime_py;chaos_interfaces;sensor_msgs;python3-yaml;python3-numpy;ament_cmake_gtest;ament_cmake_pytest;python3-pytest

@@ -1,8 +1,0 @@
-string request_id
-string lease_token
-# Unix UTC deadline for accepting this request; zero means no transport deadline.
-builtin_interfaces/Time expires_at
----
-bool success
-string code
-string message

@@ -1,4 +1,0 @@
-source;share/chaos_runtime/environment/ament_prefix_path.sh
-source;share/chaos_runtime/environment/library_path.sh
-source;share/chaos_runtime/environment/path.sh
-source;share/chaos_runtime/environment/pythonpath.sh

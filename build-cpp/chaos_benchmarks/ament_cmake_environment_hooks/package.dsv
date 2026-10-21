@@ -1,4 +1,0 @@
-source;share/chaos_benchmarks/local_setup.bash
-source;share/chaos_benchmarks/local_setup.dsv
-source;share/chaos_benchmarks/local_setup.sh
-source;share/chaos_benchmarks/local_setup.zsh

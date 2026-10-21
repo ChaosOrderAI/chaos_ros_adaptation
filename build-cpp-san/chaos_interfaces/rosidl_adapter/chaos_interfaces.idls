@@ -1,9 +1,0 @@
-/home/yunze/chaos_ros_control/chaos_ws/build-cpp-san/chaos_interfaces/rosidl_adapter/chaos_interfaces:msg/RobotState.idl
-/home/yunze/chaos_ros_control/chaos_ws/build-cpp-san/chaos_interfaces/rosidl_adapter/chaos_interfaces:msg/CommandResult.idl
-/home/yunze/chaos_ros_control/chaos_ws/build-cpp-san/chaos_interfaces/rosidl_adapter/chaos_interfaces:msg/VelocityCommand.idl
-/home/yunze/chaos_ros_control/chaos_ws/build-cpp-san/chaos_interfaces/rosidl_adapter/chaos_interfaces:msg/ControlTrace.idl
-/home/yunze/chaos_ros_control/chaos_ws/build-cpp-san/chaos_interfaces/rosidl_adapter/chaos_interfaces:srv/GetDescription.idl
-/home/yunze/chaos_ros_control/chaos_ws/build-cpp-san/chaos_interfaces/rosidl_adapter/chaos_interfaces:srv/ControlLease.idl
-/home/yunze/chaos_ros_control/chaos_ws/build-cpp-san/chaos_interfaces/rosidl_adapter/chaos_interfaces:srv/Stop.idl
-/home/yunze/chaos_ros_control/chaos_ws/build-cpp-san/chaos_interfaces/rosidl_adapter/chaos_interfaces:action/NavigatePose.idl
-/home/yunze/chaos_ros_control/chaos_ws/build-cpp-san/chaos_interfaces/rosidl_adapter/chaos_interfaces:action/Flight.idl

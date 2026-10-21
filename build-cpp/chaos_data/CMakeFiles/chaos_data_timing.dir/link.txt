@@ -1,2 +1,0 @@
-/usr/bin/ar qc libchaos_data_timing.a CMakeFiles/chaos_data_timing.dir/src/timing.cpp.o
-/usr/bin/ranlib libchaos_data_timing.a
