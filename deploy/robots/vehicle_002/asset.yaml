@@ -1,0 +1,16 @@
+# 192.168.30.75: attach to the existing Lingao driver on ROS Domain 124.
+# The existing platform retains control; only telemetry is enabled here.
+schema_version: 1
+hosts:
+  onboard: {ros_domain_id: 124}
+assets:
+  - id: vehicle_002
+    model_file: package://chaos_assets/models/lingao_vehicle/v1/model.yaml
+    host: onboard
+    mode: real
+    capabilities: [state]
+    frames: {base: base_foot, odom: odom, map: map}
+    driver:
+      options:
+        odom_topic: /lingao/odom
+        cmd_vel_topic: /cmd_vel
