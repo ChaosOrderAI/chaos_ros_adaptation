@@ -2,6 +2,13 @@
 // persistence, the steady-clock watchdog under a frozen /clock, and the
 // action terminal states. No hardware and no external broker: the mock
 // adapter is used and the ROS domain stays on localhost.
+//
+// The node publishes its observations through the process-lifetime
+// observation service: the service owns the four worker threads and the
+// workers publish through the ROS publishers they own by value. Every
+// fixture below therefore owns that service generation and stops and joins
+// it before the ROS context goes down, so no observation worker can outlive
+// rclcpp::shutdown() and no generation is left behind for the next fixture.
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -16,6 +23,7 @@
 #include "chaos_interfaces/srv/control_lease.hpp"
 #include "chaos_interfaces/srv/get_description.hpp"
 #include "chaos_interfaces/srv/stop.hpp"
+#include "chaos_runtime/observation.hpp"
 #include "chaos_runtime/runtime_node.hpp"
 
 namespace chaos::runtime {
@@ -39,13 +47,61 @@ const char * kMockAssetJson = R"({
   "driver": {"plugin": "mock", "options": {"kind": "ugv"}}
 })";
 
-class RuntimeFixture : public ::testing::Test {
+// The lifetime every fixture that constructs a RobotRuntimeNode shares.
+//
+// The node owns an observation endpoint and registers its sinks with the
+// process-lifetime observation service. The fixture owns the same generation
+// and tears it down in the one safe order:
+//   1. the executor is cancelled and its thread is joined, so no callback
+//      can run while the node dies,
+//   2. the node is destroyed: it closes the endpoint and releases the
+//      publishers that the observation workers publish through,
+//   3. the service is stopped and joined with a bounded deadline,
+//   4. only then does the ROS context go down.
+// A failed SetUp leaves a partial fixture: every step tolerates the missing
+// part, and the service is joined even when the node was never built, so the
+// next fixture can acquire a fresh generation.
+class RuntimeNodeFixture : public ::testing::Test {
 protected:
   void SetUp() override {
     rclcpp::init(0, nullptr);
-    rclcpp::NodeOptions options;
-    options.parameter_overrides(
-      {rclcpp::Parameter("asset_json", std::string(kMockAssetJson))});
+    // The node registers its sinks with the process-lifetime service. The
+    // fixture takes the same generation before the node is built, so a node
+    // that cannot register never leaves an unowned pool behind.
+    service_ = ObservationService::process();
+    if (service_->stats().stop_requested) {
+      // A leftover stopping generation of an earlier failed fixture: retire
+      // it before the node registers, otherwise the registration is refused.
+      if (!service_->joinFor(kObservationJoinTimeout)) {
+        ADD_FAILURE() << "a leftover observation generation could not be joined";
+      }
+      service_ = ObservationService::process();
+    }
+  }
+
+  void TearDown() override {
+    if (executor_) {
+      executor_->cancel();
+    }
+    if (spin_.joinable()) {
+      spin_.join();
+    }
+    node_.reset();
+    executor_.reset();
+    if (service_) {
+      service_->requestStop();
+      // A failed join keeps the workers joinable and forbids a replacement
+      // generation: the failure stays visible instead of being masked by a
+      // fresh pool.
+      EXPECT_TRUE(service_->joinFor(kObservationJoinTimeout))
+        << "the observation service did not join";
+      service_.reset();
+    }
+    rclcpp::shutdown();
+  }
+
+  // Builds the node and starts the executor that serves it.
+  void startNode(const rclcpp::NodeOptions & options) {
     node_ = std::make_shared<RobotRuntimeNode>(options);
     executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>(
       rclcpp::ExecutorOptions(), 4);
@@ -53,14 +109,24 @@ protected:
     spin_ = std::thread([this] { executor_->spin(); });
   }
 
-  void TearDown() override {
-    executor_->cancel();
-    if (spin_.joinable()) {
-      spin_.join();
-    }
-    node_.reset();
-    executor_.reset();
-    rclcpp::shutdown();
+  // The observation workers only publish and never block on a sink, so the
+  // bounded deadline only guards against a deadlock.
+  static constexpr std::chrono::milliseconds kObservationJoinTimeout{5000};
+
+  std::shared_ptr<ObservationService> service_;
+  std::shared_ptr<RobotRuntimeNode> node_;
+  std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
+  std::thread spin_;
+};
+
+class RuntimeFixture : public RuntimeNodeFixture {
+protected:
+  void SetUp() override {
+    RuntimeNodeFixture::SetUp();
+    rclcpp::NodeOptions options;
+    options.parameter_overrides(
+      {rclcpp::Parameter("asset_json", std::string(kMockAssetJson))});
+    startNode(options);
   }
 
   template <typename Fn>
@@ -74,10 +140,6 @@ protected:
     }
     return predicate();
   }
-
-  std::shared_ptr<RobotRuntimeNode> node_;
-  std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
-  std::thread spin_;
 
   // An action requires a control lease: the goal carries the lease token.
   std::string acquireLease() {
@@ -154,6 +216,36 @@ TEST_F(RuntimeFixture, StopServiceIsReachable) {
   EXPECT_EQ(response->code, "NO_CONTROL");
 }
 
+TEST_F(RuntimeFixture, AcceptedStopRevokesTheLease) {
+  const std::string token = acquireLease();
+  ASSERT_FALSE(token.empty()) << "lease acquisition failed";
+
+  auto client = node_->create_client<chaos_interfaces::srv::Stop>("/mock/motion/stop");
+  ASSERT_TRUE(
+    waitFor([&] { return client->service_is_ready(); }, std::chrono::seconds(5)));
+
+  auto request = std::make_shared<chaos_interfaces::srv::Stop::Request>();
+  request->request_id = "stop-revokes-lease";
+  request->lease_token = token;
+  auto future = client->async_send_request(request);
+  ASSERT_EQ(future.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  const auto response = future.get();
+  EXPECT_TRUE(response->success) << response->message;
+
+  // The stop revoked the lease: a command replayed with the old token is
+  // rejected and control requires a fresh acquire.
+  auto replay = std::make_shared<chaos_interfaces::srv::Stop::Request>();
+  replay->request_id = "stop-replay";
+  replay->lease_token = token;
+  auto replay_future = client->async_send_request(replay);
+  ASSERT_EQ(replay_future.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  const auto replayed = replay_future.get();
+  EXPECT_FALSE(replayed->success);
+  EXPECT_EQ(replayed->code, "NO_CONTROL");
+}
+
 TEST_F(RuntimeFixture, NavigationGoalReachesSucceeded) {
   auto client = rclcpp_action::create_client<NavigatePose>(node_, "/mock/navigation/to_pose");
   ASSERT_TRUE(waitFor([&] { return client->action_server_is_ready(); },
@@ -212,29 +304,15 @@ TEST_F(RuntimeFixture, NavigationGoalCancelReachesCanceled) {
 // A node whose ROS clock is frozen must still expire its lease: the
 // watchdog runs on the wall clock, not on /clock. No /clock publisher is
 // started here, so the node clock stays at zero for the whole test.
-class FrozenClockFixture : public ::testing::Test {
+class FrozenClockFixture : public RuntimeNodeFixture {
 protected:
   void SetUp() override {
-    rclcpp::init(0, nullptr);
+    RuntimeNodeFixture::SetUp();
     rclcpp::NodeOptions options;
     options.parameter_overrides(
       {rclcpp::Parameter("asset_json", std::string(kMockAssetJson)),
        rclcpp::Parameter("use_sim_time", true)});
-    node_ = std::make_shared<RobotRuntimeNode>(options);
-    executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>(
-      rclcpp::ExecutorOptions(), 4);
-    executor_->add_node(node_);
-    spin_ = std::thread([this] { executor_->spin(); });
-  }
-
-  void TearDown() override {
-    executor_->cancel();
-    if (spin_.joinable()) {
-      spin_.join();
-    }
-    node_.reset();
-    executor_.reset();
-    rclcpp::shutdown();
+    startNode(options);
   }
 
   template <typename Fn>
@@ -248,10 +326,6 @@ protected:
     }
     return predicate();
   }
-
-  std::shared_ptr<RobotRuntimeNode> node_;
-  std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
-  std::thread spin_;
 };
 
 TEST_F(FrozenClockFixture, LeaseExpiresWhileTheRosClockIsFrozen) {

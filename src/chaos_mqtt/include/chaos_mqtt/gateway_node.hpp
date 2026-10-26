@@ -93,6 +93,14 @@ private:
   /// True while the gateway still correlates `request_id`.
   bool still_tracked(const std::string & request_id);
 
+  /// True when the original command TTL of `request_id` elapsed.
+  ///
+  /// The deadline was captured when the command arrived: the remaining TTL
+  /// measured on the monotonic clock, so a wall clock rollback can neither
+  /// shorten nor extend it. The wall clock deadline of the sender may expire
+  /// the request earlier, never later.
+  bool dispatch_expired(const std::string & request_id);
+
   Json asset_;
   std::string asset_id_;
   std::vector<std::string> capabilities_;

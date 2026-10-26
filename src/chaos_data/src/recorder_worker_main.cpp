@@ -19,21 +19,14 @@
 //    the parent death signal so a crashed supervisor cannot leak the worker.
 //  - rclcpp is initialized with SignalHandlerOptions::None so it does not
 //    replace the policy above.
-#include <cerrno>
-#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
-#include <fcntl.h>
 #include <memory>
 #include <mutex>
-#include <poll.h>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <sys/prctl.h>
-#include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -46,53 +39,9 @@
 #include <rosbag2_transport/recorder.hpp>
 #include <rosbag2_transport/record_options.hpp>
 
-#include "chaos_core/clock.hpp"
+#include "chaos_data/recorder_control.hpp"
 
 namespace {
-
-constexpr std::size_t kMaxFrame = 64 * 1024;
-// Total budget for one control frame write, not per poll iteration.
-constexpr double kWriteTimeoutS = 5.0;
-
-// Bounded write of one control frame. The whole frame shares one deadline
-// and the deadline is checked on every iteration, so a peer that keeps
-// reading cannot extend the write.
-bool writeFrame(int fd, const std::string & data)
-{
-  const int flags = ::fcntl(fd, F_GETFL, 0);
-  if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
-    return false;
-  }
-  const double deadline = chaos::monotonicSeconds() + kWriteTimeoutS;
-  std::size_t written = 0;
-  while (written < data.size()) {
-    const double remaining = deadline - chaos::monotonicSeconds();
-    if (remaining <= 0) {
-      return false;
-    }
-    const ssize_t result = ::send(fd, data.data() + written,
-                                  data.size() - written, MSG_NOSIGNAL);
-    if (result < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        struct pollfd descriptor{fd, POLLOUT, 0};
-        const int ready = ::poll(&descriptor, 1, static_cast<int>(remaining * 1000.0));
-        if (ready < 0 && errno != EINTR) {
-          return false;
-        }
-        continue;
-      }
-      return false;
-    }
-    if (result == 0) {
-      return false;
-    }
-    written += static_cast<std::size_t>(result);
-  }
-  return true;
-}
 
 bool endsWithAny(const std::string & topic,
                  const std::vector<std::string> & suffixes)
@@ -111,12 +60,14 @@ bool endsWithAny(const std::string & topic,
 // The constructor only creates the recorder: the executor thread is started
 // by start(), so a throwing constructor can never leave a joinable thread
 // behind (a joinable std::thread that is destroyed calls std::terminate).
-class WorkerSession
+//
+// Implements chaos::data::RecorderControlSession so the control loop in
+// recorder_control.hpp can be regression tested with a fake session.
+class WorkerSession : public chaos::data::RecorderControlSession
 {
 public:
-  WorkerSession(int control_fd, const std::string & uri,
-                const std::string & node_name, const nlohmann::json & config)
-  : control_fd_(control_fd)
+  WorkerSession(const std::string & uri, const std::string & node_name,
+                const nlohmann::json & config)
   {
     rosbag2_storage::StorageOptions storage;
     storage.uri = uri;
@@ -195,19 +146,21 @@ public:
     }
   }
 
-  rosbag2_transport::Recorder & recorder() { return *recorder_; }
-
-  bool spinFailed() const
+  bool spinFailed() const override
   {
     std::lock_guard<std::mutex> lock(spin_mutex_);
     return spin_failed_;
   }
 
-  std::string spinError() const
+  std::string spinError() const override
   {
     std::lock_guard<std::mutex> lock(spin_mutex_);
     return spin_error_;
   }
+
+  void pause() override { recorder_->pause(); }
+
+  void resume() override { recorder_->resume(); }
 
   // Flushes the recording. Returns false and fills error when the flush
   // failed. A failed flush is never acknowledged as a success.
@@ -217,7 +170,7 @@ public:
   // captured state dangling. A wedged writer is bounded by the supervisor:
   // it owns the stop deadline and sends SIGTERM, then SIGKILL. The block
   // stays inside this isolated process and cannot affect the supervisor.
-  bool flush(std::string & error)
+  bool flush(std::string & error) override
   {
     if (flushed_) {
       return true;
@@ -239,6 +192,11 @@ public:
   // context, join the executor thread. Never throws.
   void bestEffortShutdown() noexcept
   {
+    shutdown();
+  }
+
+  void shutdown() noexcept override
+  {
     if (recorder_ && !flushed_) {
       flushed_ = true;
       try {
@@ -258,7 +216,6 @@ public:
   }
 
 private:
-  int control_fd_ = -1;
   std::shared_ptr<rosbag2_transport::Recorder> recorder_;
   std::thread spin_thread_;
   mutable std::mutex spin_mutex_;
@@ -314,114 +271,33 @@ int main(int argc, char ** argv)
     // SignalHandlerOptions::None keeps rclcpp from replacing the signal
     // policy installed above.
     rclcpp::init(1, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
-    WorkerSession session(control_fd, uri, node_name, config);
+    WorkerSession session(uri, node_name, config);
     session.start();
-    // The worker owns the start handshake; the supervisor only reads it.
-    if (!writeFrame(control_fd,
-                    nlohmann::json{{"ok", true}, {"operation", "start"},
-                                   {"pid", static_cast<int>(::getpid())}}
-                    .dump() +
-                    "\n")) {
-      fprintf(stderr, "recorder worker: cannot acknowledge start\n");
-      session.bestEffortShutdown();
+    // The worker owns the start handshake; the supervisor only reads it. When
+    // the executor already failed, no successful acknowledgement is written.
+    if (!chaos::data::acknowledgeRecorderStart(session, control_fd,
+                                               static_cast<int>(::getpid()))) {
+      fprintf(stderr,
+              "recorder worker: recorder executor failed before the start "
+              "acknowledgement\n");
+      session.shutdown();
       return 1;
     }
-
-    std::string frame;
-    char buffer[4096];
-    bool stopped = false;
-    while (!stopped) {
-      struct pollfd descriptor{control_fd, POLLIN, 0};
-      const int ready = ::poll(&descriptor, 1, -1);
-      if (ready < 0) {
-        if (errno == EINTR) {
-          continue;
-        }
-        throw std::runtime_error(std::string("control poll failed: ") +
-                                 std::strerror(errno));
-      }
-      const ssize_t count = ::read(control_fd, buffer, sizeof(buffer));
-      if (count < 0) {
-        if (errno == EINTR) {
-          continue;
-        }
-        throw std::runtime_error("control channel failed");
-      }
-      if (count == 0) {
-        // The supervisor vanished: flush and exit through the same bounded
-        // teardown as an explicit stop.
-        session.bestEffortShutdown();
-        break;
-      }
-      frame.append(buffer, static_cast<std::size_t>(count));
-      if (frame.size() > kMaxFrame) {
-        throw std::runtime_error("control frame oversized");
-      }
-      std::size_t newline = frame.find('\n');
-      while (newline != std::string::npos) {
-        const std::string payload = frame.substr(0, newline);
-        frame.erase(0, newline + 1);
-        newline = frame.find('\n');
-        nlohmann::json command;
-        try {
-          command = nlohmann::json::parse(payload);
-        } catch (const std::exception &) {
-          throw std::runtime_error("malformed control frame");
-        }
-        if (!command.is_object() || !command.contains("op")) {
-          throw std::runtime_error("malformed control frame");
-        }
-        const std::string op = command.at("op").get<std::string>();
-        if (op == "stop") {
-          // A failed executor is not a successful recording: the failure
-          // must be visible to the supervisor.
-          if (session.spinFailed()) {
-            const std::string error = "recorder executor failed: " +
-                                      session.spinError();
-            writeFrame(control_fd,
-                       nlohmann::json{{"ok", false}, {"operation", "stop"},
-                                      {"error", error}}
-                       .dump() +
-                       "\n");
-            session.bestEffortShutdown();
-            return 1;
-          }
-          std::string error;
-          if (!session.flush(error)) {
-            // A failed flush must never be acknowledged as a success.
-            writeFrame(control_fd,
-                       nlohmann::json{{"ok", false}, {"operation", "stop"},
-                                      {"error", error}}
-                       .dump() +
-                       "\n");
-            session.bestEffortShutdown();
-            return 1;
-          }
-          writeFrame(control_fd,
-                     nlohmann::json{{"ok", true}, {"operation", "stop"}}.dump() + "\n");
-          session.bestEffortShutdown();
-          stopped = true;
-          break;
-        }
-        if (op == "pause") {
-          session.recorder().pause();
-        } else if (op == "resume") {
-          session.recorder().resume();
-        } else {
-          throw std::runtime_error("unknown recorder operation");
-        }
-        writeFrame(control_fd,
-                   nlohmann::json{{"ok", true}, {"operation", op}}.dump() + "\n");
-      }
-    }
+    // The bounded control loop returns the process exit code: 0 only after a
+    // successful flush that was acknowledged, 1 as soon as the recording can
+    // no longer be trusted. A recorder executor failure on an idle control
+    // socket is detected through the bounded poll timeout, never by blocking
+    // forever in poll(control_fd, -1).
+    exit_code = chaos::data::runRecorderControlLoop(session, control_fd);
   } catch (const std::exception & error) {
-    writeFrame(control_fd,
-               nlohmann::json{{"ok", false},
-                              {"operation", "start"},
-                              {"error", std::string("RecorderWorkerError: ") +
-                                          error.what()}}
-               .dump() +
-               "\n");
+    chaos::data::detail::writeControlFrame(
+      control_fd,
+      nlohmann::json{{"ok", false},
+                     {"operation", "start"},
+                     {"error", std::string("RecorderWorkerError: ") +
+                                 error.what()}}
+        .dump() +
+        "\n");
     exit_code = 1;
   }
   if (rclcpp::ok()) {

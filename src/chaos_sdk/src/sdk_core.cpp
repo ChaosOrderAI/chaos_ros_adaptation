@@ -77,6 +77,53 @@ std::string new_request_id()
   return hex.str();
 }
 
+LeaseCache lease_cache_transition(
+  const std::string & operation,
+  bool success,
+  const std::string & code,
+  const std::string & response_token,
+  const std::string & request_owner,
+  const std::string & request_token,
+  const LeaseCache & current)
+{
+  // The operations that act on an existing session may only change the cache
+  // while that session is still the current one. An answer for a session that
+  // was revoked, released or replaced in the meantime is stale: it must
+  // neither install an old token again nor clear a newer lease.
+  const bool session_scoped =
+    operation == "renew" || operation == "release" || operation == "stop";
+  if (session_scoped && current.token != request_token) {
+    return current;
+  }
+  if (operation == "acquire") {
+    if (!success) {
+      return current;
+    }
+    return {response_token, response_token.empty() ? std::string() : request_owner};
+  }
+  if (operation == "renew") {
+    // A renewal never rotates the token: the session stays the same one, so
+    // the current cache is kept for a successful and for a failed answer.
+    return current;
+  }
+  if (operation == "release") {
+    // The runtime revokes the lease before it issues the stop output, so a
+    // STOP_FAILED answer means that the lease is gone even though the stop
+    // output failed.
+    const bool revoked = success || (code == "STOP_FAILED" && response_token.empty());
+    return revoked ? LeaseCache{} : current;
+  }
+  if (operation == "stop") {
+    // The runtime revokes the lease before it halts the motion, so an
+    // accepted stop ends the session even when the stop output failed. A
+    // rejected request (an unauthorized or an expired one) never reached the
+    // revocation and keeps the lease.
+    const bool revoked = success || code == "STOP_FAILED";
+    return revoked ? LeaseCache{} : current;
+  }
+  return current;
+}
+
 std::pair<std::string, std::string> lease_transition(
   const std::string & operation,
   bool success,
@@ -86,6 +133,8 @@ std::pair<std::string, std::string> lease_transition(
   const std::string & current_token,
   const std::string & current_owner)
 {
+  // Preserve the legacy helper's response-based public contract. Robot uses
+  // lease_cache_transition() with the original request token instead.
   const bool released_with_stop_failure = operation == "release" &&
     code == "STOP_FAILED" && response_token.empty();
   if (success || released_with_stop_failure) {

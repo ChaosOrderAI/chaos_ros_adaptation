@@ -19,3 +19,7 @@ generated/
 build-cpp*/
 install-cpp*/
 log-cpp*/
+
+# Local multi-model execution records and task state.
+/.claude-flow/
+/work/multi-model-team/

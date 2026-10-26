@@ -10,7 +10,10 @@
 
 #include "chaos_core/clock.hpp"
 #include "chaos_runtime/asset_config.hpp"
+#include "chaos_runtime/driver_deadline.hpp"
+#include "chaos_runtime/observation.hpp"
 #include "chaos_runtime/ros_adapters.hpp"
+#include "chaos_runtime/trace.hpp"
 
 namespace chaos::runtime {
 
@@ -30,6 +33,46 @@ void stampFromNs(std::int64_t ns, builtin_interfaces::msg::Time & stamp) {
   stamp.sec = static_cast<std::int32_t>(sec);
   stamp.nanosec = static_cast<std::uint32_t>(nanosec);
 }
+
+// The ROS control trace sink. It is owned by the observation service, which
+// destroys it with the registration: the sink holds the publisher by value
+// and borrows nothing, so the node is never reached from a delivery.
+class RosTraceSink : public TraceSink {
+public:
+  explicit RosTraceSink(
+    rclcpp::Publisher<chaos_interfaces::msg::ControlTrace>::SharedPtr publisher)
+    : publisher_(std::move(publisher)) {}
+
+  void publish(const TraceEvent & event) override {
+    chaos_interfaces::msg::ControlTrace message;
+    stampFromNs(event.stamp_ns, message.header.stamp);
+    message.header.frame_id = event.frame;
+    message.asset_id = event.asset_id;
+    message.sequence = event.sequence;
+    message.monotonic_ns = event.monotonic_ns;
+    message.request_id = event.request_id;
+    message.command = event.command;
+    message.stage = event.stage;
+    message.code = event.code;
+    if (event.velocity.has_value() && event.velocity->valid) {
+      message.velocity_valid = true;
+      message.velocity.linear.x = event.velocity->values[0];
+      message.velocity.linear.y = event.velocity->values[1];
+      message.velocity.linear.z = event.velocity->values[2];
+      message.velocity.angular.x = event.velocity->values[3];
+      message.velocity.angular.y = event.velocity->values[4];
+      message.velocity.angular.z = event.velocity->values[5];
+      message.valid_for_s = event.velocity->valid_for_s;
+    } else {
+      message.velocity_valid = false;
+      message.valid_for_s = 0.0;
+    }
+    publisher_->publish(message);
+  }
+
+private:
+  rclcpp::Publisher<chaos_interfaces::msg::ControlTrace>::SharedPtr publisher_;
+};
 
 // Fills the typed action result from the ROS-free operation outcome.
 template <typename ActionT>
@@ -106,23 +149,6 @@ void TypedGoalContext<Flight>::fillFeedback(
   feedback.progress = static_cast<float>(progress);
 }
 
-class ThrowingTraceGuard {
-public:
-  explicit ThrowingTraceGuard(rclcpp::Logger logger) : logger_(logger) {}
-  void operator()(const std::string & level, const std::string & text) const {
-    if (level == "error") {
-      RCLCPP_ERROR(logger_, "%s", text.c_str());
-    } else if (level == "warning") {
-      RCLCPP_WARN(logger_, "%s", text.c_str());
-    } else {
-      RCLCPP_INFO(logger_, "%s", text.c_str());
-    }
-  }
-
-private:
-  rclcpp::Logger logger_;
-};
-
 }  // namespace
 
 RobotRuntimeNode::RobotRuntimeNode(const rclcpp::NodeOptions & options)
@@ -137,6 +163,11 @@ RobotRuntimeNode::RobotRuntimeNode(const rclcpp::NodeOptions & options)
   clocks_.ros_ns = [this] {
     return get_clock()->now().nanoseconds();
   };
+  // The driver deadline clock is Linux CLOCK_MONOTONIC, the same named
+  // clock as the one the adapter and the supervised driver use. It is
+  // assigned explicitly here: its epoch is never inferred from the steady
+  // clock and never from the ROS clock.
+  clocks_.driver_mono_ns = driver_deadline::monotonicNowNs;
 
   services_group_ = create_callback_group(
     rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -155,58 +186,81 @@ RobotRuntimeNode::RobotRuntimeNode(const rclcpp::NodeOptions & options)
   trace_pub_ = create_publisher<chaos_interfaces::msg::ControlTrace>(
     endpoint("control_trace"), 100);
 
+  // The sink bundle is registered before the coordinator exists: the
+  // coordinator owns nothing but the endpoint, and the service owns the
+  // sinks, the publishers and the callback captures until the registration
+  // is retired. Every capture owns what it needs by value, so a sink never
+  // borrows the node and never queries the coordinator at delivery time.
+  ObservationSinks sinks;
+  sinks.trace = std::make_shared<RosTraceSink>(trace_pub_);
+  sinks.results = [publisher = results_pub_](const CommandResultView & view) {
+    chaos_interfaces::msg::CommandResult message;
+    stampFromNs(view.stamp_ns, message.stamp);
+    message.request_id = view.request_id;
+    message.success = view.success;
+    message.code = view.code;
+    message.message = view.message;
+    publisher->publish(message);
+  };
+  sinks.state = [publisher = state_pub_](const StateView & view) {
+    chaos_interfaces::msg::RobotState state;
+    stampFromNs(view.stamp_ns, state.stamp);
+    state.asset_id = view.asset_id;
+    state.model = view.model;
+    state.connected = view.connected;
+    state.ready = view.ready;
+    state.pose_valid = view.pose_valid;
+    state.operational_state = view.operational_state;
+    const AdapterSnapshot & snapshot = view.snapshot;
+    if (snapshot.source_stamp_ns.has_value()) {
+      stampFromNs(*snapshot.source_stamp_ns, state.pose.header.stamp);
+    } else {
+      stampFromNs(view.stamp_ns, state.pose.header.stamp);
+    }
+    state.pose.header.frame_id = snapshot.pose_frame;
+    state.pose.pose.position.x = snapshot.position[0];
+    state.pose.pose.position.y = snapshot.position[1];
+    state.pose.pose.position.z = snapshot.position[2];
+    state.pose.pose.orientation.x = snapshot.quaternion[0];
+    state.pose.pose.orientation.y = snapshot.quaternion[1];
+    state.pose.pose.orientation.z = snapshot.quaternion[2];
+    state.pose.pose.orientation.w = snapshot.quaternion[3];
+    state.twist.header = state.pose.header;
+    state.twist.header.frame_id = snapshot.twist_frame;
+    state.twist.twist.linear.x = snapshot.velocity[0];
+    state.twist.twist.linear.y = snapshot.velocity[1];
+    state.twist.twist.linear.z = snapshot.velocity[2];
+    state.twist.twist.angular.x = snapshot.velocity[3];
+    state.twist.twist.angular.y = snapshot.velocity[4];
+    state.twist.twist.angular.z = snapshot.velocity[5];
+    state.battery_percentage =
+      static_cast<float>(snapshot.battery);  // NaN stays NaN
+    state.detail = view.detail;
+    publisher->publish(state);
+  };
+  // The log sink owns the logger by value, so a delivery on the log worker
+  // never reaches back into the node, and it maps the level of the line
+  // onto the ROS logger.
+  sinks.log = [logger = get_logger()](const std::string & level,
+                                      const std::string & text) {
+    if (level == "error") {
+      RCLCPP_ERROR(logger, "%s", text.c_str());
+    } else if (level == "warning") {
+      RCLCPP_WARN(logger, "%s", text.c_str());
+    } else {
+      RCLCPP_INFO(logger, "%s", text.c_str());
+    }
+  };
+  // The generation belongs to the process manager: the node borrows it for
+  // the registration only and keeps the endpoint it receives.
+  observations_ = ObservationService::process()->registerProducer(
+    std::move(sinks));
+
   auto adapter = createAdapter(asset_.plugin, *this, asset_);
   adapter->update(0.0);
   coordinator_ = std::make_unique<ControlCoordinator>(asset_, std::move(adapter),
-                                                      clocks_, *this);
+                                                      clocks_, observations_);
   action_worker_ = std::make_unique<ActionWorker>();
-  coordinator_->freezeSinks(
-    {[this](const CommandResultView & view) {
-       chaos_interfaces::msg::CommandResult message;
-       stampFromNs(view.stamp_ns, message.stamp);
-       message.request_id = view.request_id;
-       message.success = view.success;
-       message.code = view.code;
-       message.message = view.message;
-       results_pub_->publish(message);
-     },
-     [this](const StateView & view) {
-       chaos_interfaces::msg::RobotState state;
-       stampFromNs(view.stamp_ns, state.stamp);
-       state.asset_id = view.asset_id;
-       state.model = view.model;
-       state.connected = view.connected;
-       state.ready = view.ready;
-       state.pose_valid = view.pose_valid;
-       state.operational_state = view.operational_state;
-       const AdapterSnapshot & snapshot = view.snapshot;
-       if (snapshot.source_stamp_ns.has_value()) {
-         stampFromNs(*snapshot.source_stamp_ns, state.pose.header.stamp);
-       } else {
-         stampFromNs(view.stamp_ns, state.pose.header.stamp);
-       }
-       state.pose.header.frame_id = snapshot.pose_frame;
-       state.pose.pose.position.x = snapshot.position[0];
-       state.pose.pose.position.y = snapshot.position[1];
-       state.pose.pose.position.z = snapshot.position[2];
-       state.pose.pose.orientation.x = snapshot.quaternion[0];
-       state.pose.pose.orientation.y = snapshot.quaternion[1];
-       state.pose.pose.orientation.z = snapshot.quaternion[2];
-       state.pose.pose.orientation.w = snapshot.quaternion[3];
-       state.twist.header = state.pose.header;
-       state.twist.header.frame_id = snapshot.twist_frame;
-       state.twist.twist.linear.x = snapshot.velocity[0];
-       state.twist.twist.linear.y = snapshot.velocity[1];
-       state.twist.twist.linear.z = snapshot.velocity[2];
-       state.twist.twist.angular.x = snapshot.velocity[3];
-       state.twist.twist.angular.y = snapshot.velocity[4];
-       state.twist.twist.angular.z = snapshot.velocity[5];
-       state.battery_percentage =
-         static_cast<float>(snapshot.battery);  // NaN stays NaN
-       state.detail = view.detail;
-       state_pub_->publish(state);
-     },
-     ThrowingTraceGuard(get_logger())});
 
   // Endpoints must be stored: rclcpp::Node keeps only weak references, so a
   // temporary returned here would be destroyed immediately and the endpoint
@@ -250,27 +304,30 @@ RobotRuntimeNode::RobotRuntimeNode(const rclcpp::NodeOptions & options)
     std::chrono::milliseconds(50), [this] { coordinator_->tick(); },
     timer_group_);
 
-  RCLCPP_INFO(get_logger(), "%s: adapter=%s, capabilities ready",
-              asset_.id.c_str(), asset_.plugin.c_str());
+  // The startup line travels through the observation channel: the log
+  // channel delivers on its own worker, so the constructing thread never
+  // produces an observation synchronously. The formatting and the admission
+  // are inside one protected block, so a failing allocation drops the line
+  // instead of unwinding a control that is already constructed.
+  try {
+    observations_->log("info", asset_.id + ": adapter=" + asset_.plugin +
+                               ", capabilities ready");
+  } catch (...) {
+    observations_->recordConstructionFailure(ObservationChannel::log);
+  }
 }
 
 RobotRuntimeNode::~RobotRuntimeNode() {
   // Two-phase shutdown (R9): the coordinator is closed first so a running
   // goal leaves its loop and publishes a terminal result; the worker is
   // joined next; only then is the adapter closed, so the adapter is never
-  // touched concurrently by the worker and the shutdown path.
-  if (timer_) {
-    timer_->cancel();
-  }
-  if (coordinator_) {
-    coordinator_->close();
-  }
-  if (action_worker_) {
-    action_worker_->stop();
-  }
-  if (coordinator_) {
-    coordinator_->finalize();
-  }
+  // touched concurrently by the worker and the shutdown path. The endpoint
+  // is closed last, after every final control event has been admitted.
+  timer_->cancel();
+  coordinator_->close();
+  action_worker_->stop();
+  coordinator_->finalize();
+  observations_->close();
 }
 
 // --- Action worker --------------------------------------------------------
@@ -354,33 +411,6 @@ RobotRuntimeNode::GoalTokensPtr RobotRuntimeNode::tokensFor(
 void RobotRuntimeNode::dropTokens(const rclcpp_action::GoalUUID & uuid) {
   std::lock_guard<std::mutex> guard(tokens_mutex_);
   goal_tokens_.erase(uuid);
-}
-
-void RobotRuntimeNode::publish(const TraceEvent & event) {
-  chaos_interfaces::msg::ControlTrace message;
-  stampFromNs(event.stamp_ns, message.header.stamp);
-  message.header.frame_id = event.frame;
-  message.asset_id = event.asset_id;
-  message.sequence = event.sequence;
-  message.monotonic_ns = event.monotonic_ns;
-  message.request_id = event.request_id;
-  message.command = event.command;
-  message.stage = event.stage;
-  message.code = event.code;
-  if (event.velocity.has_value() && event.velocity->valid) {
-    message.velocity_valid = true;
-    message.velocity.linear.x = event.velocity->values[0];
-    message.velocity.linear.y = event.velocity->values[1];
-    message.velocity.linear.z = event.velocity->values[2];
-    message.velocity.angular.x = event.velocity->values[3];
-    message.velocity.angular.y = event.velocity->values[4];
-    message.velocity.angular.z = event.velocity->values[5];
-    message.valid_for_s = event.velocity->valid_for_s;
-  } else {
-    message.velocity_valid = false;
-    message.valid_for_s = 0.0;
-  }
-  trace_pub_->publish(message);
 }
 
 void RobotRuntimeNode::onDescribe(

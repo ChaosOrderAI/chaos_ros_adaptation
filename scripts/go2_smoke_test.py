@@ -162,9 +162,15 @@ def run():
                     wait(lambda: abs(velocity_values()[1]) > 0.05, 'lateral motion before explicit stop')
                     stop = future_result(sdk.stop(), 'motion.stop response')
                     assert stop.success, stop.message
+                    # An accepted stop revokes the runtime control lease and
+                    # the SDK drops its cached token; navigation afterwards
+                    # needs a fresh acquire.
+                    assert not sdk.lease_token, 'motion.stop must clear the cached SDK token'
                     wait(stopped, 'explicit stop telemetry')
                     print('PASS: unsupported vertical velocity rejected and motion.stop clears motion')
 
+                    lease = future_result(sdk.acquire('go2-smoke', 30.0), 'control lease')
+                    assert lease.success and sdk.lease_token, lease.message
                     target = PoseStamped()
                     target.header.frame_id = description.map_frame
                     target.header.stamp = node.get_clock().now().to_msg()

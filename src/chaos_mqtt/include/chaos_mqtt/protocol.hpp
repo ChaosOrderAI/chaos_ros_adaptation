@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -63,6 +65,13 @@ struct Pending
 {
   Command command;
   double expires_at = 0.0;
+  /// Monotonic deadline of the *original* command TTL.
+  ///
+  /// It is the remaining TTL of the sender's command, captured on the
+  /// monotonic clock when the command arrived. A wall clock rollback can
+  /// therefore neither shorten nor extend it. Zero means that no TTL bound
+  /// was captured; the request timeout (`expires_at`) is the only bound then.
+  double dispatch_deadline = 0.0;
   bool accepted = false;
   std::optional<Json> reply;
   // Cancels local observation only, never robot execution (e.g. ignore an
@@ -71,14 +80,58 @@ struct Pending
 };
 
 /// Bounded active requests and completed replay records; monotonic timeouts.
+///
+/// Capacity: `max_pending` is the ordinary budget of the table. A fixed,
+/// small reserve (`kEmergencyReserve`) is kept for `motion.stop` only, so
+/// ordinary traffic can never occupy a reserve slot. The stop is admitted
+/// below `max_pending + kEmergencyReserve` and rejected with `BUSY` once the
+/// reserve is exhausted, so the number of simultaneously correlated requests
+/// stays hard bounded.
+///
+/// The reserve relaxes the *capacity* check only and keeps the validation
+/// order: the parser checked the envelope and the token shape before the
+/// command reached this class, the runtime checks the control ownership of a
+/// lease token after the dispatch. It is a capacity reserve - not a hardware
+/// emergency stop and no guaranteed scheduling priority.
 class Correlations
 {
 public:
+  /// Number of slots that are reserved for `motion.stop`.
+  ///
+  /// A fixed safety margin, not a capacity knob: small enough to keep the
+  /// total bound close to `max_pending`, large enough for a burst of stops.
+  static constexpr std::size_t kEmergencyReserve = 4;
+
+  /// The only command that may use the emergency reserve.
+  static constexpr const char * kEmergencyCommand = "motion.stop";
+
   explicit Correlations(std::size_t max_pending = 128, std::size_t max_completed = 512)
   : max_pending_(max_pending), max_completed_(max_completed)
   {}
 
-  void start(const Command & command, double now, double timeout_s);
+  /// True when `name` is the emergency command that may use the reserve.
+  static bool is_emergency_command(const std::string & name) {return name == kEmergencyCommand;}
+
+  /// Hard upper bound of simultaneously correlated requests.
+  ///
+  /// The reserve is added with a saturating sum: a huge `max_pending` can
+  /// never wrap the bound around into a small number.
+  std::size_t max_pending_total() const
+  {
+    constexpr std::size_t reserve = kEmergencyReserve;
+    if (max_pending_ > std::numeric_limits<std::size_t>::max() - reserve) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    return max_pending_ + reserve;
+  }
+
+  /// Register a request.
+  ///
+  /// `dispatch_deadline` is the monotonic deadline of the original command
+  /// TTL; it bounds how long the request may still be dispatched to the
+  /// robot. Zero leaves the dispatch unrestricted.
+  void start(
+    const Command & command, double now, double timeout_s, double dispatch_deadline = 0.0);
   void finish(const std::string & request_id, const Json & reply, const Json & event = nullptr);
   std::vector<std::string> expired(double now) const;
 

@@ -6,6 +6,21 @@
 // by the regression suite. Mutable control state lives under one mutex;
 // action polling waits release it via a condition variable. No ROS types
 // appear here, so the control contract is unit-testable without DDS.
+//
+// OBSERVATION OWNERSHIP
+//   * The coordinator owns no sink, no publisher and no callback capture. It
+//     holds one observation endpoint and nothing else: the endpoint carries
+//     the producer metadata, the counters and a weak service reference.
+//   * The observation service keeps the last reference to every registered
+//     sink, publisher and callback capture until the registration is
+//     retired. Releasing the endpoint therefore never destroys a user
+//     resource: the service still owns it. This is why the coordinator may
+//     drop its endpoint reference under any lock.
+//   * Every observation is an admission, not a call: the coordinator builds
+//     an owned typed value and offers it to the endpoint, which copies it
+//     and delivers it on its own worker. A failed construction, a rejected
+//     admission or a failing sink is counted by the service and never
+//     changes a control decision.
 #pragma once
 
 #include <array>
@@ -14,15 +29,19 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "chaos_runtime/adapter.hpp"
 #include "chaos_runtime/asset_config.hpp"
 #include "chaos_runtime/control.hpp"
+#include "chaos_runtime/observation.hpp"
+#include "chaos_runtime/observation_types.hpp"
 #include "chaos_runtime/trace.hpp"
 
 namespace chaos::runtime {
@@ -38,6 +57,12 @@ struct Clocks {
   // ROS clock in nanoseconds; source-stamp ages and message stamps. Never
   // used for timeout decisions.
   std::function<std::int64_t()> ros_ns;
+  // Linux CLOCK_MONOTONIC in nanoseconds: the deadline clock of the driver
+  // transport. It is a clock domain of its own: its epoch is never inferred
+  // from mono_ns (steady_clock) and never from a ROS clock. The coordinator,
+  // the adapter and the supervised driver all have to agree on this named
+  // clock, so the default is driver_deadline::monotonicNowNs.
+  std::function<std::int64_t()> driver_mono_ns;
 };
 
 // Typed request/response views keep ROS messages out of the coordinator.
@@ -79,14 +104,6 @@ struct VelocityRequestView {
   std::array<double, 6> velocity{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 };
 
-struct CommandResultView {
-  std::int64_t stamp_ns = 0;
-  std::string request_id;
-  bool success = false;
-  std::string code;
-  std::string message;
-};
-
 // Action goals share one wire deadline; targets are typed per capability.
 struct GoalRequestView {
   std::string lease_token;
@@ -120,26 +137,25 @@ public:
   virtual void abort(const OperationResult & result) = 0;
 };
 
-// State view computed by the coordinator; the facade renders RobotState.
-struct StateView {
-  std::int64_t stamp_ns = 0;
-  std::string asset_id;
-  std::string model;
-  bool connected = false;
-  bool ready = false;
-  bool pose_valid = false;
-  std::string operational_state;
-  AdapterSnapshot snapshot;
-  std::string detail;
-};
+// The coordinator state snapshot is published as chaos::runtime::StateView.
+// Its canonical definition lives in observation_types.hpp, next to the
+// observation service that delivers it.
 
 class ControlCoordinator {
 public:
   // `token` on goal/cancel identifies the goal request instance; the facade
   // uses the address of the rclcpp action Goal shared_ptr, which lives for
   // the whole goal lifetime.
+  //
+  // `observations` is the producer endpoint of the process wide observation
+  // service. It is required: a coordinator without an endpoint has nowhere
+  // to report a result, a state or a control trace, so a missing endpoint is
+  // a startup failure and never a silently disabled observation channel.
+  // A caller that wants no output registers an empty owned sink bundle
+  // through the real service and keeps the endpoint it gets back.
   ControlCoordinator(AssetConfig asset, std::unique_ptr<Adapter> adapter,
-                     Clocks clocks, TraceSink & traces);
+                     Clocks clocks,
+                     std::shared_ptr<ObservationEndpoint> observations);
 
   // Non-copyable; the mutex and cv own the synchronization.
   ControlCoordinator(const ControlCoordinator &) = delete;
@@ -203,15 +219,10 @@ public:
     return fault_;
   }
 
-  // Sinks are injected once, before the node starts spinning, and frozen.
-  struct Sinks {
-    std::function<void(const CommandResultView &)> results;
-    std::function<void(const StateView &)> state;
-    std::function<void(const std::string & level, const std::string & text)>
-      log;
-  };
-  // Throws std::logic_error when called a second time.
-  void freezeSinks(Sinks sinks);
+  // Sinks are registered once, before the node starts spinning, and owned by
+  // the observation service. There is no coordinator side sink bundle and no
+  // borrowed sink reference: the endpoint is the only observation handle the
+  // coordinator holds.
 
 private:
   struct Operation {
@@ -258,15 +269,32 @@ private:
     return control::CommandDeadline::capture(stamp, wall_now_ns,
                                              monotonic_now_ns);
   }
-  // Publishes a command result; observation-channel failures are isolated
-  // and never change control outcomes.
-  void publishResult(const CommandResultView & result);
-  // Caller must hold mutex_. Never blocks on the trace sink beyond a normal
-  // publish call; failures are isolated from control.
-  void emitTrace(const std::string & command, const std::string & stage,
-                 const std::string & code,
-                 const std::string & request_id = "",
-                 const std::optional<std::array<double, 6>> & velocity = std::nullopt);
+  // Publishes a command result. The observation construction and the clock
+  // read are isolated: a failing clock or a failing channel drops the
+  // result and never changes the outcome of the command itself.
+  //
+  // The text parameters are views, not owned strings: a caller never
+  // allocates a temporary string before the protected block, and the copies
+  // into the owned payload happen inside it.
+  void publishResult(bool success, std::string_view code,
+                     std::string_view message,
+                     std::string_view request_id);
+  // Caller must hold mutex_. Never blocks on the observation channel beyond
+  // a non-blocking admission; failures are isolated from control.
+  //
+  // `driver_deadline_ns` is the immutable CLOCK_MONOTONIC deadline D of an
+  // admitted velocity command. When it is present, the exported velocity
+  // interval is capped by the remaining D, so the trace never overstates
+  // the interval the driver will really honour.
+  //
+  // The text parameters are views: the caller never allocates a temporary
+  // string before the protected block, and the copies into the owned event
+  // happen inside it.
+  void emitTrace(std::string_view command, std::string_view stage,
+                 std::string_view code,
+                 std::string_view request_id = "",
+                 const std::optional<std::array<double, 6>> & velocity = std::nullopt,
+                 const std::optional<std::int64_t> & driver_deadline_ns = std::nullopt);
   // Finalizes an operation: requests stop output, waits for its outcome,
   // then performs the terminal transition. May rewrite `result` and
   // `terminal` when stop output fails. The state cleanup runs under the
@@ -280,12 +308,29 @@ private:
   void deliverTerminal(GoalContext & ctx, const std::string & terminal,
                         const OperationResult & result);
   void publishStateLocked();
-  void log(const std::string & level, const std::string & text) const;
+  // Logs one line. The parts are joined and admitted inside one protected
+  // block: a failing allocation or a failing channel drops the observation
+  // and never changes a control outcome. A log failure is never logged
+  // again.
+  //
+  // This is the one construction boundary of the log channel: the join of
+  // several parts happens exactly here, so a caller that needs a prefix
+  // never builds a string of its own.
+  void log(std::string_view level,
+           std::initializer_list<std::string_view> parts) const noexcept;
+  // Logs one already formed text. The endpoint admission is noexcept and
+  // copies the payload on its own side, so this path has no temporary and
+  // no second catch that could swallow a control fault.
+  void log(std::string_view level, std::string_view text) const noexcept;
 
   AssetConfig asset_;
   std::unique_ptr<Adapter> adapter_;
   Clocks clocks_;
-  TraceSink & traces_;
+  // The only observation handle of the coordinator. It owns no sink: the
+  // service keeps the last reference to the registered publishers and
+  // callback captures, so dropping this handle never destroys a user
+  // resource.
+  std::shared_ptr<ObservationEndpoint> observations_;
   control::Limits limits_;
   control::ControlGuard guard_;
   std::set<std::string> capabilities_;
@@ -300,8 +345,6 @@ private:
   std::optional<StopPending> stop_pending_;
   std::string fault_;
   std::shared_ptr<Operation> operation_;
-  bool sinks_frozen_ = false;
-  Sinks sinks_;
   std::uint64_t trace_sequence_ = 0;
   std::uint64_t next_operation_id_ = 0;
   double last_tick_s_ = 0.0;

@@ -171,6 +171,76 @@ TEST_F(ControlTest, InvalidPacketCannotExtendValidCommand) {
   EXPECT_DOUBLE_EQ(guard_->velocityExpires(), deadline);
 }
 
+TEST_F(ControlTest, SourceStampMustStrictlyIncreasePerLease) {
+  guard_->lease("acquire", "operator");
+  command("secret", 200.0, 200.0);
+  // An equal stamp is a replay, even though it is still fresh.
+  expectRejected("STALE_COMMAND", [this] { command("secret", 200.0, 200.0); });
+  // A backward stamp is stale as well.
+  expectRejected("STALE_COMMAND", [this] { command("secret", 199.9, 200.0); });
+  // A newer stamp is accepted. The deadline is armed from the current
+  // clock reading, so the clock has to advance before the newer command:
+  // without that, both commands would arm the same deadline.
+  const double earlier_deadline = guard_->velocityExpires();
+  clock_->value += 0.1;
+  command("secret", 200.2, 200.2);
+  EXPECT_GT(guard_->velocityExpires(), earlier_deadline);
+}
+
+TEST_F(ControlTest, AdjacentNanosecondStampsStayOrdered) {
+  guard_->lease("acquire", "operator");
+  const std::array<double, 6> values{0.1, 0.0, 0.0, 0.0, 0.0, 0.0};
+  const std::int64_t base = 200'000'000'000LL;
+  guard_->velocityNs("secret", base, base, 0.5, "robot/base", "robot/base",
+                     values);
+  // 1 ns later is newer and must be accepted; equal is a replay.
+  guard_->velocityNs("secret", base + 1, base + 1, 0.5, "robot/base",
+                     "robot/base", values);
+  expectRejected("STALE_COMMAND", [&] {
+    guard_->velocityNs("secret", base + 1, base + 2, 0.5, "robot/base",
+                       "robot/base", values);
+  });
+}
+
+TEST_F(ControlTest, RejectedStampNeitherExtendsDeadlineNorAdvancesWatermark) {
+  guard_->lease("acquire", "operator");
+  command("secret", 200.0, 200.0);
+  const double deadline = guard_->velocityExpires();
+  clock_->value += 0.1;
+  // Fresh and newer, but invalid: rejected without moving the watermark.
+  expectRejected("INVALID_FRAME", [this] {
+    guard_->velocityNs("secret", 200'100'000'001LL, 200'100'000'000LL, 0.5,
+                       "wrong", "robot/base", {0.1, 0, 0, 0, 0, 0});
+  });
+  EXPECT_DOUBLE_EQ(guard_->velocityExpires(), deadline);
+  // 200.1 s is backward of the rejected 200.2 s stamp but forward of the
+  // committed watermark: had the rejection advanced the watermark, this
+  // would now be stale.
+  EXPECT_NO_THROW(guard_->velocityNs("secret", 200'100'000'000LL,
+                                     200'100'000'000LL, 0.5, "robot/base",
+                                     "robot/base", {0.1, 0, 0, 0, 0, 0}));
+  // An equal-stamp replay stays a replay.
+  expectRejected("STALE_COMMAND", [&] {
+    guard_->velocityNs("secret", 200'100'000'000LL, 200'100'000'000LL, 0.5,
+                       "robot/base", "robot/base", {0.1, 0, 0, 0, 0, 0});
+  });
+  // The oldest committed stamp is stale as well.
+  expectRejected("STALE_COMMAND", [this] { command("secret", 200.0, 200.1); });
+}
+
+TEST_F(ControlTest, RenewKeepsWatermarkAndNewAcquireResetsIt) {
+  guard_->lease("acquire", "operator");
+  command("secret", 200.0, 200.0);
+  guard_->lease("renew", "operator", "secret", 20);
+  // Renew never rewinds the stamp sequence: the old stamp stays stale.
+  expectRejected("STALE_COMMAND", [this] { command("secret", 200.0, 200.1); });
+  command("secret", 200.1, 200.1);
+  guard_->lease("release", "operator", "secret", 0);
+  // A new control session starts a fresh stamp sequence.
+  guard_->lease("acquire", "operator");
+  EXPECT_NO_THROW(command("secret", 200.0, 200.1));
+}
+
 TEST_F(ControlTest, PoseContract) {
   EXPECT_NO_THROW(validate_pose("map", "map", {1, 2, 0}, {0, 0, 0, 1}, "ugv", 20));
   expectRejected("INVALID_ARGUMENT", [] {
@@ -289,6 +359,127 @@ TEST(ControlGuardTest, TokenGenerationFailureNeverArmsLease) {
   EXPECT_FALSE(guard.leaseActive());
   EXPECT_DOUBLE_EQ(guard.remaining(), 0.0);
   EXPECT_THROW(guard.require(""), Rejected);
+}
+
+// The int64 domain boundaries must not overflow the age computation. The
+// difference is taken in a wider type, so an out-of-domain clock reading is
+// rejected as stale instead of trapping (UBSan finding).
+TEST(ControlGuardTest, VelocityAgeBoundariesDoNotOverflow) {
+  const std::array<double, 6> values{0.1, 0.0, 0.0, 0.0, 0.0, 0.0};
+  const std::int64_t kMax = std::numeric_limits<std::int64_t>::max();
+  const std::int64_t kMin = std::numeric_limits<std::int64_t>::min();
+  auto fresh_guard = [] {
+    auto guard = std::make_unique<ControlGuard>(
+      Limits{}, [] { return 100.0; }, [] { return std::string("secret"); });
+    guard->lease("acquire", "operator");
+    return guard;
+  };
+
+  // A stamp at the upper boundary with a matching clock reading is fresh.
+  auto upper = fresh_guard();
+  EXPECT_NO_THROW(upper->velocityNs("secret", kMax, kMax, 0.5, "robot/base",
+                                    "robot/base", values));
+
+  // INT64_MIN - 1 would overflow the int64 subtraction: the command is
+  // stale, never undefined behaviour.
+  auto lower = fresh_guard();
+  expectRejectedStatic("STALE_COMMAND", [&] {
+    lower->velocityNs("secret", 1, kMin, 0.5, "robot/base", "robot/base",
+                      values);
+  });
+
+  // A stamp at the lower boundary is not a positive source timestamp.
+  auto negative = fresh_guard();
+  expectRejectedStatic("STALE_COMMAND", [&] {
+    negative->velocityNs("secret", kMin, kMax, 0.5, "robot/base",
+                          "robot/base", values);
+  });
+
+  // An ancient stamp against the newest clock reading is simply expired.
+  auto expired = fresh_guard();
+  expectRejectedStatic("STALE_COMMAND", [&] {
+    expired->velocityNs("secret", 1, kMax, 0.5, "robot/base", "robot/base",
+                        values);
+  });
+
+  // An out-of-order clock reading (now before the stamp) is stale.
+  auto inverted = fresh_guard();
+  expectRejectedStatic("STALE_COMMAND", [&] {
+    inverted->velocityNs("secret", kMax, kMin, 0.5, "robot/base",
+                          "robot/base", values);
+  });
+}
+
+// The double API must not overflow the integer conversion: a huge finite
+// value, a NaN or an infinity is rejected as stale, and the error
+// precedence for a bad token or a bad frame is unchanged.
+TEST(ControlGuardTest, VelocityDoubleStampsAreBounded) {
+  ControlGuard guard(Limits{}, [] { return 100.0; },
+                     [] { return std::string("secret"); });
+  guard.lease("acquire", "operator");
+  const std::array<double, 6> values{0.1, 0.0, 0.0, 0.0, 0.0, 0.0};
+  const double huge = 1e300;
+  const double inf = std::numeric_limits<double>::infinity();
+  const double nan = std::nan("");
+
+  // A bad token is NO_CONTROL even when the source stamp is unusable.
+  expectRejectedStatic("NO_CONTROL", [&] {
+    guard.velocity("wrong-token", 0.0, 0.0, 0.5, "robot/base", "robot/base",
+                   values);
+  });
+  // A bad frame is INVALID_FRAME even when the source stamp is unusable.
+  expectRejectedStatic("INVALID_FRAME", [&] {
+    guard.velocity("secret", 0.0, 0.0, 0.5, "wrong", "robot/base", values);
+  });
+  // An unrepresentable source stamp is stale, never an overflow.
+  for (double stamp : {huge, inf, -inf, nan}) {
+    expectRejectedStatic("STALE_COMMAND", [&] {
+      guard.velocity("secret", stamp, 200.0, 0.5, "robot/base", "robot/base",
+                     values);
+    });
+  }
+  // An unrepresentable ROS now is stale as well.
+  for (double now : {huge, inf, -inf, nan}) {
+    expectRejectedStatic("STALE_COMMAND", [&] {
+      guard.velocity("secret", 200.0, now, 0.5, "robot/base", "robot/base",
+                     values);
+    });
+  }
+  // None of the rejected packets armed a velocity sample.
+  EXPECT_DOUBLE_EQ(guard.velocityExpires(), 0.0);
+  EXPECT_FALSE(guard.velocityTimedOut());
+
+  // A valid stamp is still accepted and keeps the exact nanosecond value.
+  EXPECT_NO_THROW(guard.velocity("secret", 200.0, 200.0, 0.5, "robot/base",
+                                 "robot/base", values));
+  EXPECT_NEAR(guard.velocityExpires(), 100.5, 1e-9);
+}
+
+// revoke() clears the whole control session without consulting the clock
+// or the caller: the internal-domain operation used by an accepted stop.
+TEST(ControlGuardTest, RevokeClearsTheSessionWithoutReadingTheClock) {
+  ControlGuard guard(Limits{}, [] { return 100.0; },
+                     [] { return std::string("secret"); });
+  guard.lease("acquire", "operator");
+  const std::array<double, 6> values{0.1, 0.0, 0.0, 0.0, 0.0, 0.0};
+  guard.velocityNs("secret", 200'000'000'000LL, 200'000'000'000LL, 0.5,
+                   "robot/base", "robot/base", values);
+  ASSERT_TRUE(guard.leaseActive());
+
+  guard.revoke();
+
+  EXPECT_FALSE(guard.leaseActive());
+  EXPECT_TRUE(guard.owner().empty());
+  EXPECT_TRUE(guard.token().empty());
+  EXPECT_DOUBLE_EQ(guard.leaseExpires(), 0.0);
+  EXPECT_DOUBLE_EQ(guard.velocityExpires(), 0.0);
+  EXPECT_DOUBLE_EQ(guard.remaining(), 0.0);
+  expectRejectedStatic("NO_CONTROL", [&] { guard.require("secret"); });
+  // The stamp sequence restarts with the next lease.
+  guard.lease("acquire", "operator");
+  EXPECT_NO_THROW(guard.velocityNs("secret", 200'000'000'000LL,
+                                   200'000'000'000LL, 0.5, "robot/base",
+                                   "robot/base", values));
 }
 
 }  // namespace

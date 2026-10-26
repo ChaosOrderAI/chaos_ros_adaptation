@@ -26,6 +26,7 @@ find_package(chaos_interfaces REQUIRED)
 find_package(chaos_assets REQUIRED)
 find_package(Boost REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(Threads REQUIRED)
 
 # ---------------------------------------------------------------------------
 # Domain libraries (no ROS dependency)
@@ -83,6 +84,8 @@ target_link_libraries(chaos_data_controller PUBLIC
 
 add_executable(chaos_data_recorder_worker src/recorder_worker_main.cpp)
 target_compile_features(chaos_data_recorder_worker PUBLIC cxx_std_17)
+target_include_directories(chaos_data_recorder_worker PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(chaos_data_recorder_worker PRIVATE
   chaos_core::chaos_core
   rclcpp::rclcpp
@@ -90,7 +93,8 @@ target_link_libraries(chaos_data_recorder_worker PRIVATE
   rosbag2_storage::rosbag2_storage
   rosbag2_transport::rosbag2_transport
   keyboard_handler::keyboard_handler
-  nlohmann_json::nlohmann_json)
+  nlohmann_json::nlohmann_json
+  Threads::Threads)
 
 install(TARGETS chaos_data_recorder_worker
   RUNTIME DESTINATION lib/${PROJECT_NAME})
@@ -247,6 +251,16 @@ if(BUILD_TESTING)
   # The exclusive file output and the path containment rules.
   ament_add_gtest(test_file_io_cpp test/test_file_io_cpp.cpp TIMEOUT 60)
   target_link_libraries(test_file_io_cpp chaos_data_file_io)
+
+  # The recorder worker control loop: a recorder executor failure on an idle
+  # control socket must end the worker unsuccessfully through the bounded
+  # poll timeout, never by blocking forever in poll(control_fd, -1); the
+  # failed-executor teardown is bounded by the in-process exit watchdog.
+  ament_add_gtest(test_recorder_control_cpp test/test_recorder_control_cpp.cpp TIMEOUT 60)
+  target_include_directories(test_recorder_control_cpp PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(test_recorder_control_cpp
+    chaos_core::chaos_core nlohmann_json::nlohmann_json Threads::Threads)
 
   # The export profile and the lossless image sink.
   ament_add_gtest(test_export_cpp test/test_export_cpp.cpp TIMEOUT 60)

@@ -1,7 +1,7 @@
 // Release microbenchmark for the migrated C++ domain hot paths.
 //
-// Workload is intentionally identical to the Python baseline
-// (baseline_micro.py): same fixed inputs, 31 batches x 20000 operations,
+// Workload retains the Python baseline's batch sizes and value magnitudes,
+// with advancing source stamps for the per-lease replay guard: 31 x 20000 operations,
 // 20000 warmup iterations, 43-character token. Percentiles are of batch
 // means, not individual request latency. This is a pure domain benchmark:
 // no ROS, no token generation or JSON parsing in the timed loop, and it
@@ -110,7 +110,8 @@ int main() {
     [] { return 100.0; });
 
   const Result control_result = measure([&](int i) {
-    guard.velocity(token, 200.0, 200.1, 0.5, "robot/base", "robot/base",
+    const double stamp = 200.0 + i * 1e-6;
+    guard.velocity(token, stamp, stamp + 0.1, 0.5, "robot/base", "robot/base",
                    {0.25 + (i % 10) * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0});
     return guard.velocityExpires();
   });
@@ -125,7 +126,7 @@ int main() {
     {"measurement_note",
      "Percentiles of batch means, not individual request latency. Pure "
      "domain microbenchmark; no ROS, no token generation or JSON parsing in "
-     "timed loop. Same fixed inputs as baseline_micro.py."},
+     "timed loop. Source stamps advance per operation under the current replay contract."},
     {"control_velocity_valid", toJson(control_result)},
     {"sensor_health_observe", toJson(health_result)},
   };

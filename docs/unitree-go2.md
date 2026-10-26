@@ -6,11 +6,11 @@ real 后端提供状态、平面速度（前后、横移、转向）和软件停
 
 ## 通信和配置
 
-通信路径为：上层 `chaos_sdk.Robot` / MQTT → 统一 runtime 的租约和命令校验 → `TwistStamped` → `go2_driver` → Unitree SDK 的运动接口；厂商 SportModeState 回调产生 ROS Odometry，再由适配器提供统一状态。驱动只在收到新的厂商状态时发布里程计，不给缓存状态反复刷新时间戳；驱动另有命令超时停止检查，以处理 runtime 不再发令的情况。
+通信路径为：上层 `chaos_sdk.Robot` / MQTT → 统一 runtime 的租约和命令校验 → `DriverVelocityCommand` → `go2_driver` → Unitree SDK 的运动接口；厂商 SportModeState 回调产生 ROS Odometry，再由适配器提供统一状态。驱动只在收到新的厂商状态时发布里程计，不给缓存状态反复刷新时间戳；驱动按命令携带的绝对截止时间停止输出，以处理传输延迟和 runtime 不再发令的情况。
 
 Odometry 的 ROS 时间戳记录新 DDS 数据包的本机接收时间。设备时间戳只用于识别重复和倒序数据，不被当作 UTC 时间；这种转换不代表设备和主机已经完成硬件时间同步。
 
-- ROS 速度话题默认 `/go2/cmd_vel`，类型 `geometry_msgs/msg/TwistStamped`，使用资产 base frame。它是内部驱动接口，上层控制通过统一租约 API 发令。
+- ROS 速度话题默认 `/go2/cmd_vel`，类型 `chaos_interfaces/msg/DriverVelocityCommand`，使用资产 base frame。它是内部驱动接口，上层控制通过统一租约 API 发令。消息保留原始 source stamp，并携带时钟域、实际发布时间、不可延长的 `CLOCK_MONOTONIC` 截止时间及显式停止标志；停止消息六轴为零，不要求运动截止时间。
 - ROS 状态话题默认 `/go2/odom`，类型 `nav_msgs/msg/Odometry`；模板使用 `dog_001/odom` 和 `dog_001/base_link`。
 - 厂商 DDS 状态话题默认 `rt/sportmodestate`，DDS domain 为 `0`，连接网卡示例为 `eno1`。网卡必须改为目标机实际连接机器狗的接口。
 - `velocity_frame: odom` 表示厂商状态中的线速度按世界/里程计坐标系解释，与 [Unitree 官方状态示例](https://github.com/unitreerobotics/unitree_ros2/blob/master/example/src/src/read_motion_state.cpp) 一致；驱动使用完整姿态四元数把它转换到 Odometry 的机体坐标系。部署时仍须核实设备固件的坐标约定。上层速度命令本身使用机体坐标系。
@@ -19,6 +19,10 @@ Odometry 的 ROS 时间戳记录新 DDS 数据包的本机接收时间。设备�
 型号限值为平面线速度 `0.3 m/s`、角速度 `0.5 rad/s`、命令超时 `0.3 s`、状态超时 `1.0 s`、最长控制租约 `30 s`。速度控制需要持续发送新样本，过期、租约失效或状态失鲜时停止输出运动命令。软件零速度/停止指令依赖设备通信链路，不是硬件急停。
 
 多台 Go2 出现在同一 ROS Domain 时，每个资产应分别覆盖 `cmd_vel_topic`、`odom_topic`、frames、网络接口及资产 ID。默认型号中的绝对话题不能用于同域多机共享。
+
+runtime 和驱动必须处于同一主机、同一次启动和同一个 Linux time namespace。时钟域由 boot ID 与 time namespace 身份组成，不匹配或缺失时拒绝运动。排队、校验、DDS 传输和后续续租都不能延长已发命令的截止时间。
+
+内部消息类型变更需要一次完整迁移：从同一修订重新生成 `chaos_interfaces`，在同一安装前缀重建 runtime 和驱动，再成对部署、重启或回滚。旧 `TwistStamped` 与新消息实例不能混用。本次代码验证不包含实机部署。
 
 ## 构建与 SDK 依赖
 
@@ -191,4 +195,4 @@ ros2 launch chaos_bringup edge.launch.py \
 
 构建并加载工作空间后，可运行 `python3 scripts/go2_driver_smoke_test.py`。该脚本在本机使用**原生 ROS 级假 SDK 测试二进制**（`test_go2_driver_ros_cpp`），通过工厂注入的假后端驱动真实的 Go2 驱动、适配器和 runtime：它验证状态转换、租约速度、实机导航拒绝、遥测失效、畸形遥测、SDK 写故障，以及暂停 runtime 定时器后驱动仍独立输出零速度。脚本同时断言 `unitree_sdk2py` 没有出现在任何输出中，即真实厂商 SDK 路径从未被导入。此测试需要本机 ROS socket 权限，不连接厂商 DDS、硬件或 MQTT。
 
-驱动拒绝重复或倒序的运动命令时间戳，停止指令也会阻止更早的运动命令恢复。设备状态时间戳倒退（例如机器人重启）后应重启驱动；SDK 发送在初始化成功后发生错误时也会锁止运动，直到驱动重启。重启不会恢复旧租约或运动命令。验证结果见 [验证记录](validation.md)。
+驱动拒绝重复或倒序的运动命令时间戳，停止指令也会阻止更早的运动命令恢复。runtime 侧同样在每一租约内以整数纳秒水位拒绝相等或倒退的速度源时间戳，且被接受的 `motion.stop` 会先撤销当前租约再发出停止输出——撤销后旧 token 不能再发令，重新控制必须重新申请租约；停止回执只确认本机停止输出已下发，不代表设备已经停下。设备状态时间戳倒退（例如机器人重启）后应重启驱动；SDK 发送在初始化成功后发生错误时也会锁止运动，直到驱动重启。重启不会恢复旧租约或运动命令。验证结果见 [验证记录](validation.md)。

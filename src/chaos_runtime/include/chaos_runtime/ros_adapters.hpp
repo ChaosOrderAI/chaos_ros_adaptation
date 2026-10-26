@@ -1,6 +1,6 @@
 // ROS-backed adapters: Lingao (Twist/Odometry), Unitree Go2
-// (TwistStamped/Odometry boundary to the supervised driver process), and the
-// legacy DJI read-only status reader. Ports of chaos_runtime/adapters/
+// (DriverVelocityCommand/Odometry boundary to the supervised driver process),
+// and the legacy DJI read-only status reader. Ports of chaos_runtime/adapters/
 // {lingao,go2,dji_legacy}.py.
 //
 // Each adapter owns a small mutex for its telemetry cache; subscription
@@ -13,6 +13,7 @@
 #include <string>
 
 #include <rclcpp/rclcpp.hpp>
+#include <chaos_interfaces/msg/driver_velocity_command.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -89,19 +90,41 @@ public:
   AdapterSnapshot snapshot() override;
   void validateVelocity(const std::array<double, 6> & values) override;
   void setVelocity(const std::array<double, 6> & values) override;
+  // The transport path: the command carries the original source stamp and
+  // the immutable absolute CLOCK_MONOTONIC deadline D of the admitted
+  // motion. D is published unchanged.
+  void setVelocityUntil(const std::array<double, 6> & values,
+                        std::int64_t source_stamp_ns,
+                        std::int64_t expires_mono_ns) override;
   void stop() override;
   void controlledStop() override;
 
 private:
   void onOdometry(const nav_msgs::msg::Odometry & message);
-  void command(const std::array<double, 6> & values);
+  // Publishes one internal driver command. The issue time is an actual
+  // CLOCK_MONOTONIC reading taken by the caller; the deadline is the
+  // unchanged D of the caller.
+  void publishCommand(const std::array<double, 6> & values,
+                      std::int64_t source_stamp_ns,
+                      std::int64_t issued_mono_ns,
+                      std::int64_t expires_mono_ns, bool stop);
+  // The explicit stop barrier: six exact zeros, a current issue time, no
+  // deadline. It never travels through the motion validity rules.
+  void publishStop();
 
   control::Limits limits_;
   AssetFrames frames_;
   std::string base_frame_;
+  // The clock-domain identity of this process, read once at construction and
+  // cached. It is the identity of the boot instance and of the Linux time
+  // namespace that the published deadline belongs to. An unreadable identity
+  // throws in the constructor: the adapter never publishes a command with an
+  // empty or guessed domain.
+  std::string clock_domain_id_;
   std::function<std::int64_t()> ros_now_ns_;
   std::function<double()> mono_s_;
-  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr publisher_;
+  rclcpp::Publisher<chaos_interfaces::msg::DriverVelocityCommand>::SharedPtr
+    publisher_;
   // The subscription is a member: rclcpp::Node keeps only weak references.
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   std::mutex cache_mutex_;

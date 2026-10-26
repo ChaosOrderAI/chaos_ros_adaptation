@@ -183,6 +183,11 @@ def run():
                 assert results[request_id].success
                 assert future_result(sdk.renew(5)).success
                 assert future_result(sdk.stop()).success
+                # An accepted stop must clear the SDK cache immediately.
+                assert not sdk.lease_token
+                # A fresh acquire restores control after the stop.
+                assert future_result(sdk.acquire('sdk-smoke', 5)).success
+                assert sdk.lease_token
                 assert future_result(sdk.release()).success
                 assert not sdk.lease_token
                 wait(lambda: sdk.state() is not None)

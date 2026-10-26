@@ -68,9 +68,15 @@ struct GatewayParameter
 class MockRuntime : public rclcpp::Node
 {
 public:
-  MockRuntime()
+  /// The mock runtime of the integration fixture.
+  ///
+  /// `with_navigation_server` decides whether the navigation action server is
+  /// advertised from the start. A runtime without it lets a test send a
+  /// navigation command before any action server exists.
+  explicit MockRuntime(bool with_navigation_server = true)
   : rclcpp::Node("mock_runtime")
-  {    description_ = create_service<chaos_interfaces::srv::GetDescription>(
+  {
+    description_ = create_service<chaos_interfaces::srv::GetDescription>(
       "description",
       [](const std::shared_ptr<chaos_interfaces::srv::GetDescription::Request>,
         std::shared_ptr<chaos_interfaces::srv::GetDescription::Response> response) {
@@ -123,9 +129,31 @@ public:
       });
     command_results_pub_ = create_publisher<chaos_interfaces::msg::CommandResult>(
       "command_results", 32);
+    if (with_navigation_server) {
+      start_navigation_server();
+    }
+    takeoff_server_ = make_flight_server("flight/takeoff");
+    land_server_ = make_flight_server("flight/land");
+  }
+
+  /// Advertise the navigation action server.
+  ///
+  /// The server may be started *after* the gateway already received a
+  /// navigation command: the gateway then has to defer the dispatch instead
+  /// of rejecting the command. Every goal that reaches the server is
+  /// counted, so a test can prove that a deferred goal was dispatched exactly
+  /// once.
+  void start_navigation_server()
+  {
+    if (navigation_server_) {
+      return;
+    }
     navigation_server_ = rclcpp_action::create_server<chaos_interfaces::action::NavigatePose>(
       this, "navigation/to_pose",
-      [](const rclcpp_action::GoalUUID &, std::shared_ptr<const chaos_interfaces::action::NavigatePose::Goal>) {
+      [this](const rclcpp_action::GoalUUID &,
+        std::shared_ptr<const chaos_interfaces::action::NavigatePose::Goal>) {
+        const std::lock_guard<std::mutex> guard(mutex_);
+        ++received_goals_;
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
       [](const std::shared_ptr<rclcpp_action::ServerGoalHandle<chaos_interfaces::action::NavigatePose>>) {
@@ -171,8 +199,6 @@ public:
         result->message = "arrived";
         handle->succeed(result);
       });
-    takeoff_server_ = make_flight_server("flight/takeoff");
-    land_server_ = make_flight_server("flight/land");
   }
 
   /// Release the goals that wait for the feedback barrier. The mock runtime
@@ -209,6 +235,13 @@ public:
   {
     std::lock_guard<std::mutex> guard(mutex_);
     return silent_goals_.size();
+  }
+
+  /// Number of goals the navigation server received in total.
+  std::size_t received_goal_count()
+  {
+    std::lock_guard<std::mutex> guard(mutex_);
+    return received_goals_;
   }
 
   /// Number of service requests that were never answered.
@@ -256,6 +289,7 @@ private:
   std::condition_variable feedback_cv_;
   bool feedback_released_ = false;
   std::vector<std::shared_ptr<rmw_request_id_t>> silent_requests_;
+  std::size_t received_goals_ = 0;
   std::vector<std::shared_ptr<rclcpp_action::ServerGoalHandle<chaos_interfaces::action::NavigatePose>>>
   silent_goals_;
   std::vector<std::shared_ptr<rclcpp_action::ServerGoalHandle<chaos_interfaces::action::NavigatePose>>>
@@ -267,13 +301,18 @@ private:
 class GatewayIntegration : public ::testing::Test
 {
 protected:
+  /// Whether the mock runtime advertises the navigation action server from
+  /// the start. A derived fixture switches it off to exercise a navigation
+  /// request that arrives before the action server exists.
+  virtual bool with_navigation_server() const {return true;}
+
   void SetUp() override
   {
     setenv("ROS_DOMAIN_ID", "188", 1);
     if (!rclcpp::ok()) {
       rclcpp::init(0, nullptr);
     }
-    runtime_ = std::make_shared<MockRuntime>();
+    runtime_ = std::make_shared<MockRuntime>(with_navigation_server());
     client_ = std::make_shared<rclcpp::Node>("gateway_test_client");
     // The test client uses a deeper queue than the public profile so that a
     // burst of test commands is not truncated by the *test* transport. The
@@ -312,6 +351,11 @@ protected:
 
   void TearDown() override
   {
+    // Release a goal that still waits for the feedback barrier: the runtime
+    // executor must be able to stop even when the test failed early.
+    if (runtime_) {
+      runtime_->release_feedback_goals();
+    }
     // Quiesce both executors before the nodes are destroyed.
     runtime_executor_->cancel();
     runtime_thread_.join();
@@ -417,6 +461,20 @@ protected:
     return false;
   }
 
+  /// The last reply of a request as a diagnostic string.
+  ///
+  /// A request without any reply is a normal state (the gateway stays
+  /// silent while it defers a dispatch), so the diagnostic must never read
+  /// the last element of an empty list.
+  std::string reply_diagnostics(const std::string & request_id)
+  {
+    const auto replies = replies_for(request_id);
+    if (replies.empty()) {
+      return "<no reply>";
+    }
+    return replies.back()["response"].dump();
+  }
+
   bool wait_for(const std::function<bool()> & predicate, std::chrono::seconds timeout = 10s)
   {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -427,6 +485,51 @@ protected:
       std::this_thread::sleep_for(5ms);
     }
     return predicate();
+  }
+
+  /// Wait until the gateway answers a probe command.
+  ///
+  /// The probe proves that a freshly created gateway was discovered by the
+  /// test client and that its service clients are ready. The bounded retry
+  /// replaces a fixed sleep: the discovery of a new node is not a fixed
+  /// duration, and every attempt uses its own request id because a failed
+  /// request is remembered as a replay.
+  bool wait_for_gateway()
+  {
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    int attempt = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+      // The request id has to satisfy the wire contract (at least 8
+      // characters), otherwise the gateway drops the probe uncorrelated.
+      const std::string request_id = "gateway_probe_" + std::to_string(attempt++);
+      command("system.describe", request_id);
+      const bool answered = wait_for([&]() { return !replies_for(request_id).empty(); }, 1s);
+      if (answered) {
+        const auto replies = replies_for(request_id);
+        if (!replies.empty() && replies.back()["response"]["ok"].get<bool>()) {
+          return true;
+        }
+      }
+      // The gateway answered but its service client is not ready yet: retry
+      // with a fresh request id after a short pause.
+      std::this_thread::sleep_for(50ms);
+    }
+    return false;
+  }
+
+  /// Advertise the navigation action server of the mock runtime.
+  ///
+  /// The runtime executor is stopped while the server is created: the entity
+  /// list of a node must not change while its executor collects it. The
+  /// server is discovered by the gateway's action client shortly afterwards.
+  void start_runtime_navigation_server()
+  {
+    runtime_executor_->cancel();
+    runtime_thread_.join();
+    runtime_->start_navigation_server();
+    runtime_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    runtime_executor_->add_node(runtime_);
+    runtime_thread_ = std::thread([this]() { runtime_executor_->spin(); });
   }
 
   std::shared_ptr<MockRuntime> runtime_;
@@ -906,6 +1009,144 @@ TEST_F(GatewayIntegration, SilentEndpointsDoNotAccumulateUnboundedState)
         event["ok"].get<bool>() && event["execution_state"] == "known";
     });
   }, 20s));
+}
+
+// The mock runtime of this fixture starts *without* the navigation action
+// server. A navigation request therefore arrives before any server is
+// discoverable: the gateway has to defer the dispatch instead of rejecting
+// the command.
+class GatewayIntegrationLateNavigation : public GatewayIntegration
+{
+protected:
+  bool with_navigation_server() const override {return false;}
+};
+
+// Regression for the early UNAVAILABLE: a navigation request that arrives
+// before the action server exists must not be rejected. The gateway defers
+// the dispatch and sends the goal exactly once as soon as the server is
+// reachable.
+TEST_F(GatewayIntegrationLateNavigation, NavigationBeforeServerAppearsIsDeferredAndDispatchedOnce)
+{
+  // The lease is held by the mock runtime, so the token stays valid when the
+  // gateway is recreated below.
+  const std::string acquire_id = "acquire_late_nav";
+  command("control.acquire", acquire_id, {{"owner", "cpp_smoke"}, {"duration_s", 60.0}});
+  ASSERT_TRUE(wait_for([&]() { return !replies_for(acquire_id).empty(); }));
+  const json acquired = replies_for(acquire_id).back();
+  ASSERT_TRUE(acquired["response"]["ok"].get<bool>()) << acquired["response"].dump();
+  const std::string token = acquired["response"]["data"]["token"].get<std::string>();
+
+  // The deferred request has to survive until the action server appears, so
+  // the correlation timeout of this gateway is generous.
+  create_gateway({{"request_timeout_s", 10.0}, {"action_timeout_s", 5.0}});
+  ASSERT_TRUE(wait_for_gateway()) << "the recreated gateway never answered a probe";
+
+  const std::string goal_id = "late_nav_goal";
+  command("navigation.to_pose", goal_id,
+    {{"ttl_ms", 15000}, {"lease_token", token},
+      {"target", {{"frame_id", "map"}, {"position", {{"x", 0.1}}}}}});
+
+  // A duplicate of the still pending request is a replay of the correlation:
+  // it must not create a second goal and it must not disturb the deferred
+  // dispatch.
+  command("navigation.to_pose", goal_id,
+    {{"ttl_ms", 15000}, {"lease_token", token},
+      {"target", {{"frame_id", "map"}, {"position", {{"x", 0.1}}}}}});
+
+  // The action server does not exist yet. The gateway has to stay silent:
+  // the old behaviour answered UNAVAILABLE immediately instead of deferring
+  // the dispatch.
+  ASSERT_FALSE(wait_for([&]() { return !replies_for(goal_id).empty(); }, 1s))
+    << "the gateway answered before the action server existed: "
+    << reply_diagnostics(goal_id);
+  EXPECT_EQ(runtime_->received_goal_count(), 0u) << "the goal was sent without a server";
+
+  // The server appears now: the deferred goal is dispatched and accepted.
+  start_runtime_navigation_server();
+  ASSERT_TRUE(wait_for([&]() { return !reply_with_phase(goal_id, "accepted").is_null(); }, 15s));
+  const json accepted = reply_with_phase(goal_id, "accepted");
+  EXPECT_TRUE(accepted["response"]["ok"].get<bool>());
+  EXPECT_EQ(accepted["response"]["phase"], "accepted");
+  EXPECT_FALSE(accepted["response"]["terminal"].get<bool>());
+
+  // The goal runs to completion: the mock publishes feedback and a result.
+  runtime_->release_feedback_goals();
+  ASSERT_TRUE(wait_for([&]() { return has_terminal_reply(goal_id); }, 15s));
+  const json completed = replies_for(goal_id).back();
+  EXPECT_EQ(completed["response"]["phase"], "result");
+  EXPECT_TRUE(completed["response"]["ok"].get<bool>());
+
+  // The goal was dispatched exactly once: the server received a single goal
+  // and the gateway reported a single acceptance. The duplicate of the
+  // pending request did not create a second goal.
+  EXPECT_EQ(runtime_->received_goal_count(), 1u);
+  int acceptances = 0;
+  for (const auto & reply : replies_for(goal_id)) {
+    if (reply["response"].contains("phase") && reply["response"]["phase"] == "accepted") {
+      ++acceptances;
+    }
+  }
+  EXPECT_EQ(acceptances, 1);
+}
+
+// The other half of the deferral contract: a request whose correlation
+// expires while the action server is still missing must never reach the
+// robot, not even when the server appears afterwards.
+TEST_F(GatewayIntegrationLateNavigation, NavigationThatExpiresBeforeTheServerAppearsIsNeverSent)
+{
+  // The fixture gateway correlates a request for 0.4 s: the request below
+  // expires while the action server is still missing.
+  const std::string goal_id = "expired_late_nav";
+  command("navigation.to_pose", goal_id,
+    {{"lease_token", "tok_late_nav"},
+      {"target", {{"frame_id", "map"}, {"position", {{"x", 0.1}}}}}});
+
+  ASSERT_TRUE(wait_for([&]() { return has_terminal_reply(goal_id); }, 10s));
+  const json expired = replies_for(goal_id).back();
+  EXPECT_EQ(expired["response"]["code"], "RESPONSE_TIMEOUT");
+  EXPECT_TRUE(expired["response"]["terminal"].get<bool>());
+  EXPECT_EQ(runtime_->received_goal_count(), 0u);
+
+  // The server appears only now. The expired request must not be sent.
+  start_runtime_navigation_server();
+  ASSERT_FALSE(wait_for([&]() { return !reply_with_phase(goal_id, "accepted").is_null(); }, 2s))
+    << "an expired request was dispatched after the server appeared";
+  EXPECT_EQ(runtime_->received_goal_count(), 0u);
+  EXPECT_EQ(replies_for(goal_id).back()["response"], expired["response"]);
+}
+
+// The original TTL of the command bounds the dispatch, not only the response
+// timeout of the correlation: a goal whose TTL elapsed while the action
+// server was missing must never reach the robot.
+TEST_F(GatewayIntegrationLateNavigation, NavigationWithElapsedTtlIsNeverSent)
+{
+  // The correlation of this gateway lives far longer than the TTL of the
+  // command below, so only the original TTL can stop the deferred dispatch.
+  create_gateway({{"request_timeout_s", 10.0}, {"action_timeout_s", 5.0}});
+  ASSERT_TRUE(wait_for_gateway()) << "the recreated gateway never answered a probe";
+
+  const std::string goal_id = "ttl_expired_nav";
+  command("navigation.to_pose", goal_id,
+    {{"ttl_ms", 100},
+      {"lease_token", "tok_ttl_nav"},
+      {"target", {{"frame_id", "map"}, {"position", {{"x", 0.1}}}}}});
+
+  // The action server does not exist, so the dispatch is deferred. The TTL
+  // elapses long before the response timeout of the correlation.
+  ASSERT_TRUE(wait_for([&]() { return has_terminal_reply(goal_id); }, 5s))
+    << "the deferred request was neither expired nor answered";
+  const json expired = replies_for(goal_id).back();
+  EXPECT_EQ(expired["response"]["code"], "EXPIRED");
+  EXPECT_TRUE(expired["response"]["terminal"].get<bool>());
+  EXPECT_FALSE(expired["response"]["ok"].get<bool>());
+  EXPECT_EQ(runtime_->received_goal_count(), 0u) << "the goal was sent without a server";
+
+  // The server appears only now. The expired request must not be sent.
+  start_runtime_navigation_server();
+  ASSERT_FALSE(wait_for([&]() { return !reply_with_phase(goal_id, "accepted").is_null(); }, 2s))
+    << "a request with an elapsed TTL was dispatched after the server appeared";
+  EXPECT_EQ(runtime_->received_goal_count(), 0u);
+  EXPECT_EQ(replies_for(goal_id).back()["response"], expired["response"]);
 }
 
 }  // namespace

@@ -63,6 +63,25 @@ public:
     throw chaos::Rejected("UNSUPPORTED", "Adapter does not support velocity");
   }
 
+  // Motion with an explicit, immutable absolute deadline.
+  //
+  // `source_stamp_ns` is the ORIGINAL source stamp of the admitted command
+  // and `expires_mono_ns` is the absolute Linux CLOCK_MONOTONIC deadline D
+  // that the caller computed once. The deadline is handed over unchanged: an
+  // adapter never re-anchors, re-stamps or extends it, and it never adds a
+  // default validity interval of its own.
+  //
+  // The base implementation delegates to setVelocity(), so the adapters that
+  // have no transport deadline (mock, Lingao) keep their existing behaviour.
+  // The adapters whose transport carries a deadline override it.
+  virtual void setVelocityUntil(const std::array<double, 6> & values,
+                                std::int64_t source_stamp_ns,
+                                std::int64_t expires_mono_ns) {
+    (void)source_stamp_ns;
+    (void)expires_mono_ns;
+    setVelocity(values);
+  }
+
   // stop() issues output only for owned outputs. A successful stop means
   // stop output was issued, not physical confirmation.
   virtual void stop() {}

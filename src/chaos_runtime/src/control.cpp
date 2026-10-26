@@ -5,6 +5,7 @@
 
 #include <cerrno>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <sys/random.h>
 
@@ -15,6 +16,39 @@ namespace chaos::control {
 
 namespace {
 constexpr std::int64_t kNanoseconds = 1'000'000'000;
+
+// Marker for an unusable ROS-now reading. The age check treats it as an
+// impossibly old reading, so a bogus clock value can never extend the life
+// of a command and never reaches an undefined subtraction.
+constexpr std::int64_t kInvalidNowNs = std::numeric_limits<std::int64_t>::min();
+
+// Scales a seconds-valued timestamp into integer nanoseconds without
+// overflowing. The range is checked BEFORE the integer conversion, so an
+// unrepresentable value never reaches the conversion (undefined behaviour).
+// Returns false when the value is not finite or does not fit in int64.
+bool scaledNanoseconds(double seconds, std::int64_t & out_ns) {
+  if (!std::isfinite(seconds)) {
+    return false;
+  }
+  // The scaling happens in a wider type: the double product of a huge
+  // finite value would already have lost the integer precision.
+  const long double scaled =
+    static_cast<long double>(seconds) * 1'000'000'000.0L;
+  if (!std::isfinite(scaled)) {
+    return false;
+  }
+  // llround semantics (half away from zero) without the undefined
+  // conversion of an out-of-range value.
+  const long double rounded = std::round(scaled);
+  // 2^63 is exactly representable in every binary floating format used
+  // here, so the bound is exact. The negated comparison also rejects NaN.
+  constexpr long double kInt64Bound = 9223372036854775808.0L;
+  if (!(rounded > -kInt64Bound && rounded < kInt64Bound)) {
+    return false;
+  }
+  out_ns = static_cast<std::int64_t>(rounded);
+  return true;
+}
 
 // 32 random bytes encoded as unpadded base64url, matching
 // secrets.token_urlsafe(32) (43 characters). Generation failure throws;
@@ -292,21 +326,35 @@ std::pair<std::string, double> ControlGuard::lease(const std::string & operation
     owner_ = owner_value;
     token_ = token_factory_();
     expires_ = clock_() + duration;
+    // A new control session starts a fresh stamp sequence.
+    stamp_watermark_ns_ = 0;
   } else {
     require(token_value);
     if (owner_ != owner_value) {
       throw Rejected("NO_CONTROL", "Lease owner does not match");
     }
     if (operation == "renew") {
+      // Renew extends the lease but never the stamp watermark: replayed
+      // source stamps stay stale for the whole lease lifetime.
       expires_ = clock_() + duration;
     } else {
-      owner_.clear();
-      token_.clear();
-      expires_ = 0.0;
-      velocity_expires_ = 0.0;
+      // A release ends the control session: the token, the armed velocity
+      // sample and the stamp watermark are cleared.
+      revoke();
     }
   }
   return {token_, remaining()};
+}
+
+void ControlGuard::revoke() {
+  // Clear the whole control session without consulting the clock and
+  // without re-validating the caller: the caller has already validated
+  // the request, and a lease that expired in between must not survive.
+  owner_.clear();
+  token_.clear();
+  expires_ = 0.0;
+  velocity_expires_ = 0.0;
+  stamp_watermark_ns_ = 0;
 }
 
 void ControlGuard::velocity(const std::string & token_value, double stamp_s,
@@ -314,6 +362,33 @@ void ControlGuard::velocity(const std::string & token_value, double stamp_s,
                             const std::string & frame,
                             const std::string & base_frame,
                             const std::array<double, 6> & values) {
+  // The token is checked first: a bad token is NO_CONTROL even when the
+  // source stamp is unusable. The TTL, the frame and the velocity
+  // components are validated by velocityNs(), which rejects them before
+  // the source stamp, so the error precedence is unchanged.
+  require(token_value);
+  // The stamps are scaled with a bound that is checked before the integer
+  // conversion: a huge finite value, a NaN or an infinity never reaches
+  // the conversion and never overflows. An unusable stamp is handed over
+  // as an invalid marker and rejected by the typed validator, after the
+  // TTL, the frame and the velocity components have been validated.
+  std::int64_t stamp_ns = 0;
+  if (!scaledNanoseconds(stamp_s, stamp_ns) || stamp_ns <= 0) {
+    stamp_ns = 0;  // "no usable source timestamp"
+  }
+  std::int64_t now_ns = kInvalidNowNs;
+  if (!scaledNanoseconds(ros_now_s, now_ns)) {
+    now_ns = kInvalidNowNs;
+  }
+  velocityNs(token_value, stamp_ns, now_ns, valid_for_s, frame, base_frame,
+             values);
+}
+
+void ControlGuard::velocityNs(const std::string & token_value,
+                              std::int64_t stamp_ns, std::int64_t ros_now_ns,
+                              double valid_for_s, const std::string & frame,
+                              const std::string & base_frame,
+                              const std::array<double, 6> & values) {
   require(token_value);
   const double ttl = finite_positive(valid_for_s, "valid_for_s");
   if (ttl > limits_.command_timeout_s) {
@@ -337,16 +412,33 @@ void ControlGuard::velocity(const std::string & token_value, double stamp_s,
   if (angular > limits_.angular_rps + 1e-9) {
     throw Rejected("OUT_OF_RANGE", "Angular speed exceeds asset limit");
   }
-  if (!std::isfinite(stamp_s) || stamp_s <= 0) {
+  if (stamp_ns <= 0) {
     throw Rejected("STALE_COMMAND", "A positive source timestamp is required");
   }
-  const double age = ros_now_s - stamp_s;
+  // The age is computed in a wider floating type: the int64 subtraction
+  // itself can overflow (INT64_MIN - 1 is undefined behaviour), so the
+  // operands are widened BEFORE the difference is taken. An out-of-domain
+  // clock reading therefore yields an extreme age and is rejected as stale
+  // instead of trapping.
+  const long double delta_ns =
+    static_cast<long double>(ros_now_ns) - static_cast<long double>(stamp_ns);
+  const double age = static_cast<double>(delta_ns) / kNanoseconds;
   if (!std::isfinite(age) || age < -0.1 || age >= ttl) {
     throw Rejected("STALE_COMMAND",
                    "Command is expired or timestamp is in the future");
   }
+  if (stamp_ns <= stamp_watermark_ns_) {
+    // The watermark comparison stays integer: adjacent-1ns stamps remain
+    // distinguishable even though the age above is computed in a wider
+    // floating type.
+    throw Rejected("STALE_COMMAND",
+                   "Velocity source timestamp must increase per lease");
+  }
   // Network transit consumes TTL. Slight future skew never extends beyond TTL.
+  // Watermark and deadline commit only after every validation above passed:
+  // a rejected packet neither extends the old TTL nor advances the watermark.
   velocity_expires_ = clock_() + std::min(ttl, ttl - age);
+  stamp_watermark_ns_ = stamp_ns;
 }
 
 bool ControlGuard::velocityTimedOut() const {

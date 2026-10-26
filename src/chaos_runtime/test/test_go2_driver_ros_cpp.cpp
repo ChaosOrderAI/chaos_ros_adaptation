@@ -6,6 +6,12 @@
 // write fault and the shutdown handshake. It is deliberately distinct from
 // the ROS-free core tests (test_go2_driver_core_cpp), which never touch DDS.
 //
+// The command path uses the internal driver transport: the command carries
+// the original source stamp, an actual CLOCK_MONOTONIC issue time, the
+// immutable absolute deadline D and the clock-domain identity of this boot
+// instance and time namespace. The driver takes the deadline exactly as it
+// was delivered: it never converts, re-ages or extends it.
+//
 // The fake backend is injected through the same factory the production
 // Unitree backend uses, so the wiring under test is the production wiring.
 //
@@ -21,21 +27,24 @@
 //     to order two threads.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include <geometry_msgs/msg/twist_stamped.hpp>
+#include <chaos_interfaces/msg/driver_velocity_command.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "chaos_runtime/driver_deadline.hpp"
 #include "chaos_runtime/go2/go2_driver_node.hpp"
 #include "chaos_runtime/go2/sdk_backend.hpp"
 
@@ -82,6 +91,9 @@ public:
   int move(double vx, double vy, double wz) override {
     std::lock_guard<std::mutex> guard(mutex_);
     calls_.push_back({vx, vy, wz});
+    // The CLOCK_MONOTONIC sample of the write. It lets a test prove that a
+    // nonzero output never happened at or after a delivered deadline.
+    call_stamps_.push_back(runtime::driver_deadline::monotonicNowNs());
     return fail_moves_ ? -1 : 0;
   }
 
@@ -163,6 +175,13 @@ public:
     return calls_;
   }
 
+  // The CLOCK_MONOTONIC sample of every recorded write, parallel to
+  // calls().
+  std::vector<std::int64_t> callStamps() const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    return call_stamps_;
+  }
+
   std::size_t callCount() const {
     std::lock_guard<std::mutex> guard(mutex_);
     return calls_.size();
@@ -179,6 +198,7 @@ private:
   std::condition_variable barrier_;
   SportStateCallback callback_;
   std::vector<std::array<double, 3>> calls_;
+  std::vector<std::int64_t> call_stamps_;
   int in_flight_ = 0;
   std::size_t blocked_in_flight_ = 0;
   bool fail_moves_ = false;
@@ -235,6 +255,11 @@ class Go2DriverFixture : public ::testing::Test {
 protected:
   void SetUp() override {
     rclcpp::init(0, nullptr);
+    // The clock-domain identity of this process. The driver compares it with
+    // the identity of every command, so the fake transport publishes the
+    // same one. A domain of another boot instance or time namespace is
+    // delivered explicitly by the cases that need it.
+    domain_ = runtime::driver_deadline::localClockDomainId();
     shared_ = std::make_shared<Shared>();
     const std::int64_t domain =
       rclcpp::contexts::get_global_default_context()->get_domain_id();
@@ -318,22 +343,87 @@ protected:
     telemetry_->start();
   }
 
-  // Publishes a velocity command.
+  // The validity interval of a published command. It is shorter than the
+  // driver cap (the asset allows 5 s) and far longer than the telemetry
+  // timeout (1 s), so a zero output inside a case can never be confused with
+  // a command expiry.
+  static constexpr std::int64_t kCommandIntervalNs = 4000000000LL;
+
+  // Publishes a velocity command over the internal transport.
+  //
+  // The issue time is an actual CLOCK_MONOTONIC reading and the deadline is
+  // the absolute value that the transport delivers unchanged. The issue
+  // watermark and the publish call share one lock, so the published order is
+  // the issued order: the driver never receives an own command as a
+  // backward one.
   void publishCommand(double vx) {
+    publishCommandWith(vx, 0, 0, false, domain_);
+  }
+
+  // Publishes one internal command with an explicit transport payload.
+  //
+  // `issued` <= 0 asks for a fresh issue time, `deadline` <= 0 asks for the
+  // default validity interval (a stop never carries a deadline). The caller
+  // can pass an issue time and a deadline of its own to deliver a command
+  // whose interval is already consumed, or a clock domain that does not
+  // match the driver.
+  std::int64_t publishCommandWith(double vx, std::int64_t issued,
+                                   std::int64_t deadline, bool stop,
+                                   const std::string & domain) {
+    std::lock_guard<std::mutex> guard(publish_mutex_);
+    if (issued <= 0) {
+      issued = nextIssueLocked();
+    }
+    if (deadline <= 0 && !stop) {
+      deadline = issued + kCommandIntervalNs;
+    }
+    last_issued_ = std::max(last_issued_, issued);
+    chaos_interfaces::msg::DriverVelocityCommand command;
+    command.header.frame_id = "base_link";
+    // The original source stamp of the admitted command. It is provenance
+    // only and it never extends the deadline.
+    command.header.stamp = node_->get_clock()->now();
+    command.clock_domain_id = domain;
+    command.issued_monotonic_ns = issued;
+    command.expires_monotonic_ns = deadline;
+    command.stop = stop;
+    command.velocity.linear.x = stop ? 0.0 : vx;
+    ensureCommandPublisher();
+    cmd_pub_->publish(command);
+    return issued;
+  }
+
+  // Establish discovery before sampling a deliberately short interval.
+  void ensureCommandPublisher() {
     if (!cmd_pub_) {
-      cmd_pub_ = node_->create_publisher<geometry_msgs::msg::TwistStamped>(
-        "/go2_fake/cmd_vel", 10);
-      const auto deadline = Clock::now() + std::chrono::seconds(5);
+      cmd_pub_ =
+        node_->create_publisher<chaos_interfaces::msg::DriverVelocityCommand>(
+          "/go2_fake/cmd_vel", rclcpp::QoS(10));
+      const auto discovery_deadline = Clock::now() + std::chrono::seconds(5);
       while (cmd_pub_->get_subscription_count() == 0 &&
-             Clock::now() < deadline) {
+             Clock::now() < discovery_deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
     }
-    geometry_msgs::msg::TwistStamped command;
-    command.header.frame_id = "base_link";
-    command.header.stamp = node_->get_clock()->now();
-    command.twist.linear.x = vx;
-    cmd_pub_->publish(command);
+  }
+
+  // The issue time of the next command. It is an actual CLOCK_MONOTONIC
+  // reading: the transport barrier of the driver requires the issue time to
+  // rise strictly, so the helper waits for the clock to advance instead of
+  // fabricating a successor value. The caller must hold the publish lock.
+  std::int64_t nextIssueLocked() {
+    const auto deadline = Clock::now() + std::chrono::seconds(2);
+    std::int64_t issued = runtime::driver_deadline::monotonicNowNs();
+    while (issued <= last_issued_ && Clock::now() < deadline) {
+      issued = runtime::driver_deadline::monotonicNowNs();
+    }
+    return issued;
+  }
+
+  // Publishes an explicit stop barrier: six exact zeros, a current issue
+  // time and no deadline.
+  std::int64_t publishStop() {
+    return publishCommandWith(0.0, 0, 0, true, domain_);
   }
 
   // Publishes the command until the driver actually writes it. A command
@@ -437,9 +527,17 @@ protected:
   // The subscription and the publisher are members: a temporary would be
   // destroyed and the endpoint would disappear from the graph.
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_;
+  rclcpp::Publisher<chaos_interfaces::msg::DriverVelocityCommand>::SharedPtr
+    cmd_pub_;
   std::thread cmd_thread_;
   std::atomic<bool> cmd_running_{false};
+  // The clock domain of this process and the watermark of the issued
+  // commands. The publish lock keeps the watermark and the published order
+  // consistent, also when the command source thread and the test thread
+  // publish at the same time.
+  std::string domain_;
+  std::mutex publish_mutex_;
+  std::int64_t last_issued_ = 0;
 };
 
 TEST_F(Go2DriverFixture, FakeBackendDeliversTelemetryAndObservesMoveCalls) {
@@ -700,6 +798,167 @@ TEST_F(Go2DriverFixture, ShutdownWaitsForAnInFlightTelemetryCallback) {
   ASSERT_FALSE(calls.empty());
   EXPECT_DOUBLE_EQ(calls.back()[0], 0.0)
     << "the last output was not a zero";
+}
+
+TEST_F(Go2DriverFixture, ACommandThatArrivesAfterItsDeadlineIsRefused) {
+  auto fake = backend();
+  ASSERT_TRUE(fake != nullptr);
+  startTelemetry();
+  ASSERT_TRUE(publishUntilWritten(0.25, std::chrono::seconds(5)));
+
+  // The interval of the command was already consumed on the way: it was
+  // issued 200 ms ago and expires 100 ms ago, so it arrives after its
+  // deadline. The driver must refuse it instead of running the motion.
+  // The refused command uses its own velocity, so it cannot be confused
+  // with the motion that the driver still holds.
+  const auto before = fake->callCount();
+  const std::int64_t now = runtime::driver_deadline::monotonicNowNs();
+  publishCommandWith(0.75, now - 200000000LL, now - 100000000LL, false,
+                     domain_);
+
+  ASSERT_TRUE(waitFor(
+    [&] {
+      const auto detail = node_->driverStatus().detail;
+      return detail.find("deadline") != std::string::npos;
+    },
+    std::chrono::seconds(3)))
+    << "the driver did not report the expired deadline: "
+    << node_->driverStatus().detail;
+  EXPECT_FALSE(sawValueAfter(before, 0.75))
+    << "the driver wrote a command that had already expired";
+}
+
+TEST_F(Go2DriverFixture, ACommandWithMostOfItsIntervalConsumedNeverExtendsIt) {
+  auto fake = backend();
+  ASSERT_TRUE(fake != nullptr);
+  startTelemetry();
+
+  // The readiness barrier: the driver must have written its initial zero
+  // output and the telemetry must be fresh. Without it, a missing nonzero
+  // write could not be told apart from an unready driver.
+  ASSERT_TRUE(waitFor(
+    [&] {
+      const auto status = node_->driverStatus();
+      return status.initialized && !status.stop_pending;
+    },
+    std::chrono::seconds(5)))
+    << "the driver never became ready";
+
+  ensureCommandPublisher();
+  ASSERT_GT(cmd_pub_->get_subscription_count(), 0u);
+
+  // 80 ms of the 100 ms interval are already consumed. The transit is
+  // simulated by the issue time and the deadline, not by a sleep: the
+  // command was issued 80 ms ago and expires 20 ms from now.
+  const std::int64_t anchor = runtime::driver_deadline::monotonicNowNs();
+  const std::int64_t issued = anchor - 80000000LL;
+  const std::int64_t deadline = anchor + 20000000LL;
+  const auto before = fake->callCount();
+  publishCommandWith(0.25, issued, deadline, false, domain_);
+
+  // Prove this packet was processed, even if scheduling consumed its remainder.
+  ASSERT_TRUE(waitFor([&] {
+    const auto status = node_->driverStatus();
+    return status.last_command_issued_mono_ns == issued ||
+           status.detail.find("deadline has already passed") != std::string::npos;
+  }, std::chrono::seconds(3)));
+
+  // Wait until the delivered deadline has passed and the watchdog ran
+  // again.
+  while (runtime::driver_deadline::monotonicNowNs() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+  const auto calls = fake->calls();
+  const auto stamps = fake->callStamps();
+  ASSERT_FALSE(calls.empty());
+  // The driver never extends the delivered deadline: every nonzero write
+  // happened strictly before it.
+  for (std::size_t i = before; i < calls.size(); ++i) {
+    if (std::abs(calls[i][0]) > 1e-9) {
+      EXPECT_LT(stamps[i], deadline)
+        << "the driver wrote a nonzero output at or after the delivered "
+           "deadline";
+    }
+  }
+  // The last output is a zero: the motion did not survive the deadline. A
+  // scheduling delay may have let the remaining 20 ms elapse before the
+  // watchdog ran, in which case the driver failed closed and never wrote a
+  // nonzero output at all. Both outcomes are allowed, and neither of them
+  // extends the deadline.
+  EXPECT_DOUBLE_EQ(calls.back()[0], 0.0)
+    << "the driver kept a nonzero output after the delivered deadline";
+}
+
+class InvalidGo2Domain : public Go2DriverFixture,
+                         public ::testing::WithParamInterface<std::string> {};
+
+TEST_P(InvalidGo2Domain, ACommandOfAnotherClockDomainIsRefused) {
+  auto fake = backend();
+  ASSERT_TRUE(fake != nullptr);
+  startTelemetry();
+  ASSERT_TRUE(publishUntilWritten(0.25, std::chrono::seconds(5)));
+
+  const auto before = fake->callCount();
+  // A domain of another boot instance or time namespace: the issue time and
+  // the deadline of that command belong to a different clock and cannot be
+  // compared with the local ones. The refused commands use their own
+  // velocity, so they cannot be confused with the motion that the driver
+  // still holds.
+  publishCommandWith(0.75, 0, 0, false, GetParam());
+
+  ASSERT_TRUE(waitFor(
+    [&] {
+      const auto detail = node_->driverStatus().detail;
+      return detail.find("domain") != std::string::npos;
+    },
+    std::chrono::seconds(3)))
+    << "the driver did not report the mismatched clock domain: "
+    << node_->driverStatus().detail;
+  EXPECT_FALSE(sawValueAfter(before, 0.75))
+    << "the driver wrote a command of a foreign clock domain";
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  InvalidDomains, InvalidGo2Domain,
+  ::testing::Values(std::string("v1:00000000-0000-0000-0000-000000000000:1:2"),
+                    std::string("")));
+
+TEST_F(Go2DriverFixture, AnExplicitStopRefusesAnOlderIssuedMotionCommand) {
+  auto fake = backend();
+  ASSERT_TRUE(fake != nullptr);
+  startTelemetry();
+  ASSERT_TRUE(publishUntilWritten(0.25, std::chrono::seconds(5)));
+
+  // The explicit stop: six exact zeros, a current issue time and no
+  // deadline.
+  const auto before_stop = fake->callCount();
+  const std::int64_t stop_issue = publishStop();
+
+  // The driver stops: the next output is a zero.
+  ASSERT_TRUE(waitFor([&] { return sawZeroAfter(before_stop); },
+                       std::chrono::seconds(3)))
+    << "the driver did not stop on the explicit stop command";
+
+  // A motion command that was issued before the stop must not revive the
+  // motion: the barrier of the stop is higher than its issue time. The
+  // replayed command uses its own velocity, so it cannot be confused with
+  // the motion that the driver held before the stop.
+  const auto after_stop = fake->callCount();
+  publishCommandWith(0.75, stop_issue - 1000000LL,
+                     stop_issue + 4000000000LL, false, domain_);
+
+  ASSERT_TRUE(waitFor(
+    [&] {
+      const auto detail = node_->driverStatus().detail;
+      return detail.find("issue time") != std::string::npos;
+    },
+    std::chrono::seconds(3)))
+    << "the driver did not report the backward issue time: "
+    << node_->driverStatus().detail;
+  EXPECT_FALSE(sawValueAfter(after_stop, 0.75))
+    << "an old motion command revived the motion after the explicit stop";
 }
 
 }  // namespace

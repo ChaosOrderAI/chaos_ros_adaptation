@@ -422,12 +422,27 @@ public:
   /// `still_tracked` answers whether the gateway still correlates the
   /// request; a request that already timed out must never be sent to the
   /// robot.
-  void flush_ready(const std::function<bool(const std::string &)> & still_tracked)
+  ///
+  /// `dispatch_allowed` answers whether the request may still reach the
+  /// robot at all: a deferred goal whose original command TTL elapsed must
+  /// not be sent, even while its correlation is still alive. The predicate is
+  /// optional - without it every tracked request may be dispatched, which
+  /// keeps the direct users of the pool working unchanged.
+  void flush_ready(
+    const std::function<bool(const std::string &)> & still_tracked,
+    const std::function<bool(const std::string &)> & dispatch_allowed = nullptr)
   {
     std::vector<std::string> dispatched;
+    std::vector<std::string> blocked;
     for (const auto & request_id : deferred_) {
       const auto it = busy_.find(request_id);
       if (it == busy_.end() || !still_tracked(request_id)) {
+        continue;
+      }
+      if (dispatch_allowed && !dispatch_allowed(request_id)) {
+        // The request may no longer be sent to the robot. The caller retires
+        // the correlation and releases the observation.
+        blocked.push_back(request_id);
         continue;
       }
       if (it->second->send_if_ready()) {
@@ -435,6 +450,9 @@ public:
       }
     }
     for (const auto & request_id : dispatched) {
+      deferred_.erase(request_id);
+    }
+    for (const auto & request_id : blocked) {
       deferred_.erase(request_id);
     }
   }

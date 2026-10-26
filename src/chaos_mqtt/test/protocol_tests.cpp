@@ -548,4 +548,157 @@ TEST(Protocol, CorrelationsWithDisabledReplayNeverStoresCompleted)
   EXPECT_EQ(records.completed_size(), 0u);
 }
 
+// --- Bounded priority admission ---------------------------------------------
+//
+// The correlation table has an ordinary budget and a small, fixed emergency
+// reserve that only `motion.stop` may use. The tests below pin that contract:
+// an ordinary command never occupies a reserve slot, a stop still enters the
+// dispatch when the ordinary budget is saturated, and the total number of
+// simultaneously correlated requests stays hard bounded.
+
+namespace
+{
+
+Command request(const std::string & request_id, const std::string & name)
+{
+  return Command{request_id, name, 11000, Json::object()};
+}
+
+/// The error code of a rejected admission, or an empty string when the
+/// command was admitted.
+std::string rejection_code(Correlations & records, const Command & command)
+{
+  try {
+    records.start(command, 100, 5);
+  } catch (const CommandError & error) {
+    return error.code();
+  }
+  return std::string();
+}
+
+}  // namespace
+
+TEST(Protocol, OrdinaryBudgetIsSeparateFromTheEmergencyReserve)
+{
+  // The ordinary budget is the number of slots every ordinary command may
+  // occupy; the reserve is added on top of it.
+  Correlations records(2, 8);
+  EXPECT_EQ(records.max_pending_total(), 2u + Correlations::kEmergencyReserve);
+
+  // The default constructor keeps its ordinary budget and gains the reserve.
+  const Correlations defaults;
+  EXPECT_EQ(defaults.max_pending_total(), 128u + Correlations::kEmergencyReserve);
+}
+
+TEST(Protocol, SaturatedOrdinaryBudgetRejectsOrdinaryCommandsButAdmitsStop)
+{
+  Correlations records(2, 8);
+  records.start(request("request_0001", "control.acquire"), 100, 5);
+  records.start(request("request_0002", "navigation.to_pose"), 100, 5);
+  ASSERT_EQ(records.pending_size(), 2u);
+
+  // The ordinary budget is full: an ordinary command is rejected and does
+  // not occupy a slot.
+  EXPECT_EQ(rejection_code(records, request("request_0003", "control.acquire")), "BUSY");
+  EXPECT_EQ(records.pending_size(), 2u) << "a rejected command must not occupy a slot";
+
+  // The emergency stop still enters the dispatch.
+  EXPECT_EQ(rejection_code(records, request("request_0004", "motion.stop")), std::string());
+  EXPECT_EQ(records.pending_size(), 3u);
+}
+
+TEST(Protocol, EmergencyReserveIsBoundedAndExhaustionRejectsTheStop)
+{
+  Correlations records(2, 8);
+  records.start(request("request_0001", "control.acquire"), 100, 5);
+  records.start(request("request_0002", "navigation.to_pose"), 100, 5);
+
+  // The reserve admits exactly `kEmergencyReserve` additional stops.
+  for (std::size_t i = 0; i < Correlations::kEmergencyReserve; ++i) {
+    EXPECT_EQ(
+      rejection_code(
+        records, request("stop_" + std::to_string(i) + "_00", "motion.stop")),
+      std::string());
+  }
+  EXPECT_EQ(records.pending_size(), 2u + Correlations::kEmergencyReserve);
+
+  // The reserve is exhausted: even a stop is rejected, so the total stays
+  // hard bounded.
+  EXPECT_EQ(rejection_code(records, request("stop_full", "motion.stop")), "BUSY");
+  EXPECT_EQ(records.pending_size(), 2u + Correlations::kEmergencyReserve);
+}
+
+TEST(Protocol, OnlyMotionStopMayUseTheEmergencyReserve)
+{
+  Correlations records(1, 8);
+  records.start(request("request_0001", "control.acquire"), 100, 5);
+
+  // Every other command - the lease acquisition included - respects the
+  // ordinary budget only and can never occupy a reserve slot.
+  for (const std::string & name : {"control.acquire", "control.renew", "control.release",
+      "motion.velocity", "navigation.to_pose", "flight.takeoff", "flight.land", "system.describe"})
+  {
+    EXPECT_EQ(rejection_code(records, request("request_0002", name)), "BUSY")
+      << name << " must not use the emergency reserve";
+  }
+  EXPECT_EQ(records.pending_size(), 1u);
+}
+
+TEST(Protocol, FinishingARequestFreesItsSlotForTheNextCommand)
+{
+  Correlations records(1, 8);
+  records.start(request("request_0001", "control.acquire"), 100, 5);
+  EXPECT_EQ(rejection_code(records, request("request_0002", "control.acquire")), "BUSY");
+
+  // A finished request releases its slot: the next command is admitted again.
+  records.finish("request_0001", Json::object());
+  EXPECT_EQ(records.pending_size(), 0u);
+  EXPECT_EQ(rejection_code(records, request("request_0002", "control.acquire")), std::string());
+  EXPECT_EQ(records.pending_size(), 1u);
+}
+
+TEST(Protocol, DuplicateStopIsRejectedEvenWithAFreeReserve)
+{
+  Correlations records(2, 8);
+  records.start(request("request_0001", "motion.stop"), 100, 5);
+
+  // The reserve is free, but the request is already tracked: the emergency
+  // path does not bypass the duplicate check.
+  EXPECT_EQ(rejection_code(records, request("request_0001", "motion.stop")), "DUPLICATE");
+  EXPECT_EQ(records.pending_size(), 1u);
+
+  // A completed stop is a duplicate as well.
+  records.finish("request_0001", Json::object());
+  EXPECT_EQ(rejection_code(records, request("request_0001", "motion.stop")), "DUPLICATE");
+  EXPECT_EQ(records.pending_size(), 0u);
+}
+
+TEST(Protocol, DuplicateIsDetectedBeforeTheCapacityCheck)
+{
+  // A saturated table reports the duplicate of a tracked request instead of
+  // the capacity error: the replay must never look like a fresh admission.
+  Correlations records(1, 8);
+  records.start(request("request_0001", "motion.stop"), 100, 5);
+  EXPECT_EQ(rejection_code(records, request("request_0001", "motion.stop")), "DUPLICATE");
+  EXPECT_EQ(records.pending_size(), 1u);
+}
+
+TEST(Protocol, EmergencyReserveAdmissionSurvivesAnExhaustedOrdinaryBudget)
+{
+  // The reserve is independent of the ordinary budget: the stop occupies a
+  // reserve slot and the ordinary command still waits for a free ordinary
+  // slot.
+  Correlations records(2, 8);
+  records.start(request("request_0001", "control.acquire"), 100, 5);
+  records.start(request("request_0002", "control.acquire"), 100, 5);
+  EXPECT_EQ(rejection_code(records, request("request_0003", "motion.stop")), std::string());
+  EXPECT_EQ(rejection_code(records, request("request_0004", "control.acquire")), "BUSY");
+
+  // Releasing the stop frees a reserve slot again, not an ordinary one.
+  records.finish("request_0003", Json::object());
+  EXPECT_EQ(records.pending_size(), 2u);
+  EXPECT_EQ(rejection_code(records, request("request_0004", "control.acquire")), "BUSY");
+  EXPECT_EQ(rejection_code(records, request("request_0005", "motion.stop")), std::string());
+}
+
 }  // namespace

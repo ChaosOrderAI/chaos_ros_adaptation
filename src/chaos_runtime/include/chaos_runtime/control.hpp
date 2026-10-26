@@ -4,7 +4,8 @@
 //
 // Invariants are encapsulated: lease owner/token and expiry values can be
 // read but never mutated from outside. The runtime interacts through
-// lease()/velocity()/require()/expire()/clearVelocity() only.
+// lease()/velocity()/velocityNs()/require()/expire()/revoke()/clearVelocity()
+// only.
 #pragma once
 
 #include <array>
@@ -100,13 +101,40 @@ public:
                                        double duration_s = 5.0);
 
   // Validates and arms a velocity sample. Throws Rejected on any violation;
-  // a rejected packet never modifies the velocity expiry.
+  // a rejected packet never modifies the velocity expiry or the per-lease
+  // source-timestamp watermark. Kept for double-precision callers; it
+  // scales the stamps to integer nanoseconds with a bound that is checked
+  // BEFORE the integer conversion and delegates to velocityNs(). The
+  // validation order is part of the contract: the token, the TTL, the
+  // frame and the velocity components are rejected before the source
+  // stamp, so a bad token stays NO_CONTROL and a bad frame stays
+  // INVALID_FRAME even when the stamp is unusable.
   void velocity(const std::string & token, double stamp_s, double ros_now_s,
                 double valid_for_s, const std::string & frame,
                 const std::string & base_frame,
                 const std::array<double, 6> & values);
 
+  // Same contract as velocity() with the source stamp and ROS now carried as
+  // integer nanoseconds, preserving adjacent-1ns ordering. Within one lease
+  // the source stamp must strictly increase; an equal or backward stamp is
+  // rejected with STALE_COMMAND. The watermark survives renew and resets on
+  // a new acquire (and on release/stop revocation).
+  void velocityNs(const std::string & token, std::int64_t stamp_ns,
+                  std::int64_t ros_now_ns, double valid_for_s,
+                  const std::string & frame, const std::string & base_frame,
+                  const std::array<double, 6> & values);
+
   bool velocityTimedOut() const;
+
+  // Revokes the current lease: the owner, the token, the lease expiry, the
+  // armed velocity sample and the per-lease stamp watermark are cleared.
+  // This is the internal-domain operation of an accepted stop. It neither
+  // re-reads the clock nor re-validates the caller, so a lease that
+  // expires between the caller's token check and the revocation cannot
+  // turn an accepted stop into NO_CONTROL and skip the halt output. The
+  // caller must validate the token first: an invalid token or an expired
+  // request must never revoke a valid lease.
+  void revoke();
 
   // Read-only views of the guarded state. Values are returned by value so
   // callers never observe a partially updated lease.
@@ -129,6 +157,10 @@ private:
   std::string token_;
   double expires_ = 0.0;
   double velocity_expires_ = 0.0;
+  // Highest accepted source stamp for the current lease; 0 means "none".
+  // Strictly increasing per lease so a replayed command is stale even while
+  // fresh. Committed only after every other validation has passed.
+  std::int64_t stamp_watermark_ns_ = 0;
 };
 
 // Navigation target validation. Yaw-only planar orientation for the first

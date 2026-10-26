@@ -50,6 +50,19 @@ namespace chaos_sdk
 /// and must not block its only worker waiting for these futures. wait_ready()
 /// explicitly waits for discovery; standalone close() joins its worker.
 ///
+/// The feedback callbacks of the action goals run on a process-wide pool of
+/// bounded workers that is independent of this client: the executor of the
+/// client only copies the feedback value and hands it to the pool, so a slow
+/// or blocking user callback never occupies the executor. The callbacks of
+/// one client are serialized: the pool runs them one after another. A newer
+/// sample replaces the sample of the same goal that is still queued, and a
+/// sample is dropped when the global budget of the queued samples is
+/// exhausted or when the pool is contended. The pool belongs to the process:
+/// close() never joins it, and a callback that already started keeps running
+/// after the client was closed. A sample that was retired together with its
+/// goal is discarded instead of executed: only a callback that a worker
+/// already claimed may still run.
+///
 /// Thread safety: all public members may be called from multiple threads.
 /// The node/executor lifetime is owned by the caller when an external node is
 /// supplied; use create_standalone() to let the client own both.
@@ -97,10 +110,28 @@ public:
   std::shared_future<chaos_interfaces::srv::GetDescription::Response> describe();
   std::shared_future<chaos_interfaces::srv::ControlLease::Response> acquire(
     const std::string & owner, double duration_s = 5.0, std::optional<double> ttl_s = std::nullopt);
+  /// Renew the current lease. A renewal never rotates the token.
   std::shared_future<chaos_interfaces::srv::ControlLease::Response> renew(
     double duration_s = 5.0, std::optional<double> ttl_s = std::nullopt);
+  /// Release the current lease.
+  ///
+  /// The answer of a release that arrives after a new lease was acquired does
+  /// not clear that newer lease.
   std::shared_future<chaos_interfaces::srv::ControlLease::Response> release(
     std::optional<double> ttl_s = std::nullopt);
+  /// Stop the motion of the asset and end the control session.
+  ///
+  /// A stop invalidates the lease: the runtime revokes the token before it
+  /// halts the motion, so the cached token is dropped as soon as the runtime
+  /// accepted the stop. A stop that reports STOP_FAILED for a failed stop
+  /// output ends the session as well, because the revocation happens before
+  /// the halt. A rejected stop (an unauthorized or an expired token) never
+  /// reached the revocation and keeps the lease.
+  ///
+  /// The client never acquires a lease implicitly: call acquire() again
+  /// before the next motion command. A stop whose answer did not arrive
+  /// before the local response timeout leaves the remote state unknown; the
+  /// client does not reacquire on its own.
   std::shared_future<chaos_interfaces::srv::Stop::Response> stop(
     std::optional<std::string> request_id = std::nullopt,
     std::optional<double> ttl_s = std::nullopt);
@@ -121,14 +152,44 @@ public:
   /// goal; rejection resolves to nullptr. An accepted task exposes the typed
   /// result and cancellation. The SDK owns ROS resources while observing it;
   /// a retained completed task preserves history without retaining the client.
+  ///
+  /// The feedback callback runs on a worker of the feedback pool, never on
+  /// the executor of the client. The callbacks of one client are serialized,
+  /// so a callback that blocks delays the later samples of that client: the
+  /// newest sample replaces the queued one, and a sample is dropped when the
+  /// global budget of the pool is exhausted.
+  ///
+  /// A callback is never force-cancelled: a callback that blocks forever
+  /// keeps its worker and its captures until it returns, and it occupies one
+  /// of the bounded workers of the process. The lifetime of the objects that
+  /// a callback captures stays the responsibility of the caller. Own shared
+  /// data by value and prefer weak client references: a strong client capture
+  /// can retain the client until its operation retires and all claimed
+  /// callbacks return. The destruction of a capture happens outside the locks of the
+  /// SDK, but the destructor of an arbitrary capture may block for an
+  /// arbitrary time.
+  ///
+  /// A cancellation request only ends the cancellation request itself: the
+  /// server confirms the cancellation of a goal, but the goal keeps its own
+  /// observation until it reaches a terminal state, times out or is closed.
+  /// A cancellation request that runs into the local response timeout retires
+  /// the observation of the goal instead: the state of the task becomes
+  /// chaos_sdk::TaskState::TIMED_OUT, the result future of the goal fails
+  /// with chaos_sdk::TimeoutError and the ROS resources of that goal are
+  /// released. A goal that already finished keeps its terminal state: a late
+  /// answer of the server never overwrites it.
   std::shared_future<std::shared_ptr<NavigationTask>> navigate(
     const geometry_msgs::msg::PoseStamped & target,
     std::function<void (NavigatePose::Feedback)> feedback_callback = nullptr,
     std::optional<double> ttl_s = std::nullopt);
+  /// Send a takeoff goal. The feedback callback behaves like the one of
+  /// navigate().
   std::shared_future<std::shared_ptr<FlightTask>> takeoff(
     double altitude_m,
     std::function<void (Flight::Feedback)> feedback_callback = nullptr,
     std::optional<double> ttl_s = std::nullopt);
+  /// Send a land goal. The feedback callback behaves like the one of
+  /// navigate().
   std::shared_future<std::shared_ptr<FlightTask>> land(
     std::function<void (Flight::Feedback)> feedback_callback = nullptr,
     std::optional<double> ttl_s = std::nullopt);
@@ -148,6 +209,13 @@ public:
   double response_timeout_s() const;
 
   /// Local observation window for an accepted action goal, in seconds.
+  ///
+  /// When the window elapses, the observation of the goal ends on its own:
+  /// the result future of the goal fails with chaos_sdk::TimeoutError and the
+  /// state of the task becomes chaos_sdk::TaskState::TIMED_OUT. Both are
+  /// published together, so a result future that is ready already exposes the
+  /// terminal state of the goal. The ROS resources of the goal are released
+  /// afterwards, and the remote execution state stays unknown.
   void set_action_timeout(double seconds);
   double action_timeout_s() const;
 
@@ -169,6 +237,22 @@ public:
   /// close(), new requests fail with ClientClosedError. Read-only history
   /// remains accessible. Local close does not cancel remote motion; use the
   /// explicit stop/cancel APIs when remote termination is required.
+  ///
+  /// A standalone client (create_standalone()) owns its node and its
+  /// executor: close() cancels that executor and joins its thread. A client
+  /// that borrows the node of the application never joins an executor, the
+  /// application stays in charge of the spinning of its node. The feedback
+  /// workers of the process belong to neither of them: close() never joins
+  /// them and never waits for a callback that already started, so a callback
+  /// that is still running keeps its captures until it returns.
+  ///
+  /// The close publishes the terminal state of the observed goals and
+  /// settles their futures before it releases the ROS resources. The
+  /// terminal state of a goal that was closed is unknown: the local close
+  /// says nothing about the remote execution. The capture of a user callback
+  /// is released after those futures were settled and outside of every lock
+  /// of the client, so a destructor of the caller never runs under a lock of
+  /// the client.
   void close();
 
 private:

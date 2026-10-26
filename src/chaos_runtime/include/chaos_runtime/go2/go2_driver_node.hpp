@@ -12,6 +12,12 @@
 // the telemetry-loss halt. The odometry carries the ROS acquisition stamp of
 // the sample, never a re-stamped "now".
 //
+// Transport clock semantics: the command carries its own absolute Linux
+// CLOCK_MONOTONIC issue time and deadline, plus the clock-domain identity
+// of the boot instance and time namespace they belong to. The driver
+// compares the domain with its own identity, takes the deadline exactly as
+// delivered and never converts, re-ages or reconstructs it.
+//
 // Frames: the velocity command must be expressed in the asset base frame,
 // and the odometry uses the asset odom frame with the base frame as its
 // child frame.
@@ -31,7 +37,7 @@
 #include <memory>
 #include <string>
 
-#include <geometry_msgs/msg/twist_stamped.hpp>
+#include <chaos_interfaces/msg/driver_velocity_command.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 
@@ -74,7 +80,7 @@ public:
   Status driverStatus() const { return core_->status(); }
 
 private:
-  void onCommand(const geometry_msgs::msg::TwistStamped & message);
+  void onCommand(const chaos_interfaces::msg::DriverVelocityCommand & message);
   void tick();
 
   runtime::AssetConfig asset_;
@@ -85,7 +91,8 @@ private:
   // source) is destroyed before the core that owns the callback target.
   std::shared_ptr<Go2SdkBackend> backend_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
-  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_sub_;
+  rclcpp::Subscription<chaos_interfaces::msg::DriverVelocityCommand>::SharedPtr
+    cmd_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
   bool closing_ = false;
   std::string logged_fault_;

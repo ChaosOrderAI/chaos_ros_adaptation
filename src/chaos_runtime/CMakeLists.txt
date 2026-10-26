@@ -13,6 +13,10 @@ find_package(std_msgs REQUIRED)
 # explicit: it is found, linked and exported. It is a header-only library;
 # the pure domain targets stay free of ROS and of DDS.
 find_package(nlohmann_json 3.11 CONFIG REQUIRED)
+# The domain library owns the observation service, whose workers are joinable
+# threads. Threads is found, linked and exported so an installed consumer of
+# the exported core resolves the same dependency.
+find_package(Threads REQUIRED)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,13 +31,15 @@ add_library(chaos_runtime_core
   src/asset_config.cpp
   src/asset_validation.cpp
   src/coordinator.cpp
+  src/observation.cpp
   src/adapters/mock_adapter.cpp)
 target_compile_features(chaos_runtime_core PUBLIC cxx_std_17)
 target_include_directories(chaos_runtime_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(chaos_runtime_core PUBLIC chaos_control
-  nlohmann_json::nlohmann_json)
+  nlohmann_json::nlohmann_json
+  Threads::Threads)
 
 add_library(chaos_control src/control.cpp)
 target_compile_features(chaos_control PUBLIC cxx_std_17)
@@ -105,13 +111,33 @@ if(CHAOS_GO2_WITH_UNITREE_SDK)
   ament_export_dependencies(unitree_sdk2)
 endif()
 
+# --- Native host shutdown helper -------------------------------------------
+#
+# The host helper owns the scoped signal handlers, the single host supervisor
+# thread, the outer shutdown deadline and the one ordered cleanup path. It
+# terminates the embedding process, so it is compiled ONLY into the host
+# executables: it must never become part of chaos_runtime_core or of the
+# reusable node library, where it would terminate every embedding process.
+# The child harness of the host test task links the same target, so the host
+# and the harness run the same production code.
+add_library(chaos_runtime_host STATIC src/runtime_shutdown.cpp)
+target_compile_features(chaos_runtime_host PUBLIC cxx_std_17)
+target_include_directories(chaos_runtime_host PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(chaos_runtime_host PUBLIC chaos_runtime_core
+  Threads::Threads)
+
 add_executable(robot_runtime src/robot_runtime_main.cpp)
-target_link_libraries(robot_runtime PRIVATE chaos_runtime_ros)
+target_link_libraries(robot_runtime PRIVATE chaos_runtime_host chaos_runtime_ros)
 
 add_executable(go2_driver src/go2_driver_main.cpp)
 target_link_libraries(go2_driver PRIVATE chaos_go2_ros)
 
-install(DIRECTORY include/ DESTINATION include)
+# The host shutdown helper is internal: it owns the terminating host paths,
+# so its header stays out of the installed public surface. The package build
+# and the child harness of the host test task still see it.
+install(DIRECTORY include/ DESTINATION include
+  PATTERN "runtime_shutdown.hpp" EXCLUDE)
 install(TARGETS chaos_control chaos_go2_core chaos_runtime_core chaos_runtime_ros
   chaos_go2_ros
   EXPORT export_${PROJECT_NAME}
@@ -123,7 +149,7 @@ install(TARGETS robot_runtime go2_driver
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
 ament_export_dependencies(chaos_core chaos_interfaces rclcpp rclcpp_action
-  geometry_msgs nav_msgs std_msgs nlohmann_json)
+  geometry_msgs nav_msgs std_msgs nlohmann_json Threads)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
@@ -134,6 +160,8 @@ if(BUILD_TESTING)
   # The domain test links the ROS-free domain library only.
   ament_add_gtest(test_coordinator_cpp test/test_coordinator_cpp.cpp)
   target_link_libraries(test_coordinator_cpp chaos_runtime_core)
+  ament_add_gtest(test_coordinator_observation_cpp test/test_coordinator_observation_cpp.cpp TIMEOUT 90)
+  target_link_libraries(test_coordinator_observation_cpp chaos_runtime_core)
   ament_add_gtest(test_runtime_ros_cpp test/test_runtime_ros_cpp.cpp)
   target_link_libraries(test_runtime_ros_cpp chaos_runtime_ros)
   ament_add_gtest(test_ros_adapters_cpp test/test_ros_adapters_cpp.cpp)
@@ -142,6 +170,40 @@ if(BUILD_TESTING)
   target_link_libraries(test_asset_validation_cpp chaos_runtime_core)
   ament_add_gtest(test_go2_driver_ros_cpp test/test_go2_driver_ros_cpp.cpp)
   target_link_libraries(test_go2_driver_ros_cpp chaos_go2_ros)
+  # The driver deadline helper is a ROS-free header-only facility; its test
+  # links the ROS-free domain library only.
+  ament_add_gtest(test_driver_deadline_cpp test/test_driver_deadline_cpp.cpp)
+  target_link_libraries(test_driver_deadline_cpp chaos_runtime_core)
+  # The observation service is a ROS-free facility of the domain library; its
+  # test links the ROS-free domain library only. The generous finite timeout
+  # contains an accidental deadlock instead of hanging the whole suite.
+  ament_add_gtest(test_observation_cpp test/test_observation_cpp.cpp TIMEOUT 90)
+  target_link_libraries(test_observation_cpp chaos_runtime_core)
+
+  # The host shutdown child harness: a real executable that runs the SAME
+  # production host helper (chaos_runtime_host) against the REAL observation
+  # service. The terminating helper code stays inside this executable, it
+  # never becomes part of a core or node library. The ROS runtime is linked
+  # because one harness path uses a real ROS context and executor.
+  add_executable(observation_shutdown_child test/observation_shutdown_child.cpp)
+  target_link_libraries(observation_shutdown_child PRIVATE
+    chaos_runtime_host
+    rclcpp::rclcpp)
+  target_compile_definitions(observation_shutdown_child PRIVATE
+    CHAOS_SHUTDOWN_MARKER_FD=3
+    CHAOS_SHUTDOWN_COMMAND_FD=4)
+
+  # The parent gtest drives the child through a small ordered pipe protocol.
+  # The child path is a target generated absolute path, so the test never
+  # assumes a working directory, and the dependency keeps the child built
+  # before the test runs. The finite timeout contains a hung child.
+  ament_add_gtest(test_observation_shutdown_cpp test/test_observation_shutdown_cpp.cpp TIMEOUT 120)
+  target_link_libraries(test_observation_shutdown_cpp chaos_runtime_host)
+  target_compile_definitions(test_observation_shutdown_cpp PRIVATE
+    CHAOS_SHUTDOWN_MARKER_FD=3
+    CHAOS_SHUTDOWN_COMMAND_FD=4
+    CHAOS_SHUTDOWN_CHILD_PATH="$<TARGET_FILE:observation_shutdown_child>")
+  add_dependencies(test_observation_shutdown_cpp observation_shutdown_child)
 endif()
 
 ament_package()

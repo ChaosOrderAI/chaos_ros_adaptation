@@ -446,15 +446,29 @@ Json response(
   };
 }
 
-void Correlations::start(const Command & command, double now, double timeout_s)
+void Correlations::start(
+  const Command & command, double now, double timeout_s, double dispatch_deadline)
 {
+  // The duplicate check runs before the capacity check: a replayed request
+  // is a duplicate even when the table is saturated. The reserve relaxes the
+  // capacity check only and keeps the validation order: the parser checked
+  // the envelope and the token shape before the command reached this class,
+  // the runtime checks the control ownership after the dispatch.
   if (pending_.count(command.request_id) > 0 || is_completed(command.request_id)) {
     throw CommandError("DUPLICATE", "request already tracked");
   }
-  if (pending_.size() >= max_pending_) {
-    throw CommandError("BUSY", "maximum pending requests reached");
+  const bool emergency = is_emergency_command(command.name);
+  // An ordinary command may only occupy the ordinary budget, so it can
+  // never eat a reserve slot. A stop may additionally use the reserve.
+  const std::size_t limit = emergency ? max_pending_total() : max_pending_;
+  if (pending_.size() >= limit) {
+    throw CommandError(
+      "BUSY",
+      emergency ? "emergency stop reserve exhausted" : "maximum pending requests reached");
   }
-  pending_.emplace(command.request_id, Pending{command, now + timeout_s, false, std::nullopt, {}});
+  pending_.emplace(
+    command.request_id,
+    Pending{command, now + timeout_s, dispatch_deadline, false, std::nullopt, {}});
 }
 
 void Correlations::finish(const std::string & request_id, const Json & reply, const Json & event)

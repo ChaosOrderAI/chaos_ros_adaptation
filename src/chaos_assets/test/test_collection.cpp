@@ -2,7 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 #include "chaos_assets/collection.hpp"
 
@@ -10,6 +12,26 @@ using chaos::assets::ConfigurationError;
 using chaos::assets::Json;
 
 namespace {
+
+bool hasTopic(const std::vector<std::string>& topics, const std::string& topic) {
+  return std::find(topics.begin(), topics.end(), topic) != topics.end();
+}
+
+std::vector<std::string> resolvedTopics(const Json& declaration, const Json& asset) {
+  const Json result = chaos::assets::resolve_collection(Json(Json::object()), declaration, "/models",
+                                                        "/inventory", asset);
+  return result.at("topics").get<std::vector<std::string>>();
+}
+
+Json disabledCameraSensor() {
+  Json sensor = Json::object();
+  sensor["enabled"] = false;
+  sensor["driver"] = Json::object({{"mode", "mock"}});
+  Json stream = Json::object();
+  stream["topic"] = "/robots/unit/sensors/camera/image";
+  sensor["streams"] = Json::object({{"camera", stream}});
+  return sensor;
+}
 
 Json asset_fixture() {
   Json asset = Json::object();
@@ -139,4 +161,85 @@ TEST(Collection, ResolvesExplicitTopicsAndRejectsDuplicates) {
   EXPECT_THROW(chaos::assets::resolve_collection(Json(Json::object()), duplicated, "/models", "/inventory",
                                                  asset_fixture()),
                ConfigurationError);
+}
+
+TEST(Collection, IncludeSensorsTrueRecordsEnabledStreamsAndMetadata) {
+  Json declaration = Json::object();
+  declaration["include_sensors"] = true;
+  const std::vector<std::string> topics = resolvedTopics(declaration, asset_fixture());
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/sensors/imu/data"));
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/sensors/description"));
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/sensors/diagnostics"));
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/data_collection/status"));
+}
+
+TEST(Collection, IncludeSensorsFalseExcludesEnabledSensorStreamsAndMetadata) {
+  Json declaration = Json::object();
+  declaration["include_sensors"] = false;
+  const std::vector<std::string> topics = resolvedTopics(declaration, asset_fixture());
+  // The automatic sensor stream and the sensor description/diagnostics
+  // topics must all be gone; unrelated automatic topics stay.
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/imu/data"));
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/description"));
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/diagnostics"));
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/state"));
+  EXPECT_TRUE(hasTopic(topics, "/tf"));
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/robot_description"));
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/data_collection/status"));
+}
+
+TEST(Collection, DisabledSensorsContributeNothingEvenWhenSensorsAreIncluded) {
+  Json asset = asset_fixture();
+  asset["sensors"]["imu"]["enabled"] = false;
+  asset["sensors"]["camera"] = disabledCameraSensor();
+  Json declaration = Json::object();
+  declaration["include_sensors"] = true;
+  const std::vector<std::string> topics = resolvedTopics(declaration, asset);
+  // No enabled sensor: no stream and no description/diagnostics topics.
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/imu/data"));
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/camera/image"));
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/description"));
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/diagnostics"));
+}
+
+TEST(Collection, MixedSensorsRecordOnlyEnabledStreams) {
+  Json asset = asset_fixture();
+  asset["sensors"]["camera"] = disabledCameraSensor();
+  Json declaration = Json::object();
+  declaration["include_sensors"] = true;
+  const std::vector<std::string> topics = resolvedTopics(declaration, asset);
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/sensors/imu/data"));
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/camera/image"));
+  // At least one enabled sensor keeps the description/diagnostics topics.
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/sensors/description"));
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/sensors/diagnostics"));
+}
+
+TEST(Collection, IncludeSensorsFalseExcludesSensorStreamsFromMixedSensors) {
+  Json asset = asset_fixture();
+  asset["sensors"]["camera"] = disabledCameraSensor();
+  asset["sensors"]["camera"]["enabled"] = true;
+  Json declaration = Json::object();
+  declaration["include_sensors"] = false;
+  const std::vector<std::string> topics = resolvedTopics(declaration, asset);
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/imu/data"));
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/camera/image"));
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/description"));
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/diagnostics"));
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/state"));
+}
+
+TEST(Collection, ExplicitTopicsOverrideIncludeSensors) {
+  // include_sensors=false must not strip topics that were named explicitly.
+  Json declaration = Json::object();
+  declaration["include_sensors"] = false;
+  declaration["topics"] = Json::array({Json("/custom/topic"), Json("/robots/unit/sensors/imu/data")});
+  const std::vector<std::string> topics = resolvedTopics(declaration, asset_fixture());
+  EXPECT_TRUE(hasTopic(topics, "/custom/topic"));
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/sensors/imu/data"));
+  // Only the explicit topics plus the always-appended status topic.
+  EXPECT_EQ(topics.size(), 3u);
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/sensors/description"));
+  EXPECT_FALSE(hasTopic(topics, "/robots/unit/state"));
+  EXPECT_TRUE(hasTopic(topics, "/robots/unit/data_collection/status"));
 }

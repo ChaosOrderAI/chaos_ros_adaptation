@@ -7,6 +7,7 @@
 #include <limits>
 #include <utility>
 
+#include <chaos_interfaces/msg/driver_velocity_command.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -16,6 +17,7 @@
 #include "chaos_core/time.hpp"
 #include "chaos_runtime/adapters/mock_adapter.hpp"
 #include "chaos_runtime/asset_validation.hpp"
+#include "chaos_runtime/driver_deadline.hpp"
 
 namespace chaos::runtime {
 
@@ -360,6 +362,11 @@ Go2Adapter::Go2Adapter(rclcpp::Node & node, const AssetConfig & asset)
     : limits_(asset.limits),
       frames_(asset.frames),
       base_frame_(asset.frames.base),
+      // The clock-domain identity is read once, here, and cached for the
+      // lifetime of the adapter. A failure throws out of the constructor: an
+      // adapter must never publish a command with an empty or guessed domain,
+      // because the driver compares the domain before it admits any motion.
+      clock_domain_id_(driver_deadline::localClockDomainId()),
       ros_now_ns_([&node] {
         return node.get_clock()->now().nanoseconds();
       }),
@@ -370,7 +377,7 @@ Go2Adapter::Go2Adapter(rclcpp::Node & node, const AssetConfig & asset)
   const std::string odom_topic =
     requireStringOption(asset.options, "odom_topic", "Go2");
   // A single pending command cannot accumulate a queue of old motion.
-  publisher_ = node.create_publisher<geometry_msgs::msg::TwistStamped>(
+  publisher_ = node.create_publisher<chaos_interfaces::msg::DriverVelocityCommand>(
     cmd_topic, rclcpp::QoS(1));
   odom_sub_ = node.create_subscription<nav_msgs::msg::Odometry>(
     odom_topic, rclcpp::SensorDataQoS(),
@@ -421,34 +428,114 @@ void Go2Adapter::validateVelocity(const std::array<double, 6> & values) {
                             "Go2 velocity must contain six finite components");
     }
   }
-  if (std::abs(values[2]) > 1e-9 || std::abs(values[3]) > 1e-9 ||
-      std::abs(values[4]) > 1e-9) {
+  if (values[2] != 0.0 || values[3] != 0.0 || values[4] != 0.0) {
     throw chaos::Rejected("UNSUPPORTED",
                           "Go2 accepts linear x/y and angular z only");
   }
 }
 
-void Go2Adapter::command(const std::array<double, 6> & values) {
-  geometry_msgs::msg::TwistStamped message;
-  const std::int64_t now = ros_now_ns_();
-  message.header.stamp.sec = static_cast<std::int32_t>(now / 1000000000LL);
-  message.header.stamp.nanosec = static_cast<std::uint32_t>(now % 1000000000LL);
+void Go2Adapter::publishCommand(const std::array<double, 6> & values,
+                                std::int64_t source_stamp_ns,
+                                std::int64_t issued_mono_ns,
+                                std::int64_t expires_mono_ns, bool stop) {
+  chaos_interfaces::msg::DriverVelocityCommand message;
+  // The source stamp is provenance only: it is carried unchanged and it
+  // never extends the deadline below.
+  std::int64_t sec = 0;
+  std::int64_t nanosec = 0;
+  chaos::rosStampFromNs(source_stamp_ns, sec, nanosec);
+  message.header.stamp.sec = static_cast<std::int32_t>(sec);
+  message.header.stamp.nanosec = static_cast<std::uint32_t>(nanosec);
   message.header.frame_id = base_frame_;
-  message.twist.linear.x = values[0];
-  message.twist.linear.y = values[1];
-  message.twist.angular.z = values[5];
+  message.clock_domain_id = clock_domain_id_;
+  message.issued_monotonic_ns = issued_mono_ns;
+  message.expires_monotonic_ns = expires_mono_ns;
+  message.stop = stop;
+  message.velocity.linear.x = values[0];
+  message.velocity.linear.y = values[1];
+  message.velocity.linear.z = values[2];
+  message.velocity.angular.x = values[3];
+  message.velocity.angular.y = values[4];
+  message.velocity.angular.z = values[5];
   publisher_->publish(message);
+}
+
+void Go2Adapter::publishStop() {
+  // An explicit stop barrier: six exact zeros, the current actual issue time
+  // and no deadline. It is never routed through the motion validity rules,
+  // so it needs neither a motion expiry nor fresh telemetry.
+  const std::int64_t issued = driver_deadline::monotonicNowNs();
+  publishCommand({0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, 0, issued, 0, true);
 }
 
 void Go2Adapter::setVelocity(const std::array<double, 6> & values) {
   validateVelocity(values);
+  bool nonzero = false;
+  for (double value : values) {
+    if (value != 0.0) {
+      nonzero = true;
+      break;
+    }
+  }
+  if (nonzero) {
+    // A motion command without an absolute deadline is unbounded in time: the
+    // driver would have no instant at which it must stop. The deadline API is
+    // the only admitted path for Go2 motion, so the legacy path fails closed
+    // instead of inventing a validity interval of its own.
+    throw chaos::Rejected("INVALID_ARGUMENT",
+                          "Go2 motion requires an absolute monotonic deadline");
+  }
+  // A zero command uses the existing controlled-stop path.
+  controlledStop();
+}
+
+void Go2Adapter::setVelocityUntil(const std::array<double, 6> & values,
+                                  std::int64_t source_stamp_ns,
+                                  std::int64_t expires_mono_ns) {
+  validateVelocity(values);
+  if (source_stamp_ns <= 0) {
+    throw chaos::Rejected("INVALID_ARGUMENT",
+                          "Go2 motion requires a positive source stamp");
+  }
+  // The original source stamp must fit the ROS header range and it is
+  // preserved exactly: the driver must be able to see the stamp that the
+  // coordinator admitted. The split is exact, so the recombined value is
+  // the source stamp itself and only the ROS range is checked here.
+  std::int64_t sec = 0;
+  std::int64_t nanosec = 0;
+  chaos::rosStampFromNs(source_stamp_ns, sec, nanosec);
+  std::int64_t header_ns = 0;
+  if (!chaos::rosStampToNs(sec, nanosec, header_ns)) {
+    throw chaos::Rejected("INVALID_ARGUMENT",
+                          "Go2 motion source stamp does not fit the ROS header "
+                          "range");
+  }
+  if (expires_mono_ns <= 0) {
+    throw chaos::Rejected("INVALID_ARGUMENT",
+                          "Go2 motion requires an absolute monotonic deadline");
+  }
+  // The issue time is a NEW actual CLOCK_MONOTONIC reading, taken here at
+  // publish time. It is never the coordinator's anchor and never a fabricated
+  // successor of the previous issue time.
+  const std::int64_t issued = driver_deadline::monotonicNowNs();
+  if (issued <= 0 || issued >= expires_mono_ns) {
+    throw chaos::Rejected("STALE_COMMAND",
+                          "Go2 motion deadline has already passed");
+  }
+  // The output ownership is claimed before the publish, so that a publish
+  // that fails after it reached the transport can still be stopped by a
+  // retry. The ownership is released only by a successful stop.
   output_owned_ = true;
-  command(values);
+  // The deadline is published unchanged. A later issue time never extends it.
+  publishCommand(values, source_stamp_ns, issued, expires_mono_ns, false);
 }
 
 void Go2Adapter::stop() {
   if (output_owned_) {
-    command({0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+    publishStop();
+    // The ownership is released only after the stop output was actually
+    // published. A failing publish keeps it, so a retry can still stop an
+    // output that may have reached the transport.
     output_owned_ = false;
   }
 }

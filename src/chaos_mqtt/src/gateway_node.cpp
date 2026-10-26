@@ -332,8 +332,14 @@ void GatewayNode::command_callback(const std_msgs::msg::String::SharedPtr messag
     }
   }
   Command command;
+  // Anchor first so parsing and clock sampling consume the dispatch budget.
+  const double now_mono = monotonic_now_s();
+  // The wall clock is read once: the parse and the remaining TTL of the
+  // command have to describe the same instant, otherwise a clock step
+  // between them could change the validity of the command.
+  const std::int64_t now_ms = epoch_ms_now();
   try {
-    command = parse_command(message->data, capabilities_, epoch_ms_now(), clock_skew_ms_);
+    command = parse_command(message->data, capabilities_, now_ms, clock_skew_ms_);
   } catch (const CommandError & error) {
     if (identity) {
       Json reply;
@@ -350,10 +356,16 @@ void GatewayNode::command_callback(const std_msgs::msg::String::SharedPtr messag
     }
     return;
   }
+  // The original TTL of the command bounds its dispatch. The remaining TTL
+  // is captured on the monotonic clock, so a later wall clock rollback can
+  // neither shorten nor extend the deadline of a deferred dispatch.
+  const double remaining_ttl_s =
+    (command.deadline_ms - static_cast<double>(now_ms)) / 1000.0;
+  const double dispatch_deadline = now_mono + std::max(0.0, remaining_ttl_s);
   {
     const std::lock_guard<std::mutex> guard(records_mutex_);
     try {
-      records_.start(command, monotonic_now_s(), request_timeout_s_);
+      records_.start(command, now_mono, request_timeout_s_, dispatch_deadline);
     } catch (const CommandError & error) {
       Json reply = response(command.request_id, command.name, false, error.code(), error.what());
       records_.finish(command.request_id, reply);
@@ -541,10 +553,13 @@ void GatewayNode::send_typed_action(const Command & command, ActionSlotPool<Acti
     service_error(request_id, "BUSY", "too many concurrent action goals");
     return;
   }
-  if (!observer->server_ready()) {
-    service_error(request_id, "UNAVAILABLE", "runtime action is not ready");
-    return;
-  }
+  // The action server of this dedicated client may not be discovered yet: the
+  // client was created after the node graph was queried, so a runtime that
+  // starts up (or appears) later is invisible to it for a while. The command
+  // is therefore not rejected: the goal is remembered and the dispatch is
+  // deferred until the client can reach a server. The original TTL of the
+  // command bounds the wait, and an expired request is never sent to the
+  // robot.
   typename ActionT::Goal goal;
   if constexpr (std::is_same_v<ActionT, NavigatePose>) {
     const Json & target = command.arguments.at("target");
@@ -563,11 +578,15 @@ void GatewayNode::send_typed_action(const Command & command, ActionSlotPool<Acti
   goal.lease_token = command.arguments.at("lease_token").get<std::string>();
   goal.expires_at = deadline_time(command.deadline_ms);
   try {
+    if (dispatch_expired(request_id)) {
+      service_error(request_id, "EXPIRED", "command TTL elapsed before action dispatch");
+      return;
+    }
     observer->set_goal(std::move(goal));
     if (!observer->send_if_ready()) {
       // The action server of this dedicated client is not discovered yet.
       // The dispatch is deferred instead of blocking the executor; the
-      // correlation deadline bounds the wait.
+      // original TTL of the command bounds the wait.
       pool.defer(request_id);
       return;
     }
@@ -771,6 +790,24 @@ bool GatewayNode::still_tracked(const std::string & request_id)
   return records_.pending(request_id) != nullptr;
 }
 
+bool GatewayNode::dispatch_expired(const std::string & request_id)
+{
+  const std::lock_guard<std::mutex> guard(records_mutex_);
+  const Pending * pending = records_.pending(request_id);
+  if (!pending) {
+    // The correlation is gone: the request may no longer be dispatched.
+    return true;
+  }
+  if (pending->dispatch_deadline <= 0.0) {
+    // No TTL bound was captured: only the response timeout applies.
+    return false;
+  }
+  // The monotonic deadline is the cap: a wall clock rollback cannot extend
+  // it. The deadline of the sender may expire the request earlier.
+  return monotonic_now_s() >= pending->dispatch_deadline ||
+         static_cast<double>(epoch_ms_now()) >= pending->command.deadline_ms;
+}
+
 void GatewayNode::expire()
 {
   std::vector<std::string> request_ids;
@@ -784,11 +821,25 @@ void GatewayNode::expire()
       "runtime result timed out; execution state is unknown, not stopped");
   }
   const auto tracked = [this](const std::string & request_id) {return still_tracked(request_id);};
+  // A deferred goal whose original command TTL elapsed must never reach the
+  // robot, even while its correlation is still alive. The check runs
+  // immediately before the deferred dispatch.
+  const auto dispatch_allowed = [this](const std::string & request_id) {
+    if (!dispatch_expired(request_id)) {
+      return true;
+    }
+    // The correlation is retired with EXPIRED; the observation is released
+    // by `release_inactive` below.
+    service_error(
+      request_id, "EXPIRED",
+      "command TTL elapsed before the action server was reachable");
+    return false;
+  };
   // Dispatch the goals whose action server became available in the meantime.
   // A request that already timed out is never sent to the robot.
-  navigation_pool_.flush_ready(tracked);
-  takeoff_pool_.flush_ready(tracked);
-  land_pool_.flush_ready(tracked);
+  navigation_pool_.flush_ready(tracked, dispatch_allowed);
+  takeoff_pool_.flush_ready(tracked, dispatch_allowed);
+  land_pool_.flush_ready(tracked, dispatch_allowed);
   // Release the action observations that finished or whose correlation was
   // retired. This runs outside of every action client callback, so destroying
   // a dedicated client is safe here.

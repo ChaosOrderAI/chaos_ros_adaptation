@@ -17,6 +17,13 @@
 // and subscriptions, so every endpoint is stored as a member here. A
 // temporary returned by create_service()/create_subscription() would be
 // destroyed immediately and the endpoint would silently disappear.
+//
+// Observation ownership: the node registers one sink bundle with the process
+// wide observation service before the coordinator is created and keeps only
+// the producer endpoint. The service owns the publishers, the callback
+// captures and the sink bundle until the registration is retired, so no sink
+// borrows the node, no sink queries the coordinator at delivery time and no
+// observation is produced on the constructing thread.
 #pragma once
 
 #include <array>
@@ -46,17 +53,15 @@
 
 #include "chaos_runtime/adapter.hpp"
 #include "chaos_runtime/coordinator.hpp"
-#include "chaos_runtime/trace.hpp"
+#include "chaos_runtime/observation.hpp"
 
 namespace chaos::runtime {
 
-class RobotRuntimeNode : public rclcpp::Node, public TraceSink {
+class RobotRuntimeNode : public rclcpp::Node {
 public:
   explicit RobotRuntimeNode(const rclcpp::NodeOptions & options =
                           rclcpp::NodeOptions());
   ~RobotRuntimeNode() override;
-
-  void publish(const TraceEvent & event) override;
 
 private:
   using NavigatePose = chaos_interfaces::action::NavigatePose;
@@ -134,6 +139,11 @@ private:
 
   AssetConfig asset_;
   Clocks clocks_;
+  // The producer endpoint of the process wide observation service. It is
+  // declared before the coordinator so that it outlives it: the coordinator
+  // destructor may still emit a final control event, and only an open
+  // endpoint accepts that admission.
+  std::shared_ptr<ObservationEndpoint> observations_;
   std::unique_ptr<ControlCoordinator> coordinator_;
   std::unique_ptr<ActionWorker> action_worker_;
   mutable std::mutex tokens_mutex_;

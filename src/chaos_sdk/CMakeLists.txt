@@ -16,8 +16,21 @@ find_package(chaos_interfaces REQUIRED)
 find_package(pybind11_vendor REQUIRED)
 find_package(pybind11 REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+find_package(Threads REQUIRED)
 
 option(CHAOS_SDK_SANITIZE "Build unit tests with ASan+UBSan" OFF)
+
+# --- Internal feedback dispatcher -------------------------------------------
+# The dispatcher runs the user feedback callbacks off the ROS executor. It is
+# internal to the SDK: the header lives in src/, it is not installed and it is
+# not a public API. It depends on the standard library only, so the focused
+# unit test links it directly without the ROS dependencies.
+add_library(chaos_sdk_feedback_dispatcher STATIC
+  src/feedback_dispatcher.cpp)
+target_include_directories(chaos_sdk_feedback_dispatcher PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(chaos_sdk_feedback_dispatcher PUBLIC Threads::Threads)
+set_target_properties(chaos_sdk_feedback_dispatcher PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # --- Native C++ SDK ---------------------------------------------------------
 add_library(chaos_sdk SHARED
@@ -34,6 +47,9 @@ target_link_libraries(chaos_sdk PUBLIC
   ${geometry_msgs_TARGETS}
   chaos_interfaces::chaos_interfaces__rosidl_generator_cpp
   chaos_interfaces::chaos_interfaces__rosidl_typesupport_cpp)
+# The dispatcher is internal: it is linked privately, so the internal include
+# directory and the internal target stay out of the exported interface.
+target_link_libraries(chaos_sdk PRIVATE chaos_sdk_feedback_dispatcher)
 set_target_properties(chaos_sdk PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # --- Mock asset for the integration tests and the example client ----------
@@ -75,6 +91,9 @@ if(BUILD_TESTING)
     # The library itself must be instrumented, not only the test entry point.
     target_compile_options(chaos_sdk PUBLIC ${_sanitizer_flags})
     target_link_options(chaos_sdk PUBLIC ${_sanitizer_flags})
+    # The dispatcher is compiled into the library, so it is instrumented too.
+    target_compile_options(chaos_sdk_feedback_dispatcher PUBLIC ${_sanitizer_flags})
+    target_link_options(chaos_sdk_feedback_dispatcher PUBLIC ${_sanitizer_flags})
   endif()
 
   ament_add_gtest(test_robot_native test/test_robot_native.cpp)
@@ -84,6 +103,16 @@ if(BUILD_TESTING)
     target_link_options(test_robot_native PRIVATE ${_sanitizer_flags})
   endif()
   set_tests_properties(test_robot_native PROPERTIES TIMEOUT 180 ENVIRONMENT "ROS_DOMAIN_ID=189")
+
+  # Focused unit test of the internal feedback dispatcher. It needs no ROS
+  # runtime: it links the dispatcher directly.
+  ament_add_gtest(test_feedback_dispatcher test/test_feedback_dispatcher.cpp)
+  target_link_libraries(test_feedback_dispatcher chaos_sdk_feedback_dispatcher)
+  if(CHAOS_SDK_SANITIZE)
+    target_compile_options(test_feedback_dispatcher PRIVATE ${_sanitizer_flags})
+    target_link_options(test_feedback_dispatcher PRIVATE ${_sanitizer_flags})
+  endif()
+  set_tests_properties(test_feedback_dispatcher PROPERTIES TIMEOUT 120)
 
   install(TARGETS chaos_sdk_mock_asset DESTINATION lib/${PROJECT_NAME})
 

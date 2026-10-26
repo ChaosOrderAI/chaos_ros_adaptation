@@ -32,6 +32,7 @@
 
 #include "chaos_sdk/action_slots.hpp"
 #include "chaos_sdk/action_task.hpp"
+#include "feedback_dispatcher.hpp"
 
 namespace chaos_sdk
 {
@@ -43,6 +44,9 @@ constexpr double kDefaultActionTimeoutS = 300.0;
 constexpr std::size_t kDefaultMaxPending = 64;
 constexpr std::size_t kActionSlotsPerName = 8;
 constexpr auto kWatchdogPeriod = std::chrono::milliseconds(50);
+
+/// Counter that names the internal node of every standalone client.
+std::atomic<std::uint64_t> g_standalone_node_counter{0};
 
 /// Why a local observation was stopped.
 ///
@@ -109,6 +113,21 @@ std::chrono::steady_clock::time_point deadline_after(double seconds)
     std::chrono::duration<double>(seconds));
 }
 
+/// Typed owner of the user feedback callable of one action goal.
+///
+/// The callable is stored exactly once, when the goal is sent, and it is
+/// never copied afterwards: the ROS callback and the dispatched job only
+/// refer to this holder. The holder keeps the user callable alive as long as
+/// the goal is observed and as long as a queued sample still refers to it.
+///
+/// The holder is deliberately free of any SDK, ROS or Robot object: it holds
+/// the callable of the user and nothing else.
+template<typename FeedbackT>
+struct FeedbackHolder
+{
+  std::function<void (FeedbackT)> callback;
+};
+
 }  // namespace
 
 const char * task_state_name(TaskState state)
@@ -128,6 +147,9 @@ const char * task_state_name(TaskState state)
 
 struct Robot::Impl
 {
+  Impl()
+  : feedback_scope(internal::FeedbackDispatcher::instance().create_scope()) {}
+
   /// One in-flight observation.
   ///
   /// The entry is removed from ``pending`` by whoever completes it. The
@@ -141,6 +163,22 @@ struct Robot::Impl
     /// close() set it under the mutex while claiming the entry, so a late
     /// response can detect that it lost the race.
     std::shared_ptr<std::atomic_bool> cancelled;
+    /// Feedback observation of this operation.
+    ///
+    /// It is set for an action goal with a feedback callback. The token is
+    /// the only thing the queued samples of the goal refer to: it carries no
+    /// SDK, ROS or Robot object.
+    std::optional<internal::Observation> observation;
+    /// Owner of the user feedback callable of this operation.
+    ///
+    /// It is set for an action goal with a feedback callback. The pending
+    /// operation keeps the user callable alive while the goal is observed;
+    /// the ROS callback holds it weakly and the dispatched job holds it
+    /// strongly while the callback runs.
+    std::shared_ptr<void> callback_holder;
+    // Publish terminal history before futures wake; no ROS cleanup or user
+    // callable release may run in this phase.
+    std::function<void (StopReason)> prepare_failure;
     /// Stop the local observation (drop rclcpp bookkeeping, release a slot).
     std::function<void (StopReason)> cancel_local;
     /// Settle the user facing promise(s) with an error.
@@ -156,6 +194,13 @@ struct Robot::Impl
     /// True once the request was handed to the middleware.
     bool sent = false;
   };
+
+  /// Feedback scope of this Robot.
+  ///
+  /// The scope is a lightweight token: it carries no SDK, ROS or Robot
+  /// object and it is shared by every goal of this Robot. It is revoked when
+  /// the client is closed, so no new feedback sample is accepted any more.
+  internal::Scope feedback_scope;
 
   rclcpp::Node::SharedPtr node;
   std::shared_ptr<rclcpp::Context> owned_context;
@@ -198,33 +243,107 @@ struct Robot::Impl
     command_timeout_s = response.command_timeout_s;
   }
 
+  /// Apply the answer of a ControlLease request.
+  ///
+  /// The answer belongs to the session that carried ``request_token``. It may
+  /// only change the cached lease while that session is still the current
+  /// one, so a late answer can neither restore a revoked token nor clear a
+  /// newer lease.
   void apply_lease(
     const std::string & operation,
     const chaos_interfaces::srv::ControlLease::Response & response,
-    const std::string & request_owner)
+    const std::string & request_owner,
+    const std::string & request_token)
   {
     const std::lock_guard<std::mutex> guard(mutex);
     if (closed) return;
-    const auto next = lease_transition(
+    const auto next = lease_cache_transition(
       operation, response.success, response.code, response.token, request_owner,
-      lease_token, owner);
-    lease_token = next.first;
-    owner = next.second;
+      request_token, LeaseCache{lease_token, owner});
+    lease_token = next.token;
+    owner = next.owner;
+  }
+
+  /// Apply the answer of an explicit stop.
+  ///
+  /// The runtime revokes the lease before it halts the motion, so an accepted
+  /// stop ends the session even when it reports STOP_FAILED for a failed stop
+  /// output. A rejected stop never reached the revocation and keeps the
+  /// lease. The answer only counts while the session it belongs to is still
+  /// the current one, so a late stop does not clear a newer lease.
+  void apply_stop(
+    const chaos_interfaces::srv::Stop::Response & response,
+    const std::string & request_token)
+  {
+    const std::lock_guard<std::mutex> guard(mutex);
+    if (closed) return;
+    const auto next = lease_cache_transition(
+      "stop", response.success, response.code, std::string(), std::string(),
+      request_token, LeaseCache{lease_token, owner});
+    lease_token = next.token;
+    owner = next.owner;
   }
 
   /// Claim the completion of an operation. The caller holds the mutex.
   ///
-  /// Returns true for the single caller that owns the completion; every
-  /// other caller (a late response, a late goal acceptance) gets false and
-  /// must not touch the cached state any more.
-  bool claim_operation(std::uint64_t id)
+  /// The entry is moved out of the registry into the returned optional. The
+  /// caller owns the operation from now on: it keeps the user callable of a
+  /// feedback operation alive while it settles the promises and releases the
+  /// ROS resources, and it releases the operation outside of this mutex. A
+  /// user capture is therefore never destroyed under the mutex.
+  ///
+  /// The claim marks the operation as cancelled and retires its feedback
+  /// observation: a queued sample of a goal that already finished must not
+  /// run any more. The queued samples themselves are dropped by
+  /// ``retire_feedback()``, which runs outside of the mutex.
+  ///
+  /// The optional is empty for every caller that does not own the
+  /// completion: a late response, a late goal acceptance or a late cancel
+  /// answer must not touch the cached state any more.
+  std::optional<Operation> claim_operation(std::uint64_t id)
   {
     auto it = pending.find(id);
     if (it == pending.end()) {
-      return false;
+      return std::nullopt;
     }
+    // The entry is moved out first: the erased entry holds no user callable
+    // any more, so nothing is destroyed under the mutex.
+    Operation claimed = std::move(it->second);
     pending.erase(it);
-    return true;
+    if (claimed.cancelled) {
+      claimed.cancelled->store(true);
+    }
+    if (claimed.observation.has_value()) {
+      claimed.observation->cancel();
+    }
+    return claimed;
+  }
+
+  /// Drop the queued feedback of a claimed operation.
+  ///
+  /// The purge destroys the user callables of the queued samples, so it must
+  /// run outside of the implementation mutex and outside of every other lock
+  /// of the SDK. The caller keeps the claimed operation alive while the
+  /// purge runs, so the last user callable is not destroyed before the
+  /// promises are settled.
+  static void retire_feedback(const std::optional<Operation> & operation)
+  {
+    if (!operation.has_value()) {
+      return;
+    }
+    retire_feedback(operation->observation);
+  }
+
+  /// Drop the queued feedback of a retired observation.
+  ///
+  /// The observation is already marked as retired, so a worker that claims a
+  /// job afterwards discards it instead of running it.
+  static void retire_feedback(const std::optional<internal::Observation> & observation)
+  {
+    if (!observation.has_value()) {
+      return;
+    }
+    internal::FeedbackDispatcher::instance().retire_operation(*observation);
   }
 
   /// Enforce the local response timeouts and hand the deferred requests to
@@ -243,7 +362,15 @@ struct Robot::Impl
           if (it->second.cancelled) {
             it->second.cancelled->store(true);
           }
-          expired.push_back(it->second);
+          // The feedback of a timed out observation is retired as well: a
+          // queued sample of this operation must not run any more.
+          if (it->second.observation.has_value()) {
+            it->second.observation->cancel();
+          }
+          // The operation is moved out: it keeps the user callable alive
+          // until the loop below settled the promises and dropped the
+          // queued samples.
+          expired.push_back(std::move(it->second));
           it = pending.erase(it);
           continue;
         }
@@ -260,12 +387,24 @@ struct Robot::Impl
     const auto error = std::make_exception_ptr(
       TimeoutError("no response before the local response timeout"));
     for (auto & operation : expired) {
-      if (operation.cancel_local) {
-        operation.cancel_local(StopReason::Timeout);
+      if (operation.prepare_failure) {
+        operation.prepare_failure(StopReason::Timeout);
       }
+    }
+    // Settle every expired future before cleanup can retire a different goal
+    // and release its last user capture (notably a timed-out cancel request).
+    for (auto & operation : expired) {
       if (operation.fail) {
         operation.fail(error);
       }
+    }
+    for (auto & operation : expired) {
+      if (operation.cancel_local) {
+        operation.cancel_local(StopReason::Timeout);
+      }
+      // The purge destroys the user callables of the queued samples, so it
+      // runs outside of every lock of the SDK.
+      retire_feedback(operation.observation);
     }
   }
 };
@@ -347,7 +486,12 @@ std::shared_ptr<Robot> Robot::create_standalone(
   context->init(1, argv);
   rclcpp::NodeOptions options;
   options.context(context);
-  auto node = std::make_shared<rclcpp::Node>("chaos_sdk_" + asset_id, options);
+  // The node name has to be unique per client: the rosout publisher of the
+  // logging system registers its node per name in a process wide registry, so
+  // two clients that share an asset id would leak the second registration.
+  const std::string node_name = "chaos_sdk_" + asset_id + "_" +
+    std::to_string(g_standalone_node_counter.fetch_add(1, std::memory_order_relaxed));
+  auto node = std::make_shared<rclcpp::Node>(node_name, options);
   auto robot = std::shared_ptr<Robot>(new Robot(
       node, asset_id, namespace_, base_frame, command_timeout_s, command_ttl_s));
   robot->impl_->owned_context = context;
@@ -511,7 +655,8 @@ std::shared_future<chaos_interfaces::srv::ControlLease::Response> Robot::acquire
     client, request,
     [weak, owner](const chaos_interfaces::srv::ControlLease::Response & response) {
       if (auto impl = weak.lock()) {
-        impl->apply_lease("acquire", response, owner);
+        // An acquire opens a new session: it is not bound to a token.
+        impl->apply_lease("acquire", response, owner, std::string());
       }
     });
 }
@@ -545,9 +690,12 @@ std::shared_future<chaos_interfaces::srv::ControlLease::Response> Robot::renew(
   }
   return send_control<chaos_interfaces::srv::ControlLease>(
     client, request,
-    [weak, owner](const chaos_interfaces::srv::ControlLease::Response & response) {
+    [weak, owner, token](const chaos_interfaces::srv::ControlLease::Response & response) {
       if (auto impl = weak.lock()) {
-        impl->apply_lease("renew", response, owner);
+        // The answer belongs to the session that the request carried. A
+        // renewal never rotates the token and never revives a session that
+        // was revoked in the meantime.
+        impl->apply_lease("renew", response, owner, token);
       }
     });
 }
@@ -579,9 +727,12 @@ std::shared_future<chaos_interfaces::srv::ControlLease::Response> Robot::release
   }
   return send_control<chaos_interfaces::srv::ControlLease>(
     client, request,
-    [weak, owner](const chaos_interfaces::srv::ControlLease::Response & response) {
+    [weak, owner, token](const chaos_interfaces::srv::ControlLease::Response & response) {
       if (auto impl = weak.lock()) {
-        impl->apply_lease("release", response, owner);
+        // The answer belongs to the session that the request carried, so a
+        // release that arrives after a new lease was acquired never clears
+        // that newer lease.
+        impl->apply_lease("release", response, owner, token);
       }
     });
 }
@@ -593,13 +744,23 @@ std::shared_future<chaos_interfaces::srv::Stop::Response> Robot::stop(
   request.expires_at = deadline(ttl_s);
   request.request_id = request_id.has_value() && !request_id->empty() ?
     *request_id : new_request_id();
-  request.lease_token = require_token();
+  // The token of the request is the session that the stop ends. It is
+  // captured here, because the answer may arrive after the lease changed.
+  const std::string request_token = require_token();
+  request.lease_token = request_token;
   rclcpp::Client<chaos_interfaces::srv::Stop>::SharedPtr client;
   {
     const std::lock_guard<std::mutex> guard(impl_->mutex);
     client = impl_->stop;
   }
-  return send_control<chaos_interfaces::srv::Stop>(client, request);
+  std::weak_ptr<Impl> weak = impl_;
+  return send_control<chaos_interfaces::srv::Stop>(
+    client, request,
+    [weak, request_token](const chaos_interfaces::srv::Stop::Response & response) {
+      if (auto impl = weak.lock()) {
+        impl->apply_stop(response, request_token);
+      }
+    });
 }
 
 std::string Robot::velocity(
@@ -740,12 +901,15 @@ std::shared_future<typename ServiceT::Response> Robot::send_control(
             ClientClosedError("the SDK client was destroyed")));
         return;
       }
-      bool claimed = false;
+      // The claimed operation is owned by this callback: it is released
+      // outside of the implementation mutex, so a user capture is never
+      // destroyed under the lock.
+      std::optional<Impl::Operation> claimed_operation;
       {
         const std::lock_guard<std::mutex> guard(impl->mutex);
-        claimed = impl->claim_operation(*operation_id);
+        claimed_operation = impl->claim_operation(*operation_id);
       }
-      if (!claimed) {
+      if (!claimed_operation.has_value()) {
         return;
       }
       try {
@@ -852,6 +1016,20 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
   std::weak_ptr<Impl> weak = impl_;
   std::weak_ptr<typename TaskT::Shared> weak_shared = shared;
 
+  // The user callable is owned exactly once, here, outside of the ROS hot
+  // path. The pending operation keeps the holder alive while the goal is
+  // observed; the ROS callback refers to it weakly and the dispatched job
+  // holds it strongly while the callback runs.
+  const bool has_feedback = static_cast<bool>(feedback_callback);
+  std::shared_ptr<FeedbackHolder<typename ActionT::Feedback>> holder;
+  if (has_feedback) {
+    holder = std::make_shared<FeedbackHolder<typename ActionT::Feedback>>();
+    holder->callback = std::move(feedback_callback);
+  }
+  // The feedback observation of this goal. It is a standalone token: it
+  // carries no SDK, ROS or Robot object.
+  internal::Observation feedback_observation;
+
   // --- Phase 1: reserve a client slot and register the operation ---------
   std::uint64_t operation_id = 0;
   std::size_t slot_index = 0;
@@ -881,8 +1059,21 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
     operation.id = operation_id;
     operation.deadline = deadline_after(impl_->response_timeout_s);
     operation.cancelled = std::make_shared<std::atomic_bool>(false);
+    if (has_feedback) {
+      // The operation owns the user callable while the goal is observed, so
+      // a queued sample always finds its callable.
+      operation.callback_holder = holder;
+      // Every goal gets its own observation: the queued samples of a goal
+      // are dropped when that goal reaches its terminal state.
+      operation.observation = internal::FeedbackDispatcher::instance().create_observation();
+      feedback_observation = *operation.observation;
+    }
     // The pending operation owns the shared state: it must stay alive until
     // the goal completes, times out or is closed.
+    operation.prepare_failure = [shared](StopReason reason) {
+        shared->task_state.store(static_cast<int>(
+            reason == StopReason::Timeout ? TaskState::TIMED_OUT : TaskState::UNKNOWN));
+      };
     operation.cancel_local = [weak, weak_client = std::weak_ptr<ClientT>(client), weak_shared,
       shared, release_slot = std::function<void (bool)>(
         [weak, pool, slot_index, slot_generation](bool retire) {
@@ -967,6 +1158,10 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
       // finds no entry and must not resurrect the task.
       bool accepted = false;
       bool rejected = false;
+      // The claimed operation is owned by this callback: it pins the user
+      // callable across the release of the goal handle and of the client
+      // slot, and it is released outside of the implementation mutex.
+      std::optional<Impl::Operation> claimed_operation;
       {
         const std::lock_guard<std::mutex> guard(impl->mutex);
         auto entry = impl->pending.find(operation_id);
@@ -991,7 +1186,8 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
             // The server rejected the goal: the observation ends here. The
             // claim decides whether the rejection is still relevant, a late
             // rejection must not overwrite a terminal state.
-            rejected = impl->claim_operation(operation_id);
+            claimed_operation = impl->claim_operation(operation_id);
+            rejected = claimed_operation.has_value();
             if (rejected) {
               const std::lock_guard<std::mutex> state_guard(state->mutex);
               state->task_state.store(static_cast<int>(TaskState::REJECTED));
@@ -1013,6 +1209,9 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
         release_slot(false);
         accept->succeed(nullptr);
         result->fail(std::make_exception_ptr(std::runtime_error("the action goal was rejected")));
+        // The queued feedback of the rejected goal is dropped after the
+        // promises were settled.
+        Impl::retire_feedback(claimed_operation);
         return;
       }
       try {
@@ -1027,14 +1226,17 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
               return;
             }
             TaskState final_state = TaskState::UNKNOWN;
-            bool claimed = false;
+            // The claimed operation is owned by this callback: it pins the
+            // user callable across the release of the goal handle and of the
+            // client slot, and it is released outside of the mutex.
+            std::optional<Impl::Operation> claimed_operation;
             {
               // Claim the completion and compute the terminal state under the
               // same lock: a late result must not overwrite the state of an
               // observation that already timed out or was closed.
               const std::lock_guard<std::mutex> guard(impl->mutex);
-              claimed = impl->claim_operation(operation_id);
-              if (claimed) {
+              claimed_operation = impl->claim_operation(operation_id);
+              if (claimed_operation.has_value()) {
                 // A terminal status without a result payload never proves
                 // success: the payload carries the business outcome.
                 final_state = classify_result(
@@ -1050,22 +1252,30 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
                 }
               }
             }
-            if (!claimed) {
+            if (!claimed_operation.has_value()) {
               return;
             }
             // The slot is released outside of the implementation mutex.
             release_slot(false);
             state->task_state.store(static_cast<int>(final_state));
             result->succeed(wrapped);
+            // The queued feedback of the finished goal is dropped after the
+            // result was settled. The claimed operation keeps the user
+            // callable alive until this callback returns.
+            Impl::retire_feedback(claimed_operation);
           });
       } catch (const std::exception &) {
+        const auto error = std::current_exception();
+        std::optional<Impl::Operation> claimed_operation;
         {
           const std::lock_guard<std::mutex> guard(impl->mutex);
-          impl->claim_operation(operation_id);
+          claimed_operation = impl->claim_operation(operation_id);
         }
         release_slot(true);
-        accept->fail(std::current_exception());
-        result->fail(std::current_exception());
+        accept->fail(error);
+        result->fail(error);
+        // The goal never started: its queued feedback is dropped.
+        Impl::retire_feedback(claimed_operation);
         return;
       }
       // The cancel requester references the action client weakly and is
@@ -1124,10 +1334,15 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
                     // state keeps that state: the unanswered cancel request
                     // must not overwrite a completed result.
                     bool goal_claimed = false;
+                    // The claimed goal operation is owned by this callback: it
+                    // pins the user callable of the goal until the queued
+                    // samples were dropped.
+                    std::optional<Impl::Operation> claimed_goal;
                     if (impl) {
                       // Stop the observation of the goal itself.
                       const std::lock_guard<std::mutex> guard(impl->mutex);
-                      goal_claimed = impl->claim_operation(operation_id);
+                      claimed_goal = impl->claim_operation(operation_id);
+                      goal_claimed = claimed_goal.has_value();
                     }
                     if (goal_claimed && state) {
                       const std::lock_guard<std::mutex> state_guard(state->mutex);
@@ -1145,6 +1360,9 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
                     // The generation check keeps a newer goal of the same
                     // slot safe.
                     release_slot(true);
+                    // The goal observation ended: its queued feedback is
+                    // dropped after the promise was settled.
+                    Impl::retire_feedback(claimed_goal);
                   };
                 operation.fail = [settler](const std::exception_ptr & error) {settler->fail(error);};
                 impl->pending.emplace(id, std::move(operation));
@@ -1163,12 +1381,16 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
                   // Only the owner of the pending cancel request may settle
                   // it. A response that arrives after the local timeout or
                   // after close() must not report a successful cancellation.
-                  bool claimed = false;
+                  //
+                  // The claim retires the cancel request only: the goal keeps
+                  // its feedback eligible until the goal itself reaches its
+                  // terminal state, times out or is closed.
+                  std::optional<Impl::Operation> claimed_operation;
                   {
                     const std::lock_guard<std::mutex> guard(impl->mutex);
-                    claimed = impl->claim_operation(cancel_id);
+                    claimed_operation = impl->claim_operation(cancel_id);
                   }
-                  if (!claimed) {
+                  if (!claimed_operation.has_value()) {
                     return;
                   }
                   CancelOutcome outcome;
@@ -1183,29 +1405,59 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
                   settler->succeed(outcome);
                 });
             } catch (const std::exception &) {
+              const auto error = std::current_exception();
+              std::optional<Impl::Operation> claimed_operation;
               {
                 const std::lock_guard<std::mutex> guard(impl->mutex);
-                impl->claim_operation(cancel_id);
+                claimed_operation = impl->claim_operation(cancel_id);
               }
-              settler->fail(std::current_exception());
+              settler->fail(error);
+              // The cancel request never started: its own queued work is
+              // dropped. The goal keeps its feedback eligible.
+              Impl::retire_feedback(claimed_operation);
             }
             return settler->future();
           };
       }
       accept->succeed(std::make_shared<TaskT>(state));
     };
-  if (feedback_callback) {
+  if (has_feedback) {
+    // The ROS callback only holds a weak reference to the holder of the user
+    // callable and its own copies of the scope and of the observation: it
+    // never keeps the operation, the client, the node, the goal handle or the
+    // Robot alive.
+    //
+    // The callback copies the feedback value and submits a job: the user
+    // callable runs later, on a worker of the dispatcher, so a slow or
+    // blocking callback never runs on the executor of the client.
+    const std::weak_ptr<void> weak_holder(holder);
+    const internal::Scope scope = impl_->feedback_scope;
+    const internal::Observation observation = feedback_observation;
     options.feedback_callback =
-      [feedback_callback](typename ClientT::GoalHandle::SharedPtr,
+      [weak_holder, scope, observation](typename ClientT::GoalHandle::SharedPtr,
       const std::shared_ptr<const typename ActionT::Feedback> feedback) {
         if (!feedback) {
           return;
         }
+        // The goal is no longer observed: the sample has no target left.
+        auto locked = weak_holder.lock();
+        if (!locked) {
+          return;
+        }
         try {
-          feedback_callback(*feedback);
-        } catch (const std::exception &) {
-          // A user callback must never kill the executor thread.
+          // The job owns a copy of the feedback value and the holder of the
+          // user callable. The executor only copies the value.
+          auto payload = std::make_shared<typename ActionT::Feedback>(*feedback);
+          auto invoke = [locked](void * raw) {
+            auto typed = static_cast<typename ActionT::Feedback *>(raw);
+            static_cast<FeedbackHolder<typename ActionT::Feedback> *>(locked.get())
+            ->callback(*typed);
+          };
+          internal::FeedbackDispatcher::instance().submit(
+            scope, observation, payload, invoke);
         } catch (...) {
+          // A failing copy or a refused admission must never escape into the
+          // executor and must not change the result of the goal.
         }
       };
   }
@@ -1213,11 +1465,17 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
   try {
     client->async_send_goal(goal, options);
   } catch (...) {
+    const auto error = std::current_exception();
+    std::optional<Impl::Operation> claimed_operation;
     {
       const std::lock_guard<std::mutex> guard(impl_->mutex);
-      impl_->claim_operation(operation_id);
+      claimed_operation = impl_->claim_operation(operation_id);
     }
     release_slot(true);
+    accept->fail(error);
+    result->fail(error);
+    // The goal never started: its queued feedback is dropped.
+    Impl::retire_feedback(claimed_operation);
     throw;
   }
   return accept->future();
@@ -1233,27 +1491,51 @@ void Robot::close()
       return;
     }
     impl->closed = true;
-    for (const auto & item : impl->pending) {
+    // A closed scope refuses every new feedback sample, even before the
+    // queued samples are purged.
+    if (impl->feedback_scope.control()) {
+      impl->feedback_scope.control()->revoked.store(true, std::memory_order_release);
+    }
+    for (auto & item : impl->pending) {
       // Mark the observation as cancelled under the lock: a response or a
       // goal acceptance that arrives after close() must not update the cached
       // state any more.
       if (item.second.cancelled) {
         item.second.cancelled->store(true);
       }
-      pending.push_back(item.second);
+      // The feedback of this operation is retired as well: a queued sample of
+      // a closed client must not run any more.
+      if (item.second.observation.has_value()) {
+        item.second.observation->cancel();
+      }
+      // The operation is moved out: it keeps the user callable alive until
+      // the promises were settled and the queued samples were dropped.
+      pending.push_back(std::move(item.second));
     }
     impl->pending.clear();
   }
   const auto error = std::make_exception_ptr(
     ClientClosedError("the SDK client was closed before a response arrived"));
   for (auto & operation : pending) {
-    if (operation.cancel_local) {
-      operation.cancel_local(StopReason::Closed);
+    if (operation.prepare_failure) {
+      operation.prepare_failure(StopReason::Closed);
     }
+  }
+  for (auto & operation : pending) {
     if (operation.fail) {
       operation.fail(error);
     }
   }
+  for (auto & operation : pending) {
+    if (operation.cancel_local) {
+      operation.cancel_local(StopReason::Closed);
+    }
+  }
+  // The queued feedback of this client is dropped outside of every lock: the
+  // operations above still pin their user callables until this scope ends.
+  // The workers of the dispatcher are process wide resources: close() never
+  // joins them and never waits for a callback that already runs.
+  internal::FeedbackDispatcher::instance().revoke_scope(impl->feedback_scope);
   {
     const std::lock_guard<std::mutex> guard(impl->mutex);
     impl->watchdog_timer.reset();

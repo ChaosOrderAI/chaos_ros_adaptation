@@ -3,6 +3,7 @@
 #include "chaos_runtime/coordinator.hpp"
 
 #include <cmath>
+#include <exception>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -10,6 +11,7 @@
 
 #include "chaos_core/clock.hpp"
 #include "chaos_core/time.hpp"
+#include "chaos_runtime/driver_deadline.hpp"
 
 namespace chaos::runtime {
 
@@ -18,7 +20,10 @@ constexpr double kTickWait = 0.05;  // cv wait slice; not a deadline
 constexpr double kStatePublishInterval = 0.1;
 constexpr double kAcceptanceHandshakeTimeout = 2.0;
 
-std::string capabilityName(OperationKind kind) {
+// The capability name is a literal: the caller never allocates a string
+// for it, so the trace path and the log path build their text from a
+// borrowed view.
+const char * capabilityName(OperationKind kind) {
   switch (kind) {
     case OperationKind::kNavigatePose:
       return "navigation.pose";
@@ -30,7 +35,7 @@ std::string capabilityName(OperationKind kind) {
   return "UNKNOWN";
 }
 
-bool validRequestId(const std::string & value) {
+bool validRequestId(std::string_view value) {
   if (value.empty() || value.size() > 128) {
     return false;
   }
@@ -45,7 +50,7 @@ bool validRequestId(const std::string & value) {
   return true;
 }
 
-bool validTraceCode(const std::string & value) {
+bool validTraceCode(std::string_view value) {
   if (value.size() > 64 || value.empty() || value.front() < 'A' ||
       value.front() > 'Z') {
     return false;
@@ -61,17 +66,25 @@ bool validTraceCode(const std::string & value) {
 }
 }  // namespace
 
-ControlCoordinator::ControlCoordinator(AssetConfig asset,
-                                       std::unique_ptr<Adapter> adapter,
-                                       Clocks clocks, TraceSink & traces)
+ControlCoordinator::ControlCoordinator(
+  AssetConfig asset, std::unique_ptr<Adapter> adapter, Clocks clocks,
+  std::shared_ptr<ObservationEndpoint> observations)
     : asset_(std::move(asset)),
       adapter_(std::move(adapter)),
       clocks_(std::move(clocks)),
-      traces_(traces),
+      observations_(std::move(observations)),
       limits_(asset_.limits),
       guard_(asset_.limits,
              clocks_.steady_s ? clocks_.steady_s : chaos::monotonicSeconds),
       capabilities_(asset_.capabilities.begin(), asset_.capabilities.end()) {
+  if (!observations_) {
+    // A coordinator without an endpoint has nowhere to report a result, a
+    // state or a control trace. The observation channels are part of the
+    // contract, so this is a startup failure and never a silently disabled
+    // channel.
+    throw std::invalid_argument(
+      "ControlCoordinator requires an observation endpoint");
+  }
   if (!clocks_.steady_s) {
     clocks_.steady_s = chaos::monotonicSeconds;
   }
@@ -84,6 +97,12 @@ ControlCoordinator::ControlCoordinator(AssetConfig asset,
   if (!clocks_.ros_ns) {
     clocks_.ros_ns = chaos::systemNs;
   }
+  if (!clocks_.driver_mono_ns) {
+    // The driver deadline clock is Linux CLOCK_MONOTONIC: the same named
+    // clock as the one the adapter and the supervised driver use. Its epoch
+    // is never inferred from the steady clock and never from a ROS clock.
+    clocks_.driver_mono_ns = driver_deadline::monotonicNowNs;
+  }
   last_tick_s_ = clocks_.steady_s();
   last_state_s_ = 0.0;
 }
@@ -95,35 +114,57 @@ void ControlCoordinator::rejected(const std::string & code,
   throw chaos::Rejected(code, message);
 }
 
-void ControlCoordinator::log(const std::string & level,
-                             const std::string & text) const {
-  if (sinks_.log) {
-    try {
-      sinks_.log(level, text);
-    } catch (...) {
-    }
-  }
-}
-
-void ControlCoordinator::freezeSinks(Sinks sinks) {
-  std::lock_guard<std::mutex> guard(mutex_);
-  if (sinks_frozen_) {
-    throw std::logic_error("coordinator sinks are frozen");
-  }
-  sinks_ = std::move(sinks);
-  sinks_frozen_ = true;
-}
-
-void ControlCoordinator::publishResult(const CommandResultView & result) {
-  if (!sinks_.results) {
-    return;
-  }
+void ControlCoordinator::log(std::string_view level,
+                             std::initializer_list<std::string_view> parts)
+    const noexcept {
+  // Observation only. This is the single construction boundary of the log
+  // channel: the join of the parts and the admission are inside one
+  // protected block, so a failing allocation or a failing channel drops the
+  // line and never changes a control outcome. A log failure is never logged
+  // again, so the channel can never recurse into itself.
   try {
-    sinks_.results(result);
+    std::string text;
+    for (const std::string_view part : parts) {
+      text.append(part);
+    }
+    observations_->log(level, text);
   } catch (...) {
-    // A failed result channel must not change control decisions; the
-    // command outcome is still enforced by the guard and watchdog.
-    log("warning", "Command result publication failed; result dropped");
+    observations_->recordConstructionFailure(ObservationChannel::log);
+  }
+}
+
+void ControlCoordinator::log(std::string_view level,
+                             std::string_view text) const noexcept {
+  // One already formed text: the endpoint copies the payload on its own
+  // side and its admission is noexcept, so this path owns no temporary and
+  // needs no catch of its own.
+  observations_->log(level, text);
+}
+
+void ControlCoordinator::publishResult(bool success, std::string_view code,
+                                       std::string_view message,
+                                       std::string_view request_id) {
+  // The observation construction and the clock read are inside the
+  // isolation block: a broken clock or a broken channel drops the result and
+  // never changes the outcome of the command itself. The endpoint copies
+  // the payload and delivers it on its own worker, so this call never
+  // blocks on a sink.
+  //
+  // The parameters are views: the caller allocates nothing before this
+  // block, and every copy into the owned payload happens inside it.
+  try {
+    CommandResultView result;
+    result.stamp_ns = clocks_.ros_ns();
+    result.request_id.assign(request_id);
+    result.success = success;
+    result.code.assign(code);
+    result.message.assign(message);
+    observations_->result(result);
+  } catch (...) {
+    // Observation is not control: the command outcome is enforced by the
+    // guard, by the deadline and by the watchdog, not by this channel. The
+    // loss is counted, so it stays visible in the producer counters.
+    observations_->recordConstructionFailure(ObservationChannel::results);
   }
 }
 
@@ -226,43 +267,81 @@ bool ControlCoordinator::retryStop(bool force) {
 
 // Caller must hold mutex_.
 void ControlCoordinator::emitTrace(
-  const std::string & command, const std::string & stage,
-  const std::string & code, const std::string & request_id,
-  const std::optional<std::array<double, 6>> & velocity) {
+  std::string_view command, std::string_view stage,
+  std::string_view code, std::string_view request_id,
+  const std::optional<std::array<double, 6>> & velocity,
+  const std::optional<std::int64_t> & driver_deadline_ns) {
   // Best-effort evidence, isolated from control decisions and driver
-  // outcomes. The sequence advances before construction/publication so a
-  // missing event is visible to an offline consumer. No authorization
-  // values or error text are copied.
-  TraceEvent event;
-  event.sequence = ++trace_sequence_;
-  event.stamp_ns = clocks_.ros_ns();
-  event.monotonic_ns = clocks_.mono_ns();
-  event.frame = asset_.frames.base;
-  event.asset_id = asset_.id;
-  event.request_id = validRequestId(request_id) ? request_id : std::string();
-  event.command = command;
-  event.stage = stage;
-  event.code = validTraceCode(code) ? code : "UNKNOWN";
-  if (velocity.has_value() && command == "motion.velocity" &&
-      stage == "issued") {
-    TraceVelocity sample;
-    sample.valid = true;
-    sample.values = *velocity;
-    // Sample the guard after the event timestamp: any sampling delay
-    // shortens the exported interval, rather than extending its lease.
-    sample.valid_for_s = guard_.leaseActive()
-                           ? std::max(0.0, std::min(guard_.velocityExpires(),
-                                                    guard_.leaseExpires()) -
-                                             clocks_.steady_s())
-                           : 0.0;
-    event.velocity = sample;
-  }
+  // outcomes. The sequence advances before the construction and the
+  // admission, so a missing event is visible to an offline consumer as a
+  // sequence gap. No authorization values or error text are copied.
+  //
+  // The whole event construction, including every clock read and every
+  // field copy, lives inside the best-effort block: a broken clock must
+  // never turn a control decision into an exception, and it must never
+  // suppress the stop output of a failing command. The block reports its
+  // own failures through the endpoint, so this function never throws and
+  // an accepted command can never become a DRIVER_ERROR here.
+  const std::uint64_t sequence = ++trace_sequence_;
   try {
-    traces_.publish(event);
+    TraceEvent event;
+    event.sequence = sequence;
+    event.stamp_ns = clocks_.ros_ns();
+    event.monotonic_ns = clocks_.mono_ns();
+    event.frame = asset_.frames.base;
+    event.asset_id = asset_.id;
+    event.request_id.assign(validRequestId(request_id) ? request_id
+                                                       : std::string_view());
+    event.command.assign(command);
+    event.stage.assign(stage);
+    event.code.assign(validTraceCode(code) ? code
+                                           : std::string_view("UNKNOWN"));
+    if (velocity.has_value() && command == "motion.velocity" &&
+        stage == "issued") {
+      TraceVelocity sample;
+      sample.valid = true;
+      sample.values = *velocity;
+      // Sample the guard after the event timestamp: any sampling delay
+      // shortens the exported interval, rather than extending its lease.
+      double remaining_s = guard_.leaseActive()
+                             ? std::max(0.0, std::min(guard_.velocityExpires(),
+                                                      guard_.leaseExpires()) -
+                                               clocks_.steady_s())
+                             : 0.0;
+      if (driver_deadline_ns.has_value()) {
+        // The immutable driver deadline D bounds the interval the driver
+        // really honours. The guard committed its own, later, expiry, so
+        // the guard bound alone overstates the remaining time whenever the
+        // origin age or the validation delay consumed part of the original
+        // TTL. The driver clock is sampled once, after the trace stamps,
+        // and the cap can only shorten the exported interval: no TTL is
+        // added and the actual D is untouched.
+        const std::int64_t driver_now_ns = clocks_.driver_mono_ns();
+        if (driver_now_ns <= 0) {
+          // An unusable driver clock drops this observation. The loss is
+          // counted with its sequence and the accepted control is
+          // untouched: this is a numeric branch, not an exception.
+          observations_->recordConstructionFailure(ObservationChannel::trace,
+                                                    sequence);
+          return;
+        }
+        const std::int64_t remaining_ns = *driver_deadline_ns - driver_now_ns;
+        const double remaining_deadline_s =
+          remaining_ns > 0 ? static_cast<double>(remaining_ns) / 1e9 : 0.0;
+        remaining_s =
+          std::max(0.0, std::min(remaining_s, remaining_deadline_s));
+      }
+      sample.valid_for_s = remaining_s;
+      event.velocity = sample;
+    }
+    // The endpoint copies the event and delivers it on its own worker: the
+    // delivery never re-stamps and never renumbers the event.
+    observations_->trace(event);
   } catch (...) {
-    // A failed observation channel must not turn an accepted command into a
-    // rejected one, or suppress watchdog/stop output.
-    log("warning", "Control trace publication failed; event dropped");
+    // The event could not even be built. The loss is counted through the
+    // endpoint and the assigned sequence stays visible as a gap.
+    observations_->recordConstructionFailure(ObservationChannel::trace,
+                                              sequence);
   }
 }
 
@@ -343,6 +422,18 @@ StopResponseView ControlCoordinator::stop(const StopRequestView & request) {
     requireCapability("motion.stop");
     guard_.require(request.lease_token);
     deadline->require(clocks_.wall_ns(), clocks_.mono_ns());
+    // Revoke the current lease BEFORE issuing halt output. An accepted stop
+    // ends the control session: a command replayed with the old token must
+    // be rejected even if stop output later fails. Only a fully validated
+    // stop reaches this point, so an invalid token or an expired deadline
+    // never revokes a valid lease.
+    //
+    // The revocation is unconditional and never re-validates the lease: a
+    // lease that expires between the token check above and this point must
+    // not turn an accepted stop into NO_CONTROL and skip the halt output.
+    // The revocation also disarms any armed velocity sample, so a replay
+    // cannot restore nonzero output.
+    guard_.revoke();
     // Same semantics as Python _halt('STOPPED', ..., explicit=True): an
     // explicit stop also interrupts the active action so its execution
     // loop observes the STOPPED interruption and never moves again.
@@ -372,7 +463,35 @@ StopResponseView ControlCoordinator::stop(const StopRequestView & request) {
 }
 
 void ControlCoordinator::velocity(const VelocityRequestView & request) {
+  // The deadline clock samples are taken BEFORE the control lock, so the
+  // time spent waiting for the lock and in the validation consumes the
+  // original interval instead of extending it. The driver monotonic clock
+  // is read first and the ROS clock second: the source age of this command
+  // is measured against the ROS sample captured here and is never refreshed
+  // afterwards.
+  //
+  // A failing clock must never escape the ROS callback, so the failure is
+  // captured here and reported through the normal control path below. No
+  // state is mutated and no sink is called outside the lock.
+  std::int64_t origin_anchor = 0;
+  std::int64_t captured_ros_now = 0;
+  std::exception_ptr capture_failure;
+  try {
+    origin_anchor = clocks_.driver_mono_ns();
+    captured_ros_now = clocks_.ros_ns();
+  } catch (const std::exception &) {
+    // The production clocks raise standard exceptions. The failure is kept
+    // and rethrown under the lock, where the normal fault and halt path
+    // reports it.
+    capture_failure = std::current_exception();
+  }
+
   std::lock_guard<std::mutex> guard(mutex_);
+  // The guard commits its velocity sample inside velocityNs(). Everything
+  // after that point is post-admission: a failure there has to stop the
+  // motion, because the guard timeout was already extended and an old
+  // physical output would otherwise borrow it.
+  bool admitted = false;
   try {
     expireLocked();
     requireCapability("motion.velocity");
@@ -381,53 +500,113 @@ void ControlCoordinator::velocity(const VelocityRequestView & request) {
       rejected("BUSY", "An action is active; stop or cancel it first");
     }
     adapter_->validateVelocity(request.velocity);
+    // Keep the original integer sec/nsec stamp: converting to double seconds
+    // would round away adjacent-1ns ordering. A stamp outside the checked
+    // ROS range is passed as zero and rejected as STALE_COMMAND below.
     std::int64_t stamp_ns = 0;
-    double stamp_s = 0.0;
-    if (chaos::rosStampToNs(request.stamp_sec, request.stamp_nanosec,
-                            stamp_ns)) {
-      stamp_s = stamp_ns / 1e9;
+    chaos::rosStampToNs(request.stamp_sec, request.stamp_nanosec, stamp_ns);
+    if (capture_failure) {
+      // The clock sample failed before the lock was taken. It is a driver
+      // failure and it is reported through the existing fault and halt
+      // path, so the motion is stopped instead of being armed blind.
+      // The control token is checked before the failure is reported: a
+      // wrong token stays NO_CONTROL even when the clock is unavailable.
+      guard_.require(request.lease_token);
+      std::rethrow_exception(capture_failure);
     }
-    guard_.velocity(request.lease_token, stamp_s, clocks_.ros_ns() / 1e9,
-                    request.valid_for_s, request.frame_id, asset_.frames.base,
-                    request.velocity);
-    adapter_->setVelocity(request.velocity);
+    // The original TTL bound. The deadline is anchored at the sample taken
+    // before the lock, so the lock wait and the validation consume the
+    // interval instead of extending it.
+    const double ttl = request.valid_for_s;
+    const bool ttl_usable = std::isfinite(ttl) && ttl > 0.0 &&
+                            ttl <= limits_.command_timeout_s;
+    std::optional<std::int64_t> origin_deadline;
+    if (ttl_usable) {
+      origin_deadline = driver_deadline::sourceDeadlineNs(
+        origin_anchor, stamp_ns, captured_ros_now, ttl);
+      if (!origin_deadline.has_value()) {
+        // The source interval is already consumed while the TTL itself is
+        // usable: the command is stale. It is rejected before the guard
+        // sample is committed, so the watermark and the armed velocity
+        // sample stay untouched.
+        // The control token is checked before the rejection: a wrong token
+        // stays NO_CONTROL even when the source interval is unusable.
+        guard_.require(request.lease_token);
+        rejected("STALE_COMMAND",
+                 "Command is expired or timestamp is unusable");
+      }
+    }
+    // An invalid TTL is not a deadline problem: it keeps the guard's own
+    // error code (INVALID_ARGUMENT, OUT_OF_RANGE) and never commits a
+    // sample. The guard validates the control token itself, so a wrong
+    // token stays NO_CONTROL on this path as well.
+    guard_.velocityNs(request.lease_token, stamp_ns, captured_ros_now,
+                      request.valid_for_s, request.frame_id, asset_.frames.base,
+                      request.velocity);
+    admitted = true;
+    // The lease bound. The anchor is read BEFORE the steady reading, so a
+    // preemption between the two can only move the observed reading later
+    // and shorten the granted interval.
+    const std::int64_t bridge_anchor = clocks_.driver_mono_ns();
+    const double observed_steady = clocks_.steady_s();
+    const double lease_expires = guard_.leaseExpires();
+    const double velocity_expires = guard_.velocityExpires();
+    // Both bounds are checked on their own: std::min() would hide a NaN
+    // commit behind its finite sibling.
+    if (!std::isfinite(lease_expires) || lease_expires <= 0.0) {
+      throw std::runtime_error("Control lease expiry is unusable");
+    }
+    if (!std::isfinite(velocity_expires) || velocity_expires <= 0.0) {
+      throw std::runtime_error("Velocity expiry is unusable");
+    }
+    const std::optional<std::int64_t> bridge_deadline =
+      driver_deadline::boundedSteadyDeadlineNs(
+        bridge_anchor, std::min(lease_expires, velocity_expires),
+        observed_steady, limits_.command_timeout_s);
+    if (!bridge_deadline.has_value()) {
+      throw std::runtime_error("No usable motion deadline");
+    }
+    // The deadline is the earlier of two independent bounds: the original
+    // TTL bound and the remaining lease bound. The origin bound is what
+    // keeps the validation delay from being absorbed by the guard's own,
+    // later steady reading.
+    //
+    // The guard accepted the command, so the TTL is usable and the origin
+    // deadline above was computed: it is present here.
+    const std::int64_t deadline = std::min(*origin_deadline, *bridge_deadline);
+    // The final check: the deadline must still be in the future when the
+    // command reaches the transport. An elapsed deadline never produces a
+    // nonzero output.
+    const std::int64_t dispatch_now = clocks_.driver_mono_ns();
+    if (dispatch_now <= 0 || dispatch_now >= deadline) {
+      throw std::runtime_error("Motion deadline elapsed before dispatch");
+    }
+    // The command carries the original source stamp and the immutable
+    // absolute deadline D. The adapter never re-anchors or extends it.
+    adapter_->setVelocityUntil(request.velocity, stamp_ns, deadline);
     driving_ = true;
     emitTrace("motion.velocity", "issued", "RUNTIME_ISSUED", request.request_id,
-              request.velocity);
-    {
-      CommandResultView result;
-      result.stamp_ns = clocks_.ros_ns();
-      result.request_id = request.request_id;
-      result.success = true;
-      result.code = "ACCEPTED";
-      result.message = "Velocity accepted until command expiry";
-      publishResult(result);
-    }
+              request.velocity, deadline);
+    publishResult(true, "ACCEPTED",
+                  "Velocity accepted until command expiry", request.request_id);
   } catch (const chaos::Rejected & error) {
-    emitTrace("motion.velocity", "rejected", error.code(), request.request_id);
-    {
-      CommandResultView result;
-      result.stamp_ns = clocks_.ros_ns();
-      result.request_id = request.request_id;
-      result.success = false;
-      result.code = error.code();
-      result.message = error.message();
-      publishResult(result);
+    if (!admitted) {
+      emitTrace("motion.velocity", "rejected", error.code(), request.request_id);
+      publishResult(false, error.code(), error.message(), request.request_id);
+      return;
     }
+    // The guard already admitted and armed the sample: a rejection after
+    // that point must stop the motion instead of leaving the old physical
+    // output to the just extended guard timeout.
+    fault_ = error.what();
+    halt("DRIVER_ERROR", fault_);
+    emitTrace("motion.velocity", "rejected", "DRIVER_ERROR", request.request_id);
+    publishResult(false, "DRIVER_ERROR", fault_, request.request_id);
   } catch (const std::exception & error) {
     fault_ = error.what();
     halt("DRIVER_ERROR", fault_);
-    emitTrace("motion.velocity", "rejected", "DRIVER_ERROR",
-              request.request_id);
-    {
-      CommandResultView result;
-      result.stamp_ns = clocks_.ros_ns();
-      result.request_id = request.request_id;
-      result.success = false;
-      result.code = "DRIVER_ERROR";
-      result.message = fault_;
-      publishResult(result);
-    }
+    emitTrace("motion.velocity", "rejected", "DRIVER_ERROR", request.request_id);
+    publishResult(false, "DRIVER_ERROR", fault_, request.request_id);
   }
 }
 
@@ -440,8 +619,7 @@ ControlCoordinator::GoalDecision ControlCoordinator::goal(
   try {
     deadline = captureDeadline(request.expires_at);
   } catch (const std::exception & error) {
-    log("warning", std::string("Rejected ") + capabilityName(kind) + ": " +
-                    error.what());
+    log("warning", {"Rejected ", capabilityName(kind), ": ", error.what()});
     return GoalDecision::kReject;
   }
   std::lock_guard<std::mutex> guard(mutex_);
@@ -491,12 +669,13 @@ ControlCoordinator::GoalDecision ControlCoordinator::goal(
     operation_ = std::make_shared<Operation>(reservation);
     return GoalDecision::kAccept;
   } catch (const chaos::Rejected & error) {
-    log("warning", "Rejected " + capabilityName(kind) + ": " + error.code() +
-                    ": " + error.message());
+    log("warning",
+        {"Rejected ", capabilityName(kind), ": ", error.code(), ": ",
+         error.message()});
     return GoalDecision::kReject;
   } catch (const std::exception & error) {
-    log("error", "Failed to validate " + capabilityName(kind) +
-                  ": " + std::string(error.what()));
+    log("error",
+        {"Failed to validate ", capabilityName(kind), ": ", error.what()});
     return GoalDecision::kReject;
   }
 }
@@ -698,34 +877,37 @@ void ControlCoordinator::tick() {
     }
     const double now = clocks_.steady_s();
     try {
-    expireLocked();
-    if (operation_ && !operation_->handle_token &&
-        (operation_->interrupted.has_value() ||
-         now - operation_->start_s > kAcceptanceHandshakeTimeout)) {
-      // The accepted handle may never be delivered (client disappeared);
-      // expire the reservation instead of waiting forever.
-      halt("TIMEOUT", "Action acceptance handshake expired");
-      expired_terminal = operation_->terminal;
-      operation_.reset();
-    }
-    if (driving_ && guard_.velocityTimedOut()) {
-      halt("COMMAND_EXPIRED", "Velocity command expired");
-    }
-    retryStop(false);
-    const AdapterSnapshot snapshot = adapter_->snapshot();
-    if ((driving_ || operation_) &&
-        (!snapshot.connected || !snapshot.ready)) {
-      halt("NOT_READY", "Adapter telemetry lost or no longer ready");
-    }
-    adapter_->update(now - last_tick_s_);
-    if (now - last_state_s_ >= kStatePublishInterval) {
-      publishStateLocked();
-      last_state_s_ = now;
-    }
+      expireLocked();
+      if (operation_ && !operation_->handle_token &&
+          (operation_->interrupted.has_value() ||
+           now - operation_->start_s > kAcceptanceHandshakeTimeout)) {
+        // The accepted handle may never be delivered (client disappeared);
+        // expire the reservation instead of waiting forever.
+        halt("TIMEOUT", "Action acceptance handshake expired");
+        expired_terminal = operation_->terminal;
+        operation_.reset();
+      }
+      if (driving_ && guard_.velocityTimedOut()) {
+        halt("COMMAND_EXPIRED", "Velocity command expired");
+      }
+      retryStop(false);
+      // The control health of the adapter: this snapshot decides the
+      // telemetry-loss halt. The state observation reads its own snapshot
+      // and never feeds this decision.
+      const AdapterSnapshot snapshot = adapter_->snapshot();
+      if ((driving_ || operation_) &&
+          (!snapshot.connected || !snapshot.ready)) {
+        halt("NOT_READY", "Adapter telemetry lost or no longer ready");
+      }
+      adapter_->update(now - last_tick_s_);
+      if (now - last_state_s_ >= kStatePublishInterval) {
+        publishStateLocked();
+        last_state_s_ = now;
+      }
     } catch (const std::exception & error) {
       fault_ = error.what();
       halt("DRIVER_ERROR", fault_);
-      log("error", "Adapter error: " + fault_);
+      log("error", {"Adapter error: ", fault_});
     }
     last_tick_s_ = now;
   }
@@ -741,38 +923,46 @@ void ControlCoordinator::tick() {
 }
 
 void ControlCoordinator::publishStateLocked() {
-  if (!sinks_.state) {
-    return;
-  }
-  const AdapterSnapshot snapshot = adapter_->snapshot();
-  StateView state;
-  state.stamp_ns = clocks_.ros_ns();
-  state.asset_id = asset_.id;
-  state.model = asset_.model;
-  state.connected = snapshot.connected;
-  state.ready = snapshot.ready && fault_.empty();
-  state.pose_valid = snapshot.pose_valid && snapshot.connected;
-  if (!fault_.empty()) {
-    state.operational_state = "fault";
-  } else if (!snapshot.connected) {
-    state.operational_state = "offline";
-  } else if (!snapshot.ready) {
-    state.operational_state = "read_only";
-  } else if (operation_) {
-    state.operational_state = "executing";
-  } else if (driving_) {
-    state.operational_state = "velocity";
-  } else {
-    state.operational_state = "idle";
-  }
-  state.snapshot = snapshot;
-  state.detail = fault_.empty() ? snapshot.detail : fault_;
+  // The snapshot exists only to build the observation. The control health
+  // of the same adapter is decided separately by the tick, which keeps its
+  // own snapshot and its own fault path: a state that cannot be published
+  // never changes a control decision.
+  //
+  // Everything that belongs to the observation, including the snapshot read
+  // and every string copy, is inside one protected block. A failing clock, a
+  // failing snapshot or a failing channel drops the state and is counted as
+  // a construction failure of the state channel.
   try {
-    if (sinks_.state) {
-      sinks_.state(state);
+    const AdapterSnapshot snapshot = adapter_->snapshot();
+    StateView state;
+    state.stamp_ns = clocks_.ros_ns();
+    state.asset_id = asset_.id;
+    state.model = asset_.model;
+    state.connected = snapshot.connected;
+    state.ready = snapshot.ready && fault_.empty();
+    state.pose_valid = snapshot.pose_valid && snapshot.connected;
+    if (!fault_.empty()) {
+      state.operational_state = "fault";
+    } else if (!snapshot.connected) {
+      state.operational_state = "offline";
+    } else if (!snapshot.ready) {
+      state.operational_state = "read_only";
+    } else if (operation_) {
+      state.operational_state = "executing";
+    } else if (driving_) {
+      state.operational_state = "velocity";
+    } else {
+      state.operational_state = "idle";
     }
+    state.snapshot = snapshot;
+    state.detail = fault_.empty() ? snapshot.detail : fault_;
+    // The endpoint copies the state and coalesces the pending slot: the
+    // admission never blocks and never runs a sink on this thread.
+    observations_->state(state);
   } catch (...) {
-    // State publication is observability; it must never break the watchdog.
+    // State publication is observability; it must never break the watchdog
+    // and it must never turn into a control fault.
+    observations_->recordConstructionFailure(ObservationChannel::state);
   }
 }
 
@@ -811,7 +1001,7 @@ void ControlCoordinator::finalize() {
   try {
     adapter_->close();
   } catch (const std::exception & error) {
-    log("error", "Adapter close failed: " + std::string(error.what()));
+    log("error", {"Adapter close failed: ", error.what()});
   }
 }
 

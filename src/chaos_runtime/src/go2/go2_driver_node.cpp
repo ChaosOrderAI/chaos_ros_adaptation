@@ -3,8 +3,9 @@
 #include <chrono>
 #include <utility>
 
-#include <geometry_msgs/msg/twist_stamped.hpp>
+#include <chaos_interfaces/msg/driver_velocity_command.hpp>
 
+#include "chaos_runtime/driver_deadline.hpp"
 #include "chaos_runtime/ros_adapters.hpp"
 
 namespace chaos::go2 {
@@ -73,15 +74,27 @@ Go2DriverNode::Go2DriverNode(Go2BackendFactory backend_factory,
   core_config.velocity_frame =
     options_json.at("velocity_frame").get<std::string>();
   core_config.limits = asset_.limits;
+  // The clock-domain identity of this process. It names the boot instance
+  // and the Linux time namespace that the command deadline belongs to. The
+  // driver compares it with the identity of every command, so an unreadable
+  // identity must stop the driver instead of letting it compare deadlines of
+  // two different clocks. localClockDomainId() throws in that case: there is
+  // no empty or guessed fallback.
+  core_config.clock_domain_id =
+    runtime::driver_deadline::localClockDomainId();
   core_ = std::make_unique<Go2DriverCore>(
     core_config, nullptr,
-    [this] { return get_clock()->now().nanoseconds(); });
+    [this] { return get_clock()->now().nanoseconds(); },
+    // The transport clock is the named Linux CLOCK_MONOTONIC clock. It owns
+    // every command deadline, so it is passed explicitly instead of relying
+    // on the default of the core.
+    runtime::driver_deadline::monotonicNowNs);
 
   odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(
     odom_topic, rclcpp::QoS(1));
-  cmd_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+  cmd_sub_ = create_subscription<chaos_interfaces::msg::DriverVelocityCommand>(
     cmd_topic, rclcpp::QoS(1),
-    [this](const geometry_msgs::msg::TwistStamped & message) {
+    [this](const chaos_interfaces::msg::DriverVelocityCommand & message) {
       onCommand(message);
     });
 
@@ -126,14 +139,21 @@ Go2DriverNode::Go2DriverNode(Go2BackendFactory backend_factory,
 Go2DriverNode::~Go2DriverNode() { close(); }
 
 void Go2DriverNode::onCommand(
-  const geometry_msgs::msg::TwistStamped & message) {
+  const chaos_interfaces::msg::DriverVelocityCommand & message) {
+  // The transport fields are translated losslessly: no clock conversion, no
+  // re-aging of the source stamp and no reconstruction of the deadline. The
+  // core owns every admission decision.
   VelocityCommand command;
   command.stamp = Stamp{message.header.stamp.sec,
                         static_cast<std::int64_t>(message.header.stamp.nanosec)};
   command.frame_id = message.header.frame_id;
-  command.values = {message.twist.linear.x, message.twist.linear.y,
-                    message.twist.linear.z, message.twist.angular.x,
-                    message.twist.angular.y, message.twist.angular.z};
+  command.values = {message.velocity.linear.x, message.velocity.linear.y,
+                    message.velocity.linear.z, message.velocity.angular.x,
+                    message.velocity.angular.y, message.velocity.angular.z};
+  command.clock_domain_id = message.clock_domain_id;
+  command.issued_monotonic_ns = message.issued_monotonic_ns;
+  command.expires_monotonic_ns = message.expires_monotonic_ns;
+  command.stop = message.stop;
   if (!core_->acceptCommand(command)) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "%s",
                          core_->status().detail.c_str());

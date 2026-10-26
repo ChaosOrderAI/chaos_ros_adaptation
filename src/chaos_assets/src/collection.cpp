@@ -193,21 +193,26 @@ Json resolve_collection(const Json& model, const Json& instance, const std::stri
         resolved_topics.push_back(namespace_ + "/" + name);
       }
     }
-    const auto sensors = asset.find("sensors");
-    bool any_enabled = false;
-    if (sensors != asset.end()) {
-      for (const auto& item : sensors->items()) {
-        const Json& sensor = item.value();
-        if (!sensor.at("enabled").get<bool>()) continue;
-        any_enabled = true;
-        for (const auto& stream : sensor.at("streams").items()) {
-          resolved_topics.push_back(stream.value().at("topic").get<std::string>());
+    // include_sensors gates every automatic sensor contribution: the streams
+    // of the enabled sensors and the description/diagnostics topics. Explicit
+    // "topics" remain authoritative and are resolved in the branch above.
+    if (result.at("include_sensors").get<bool>()) {
+      const auto sensors = asset.find("sensors");
+      bool any_enabled = false;
+      if (sensors != asset.end()) {
+        for (const auto& item : sensors->items()) {
+          const Json& sensor = item.value();
+          if (!sensor.at("enabled").get<bool>()) continue;
+          any_enabled = true;
+          for (const auto& stream : sensor.at("streams").items()) {
+            resolved_topics.push_back(stream.value().at("topic").get<std::string>());
+          }
         }
       }
-    }
-    if (result.at("include_sensors").get<bool>() && any_enabled) {
-      resolved_topics.push_back(namespace_ + "/sensors/description");
-      resolved_topics.push_back(namespace_ + "/sensors/diagnostics");
+      if (any_enabled) {
+        resolved_topics.push_back(namespace_ + "/sensors/description");
+        resolved_topics.push_back(namespace_ + "/sensors/diagnostics");
+      }
     }
     if (result.at("include_tf").get<bool>()) {
       resolved_topics.push_back("/tf");

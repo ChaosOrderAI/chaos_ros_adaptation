@@ -1,18 +1,26 @@
 // Port of chaos_runtime/go2_driver_core.py (ROS-free core). step() and
 // write() live in the header as templates so stateful Move observers are
 // never copied.
+//
+// The deadline rules of this file are the transport contract:
+//   * a command carries an immutable absolute CLOCK_MONOTONIC deadline and
+//     the issue time it was created with,
+//   * the deadline is comparable only inside one clock domain,
+//   * the driver never restamps, recomputes or extends a deadline and never
+//     ages a command a second time against its own ROS clock.
 #include "chaos_runtime/go2_driver_core.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
 #include "chaos_core/clock.hpp"
 #include "chaos_core/time.hpp"
+#include "chaos_runtime/driver_deadline.hpp"
 
 namespace chaos::go2 {
 
 namespace {
-constexpr std::int64_t kNs = 1'000'000'000;
 bool allFinite(const std::array<double, 3> & values) {
   for (double value : values) {
     if (!std::isfinite(value)) {
@@ -47,13 +55,35 @@ std::array<double, 3> worldToBody(const std::array<double, 3> & vector,
 
 Go2DriverCore::Go2DriverCore(Go2AssetConfig config,
                              std::function<double()> clock,
-                             std::function<std::int64_t()> ros_clock)
+                             std::function<std::int64_t()> ros_clock,
+                             std::function<std::int64_t()> mono_clock)
     : config_(std::move(config)),
       clock_(clock ? std::move(clock) : chaos::monotonicSeconds),
-      ros_clock_(ros_clock ? std::move(ros_clock) : chaos::systemNs) {
+      ros_clock_(ros_clock ? std::move(ros_clock) : chaos::systemNs),
+      mono_clock_(mono_clock ? std::move(mono_clock)
+                             : chaos::runtime::driver_deadline::monotonicNowNs) {
   if (config_.velocity_frame != "odom" && config_.velocity_frame != "body") {
     throw std::invalid_argument("velocity_frame must be odom or body");
   }
+}
+
+Go2DriverCore::ClockReading Go2DriverCore::readClocks() const {
+  ClockReading reading;
+  try {
+    reading.seconds = clock_();
+    // A nonfinite seconds reading is an unavailable clock, never a valid
+    // one: the telemetry age cannot be computed from it.
+    reading.seconds_valid = std::isfinite(reading.seconds);
+  } catch (const std::exception &) {
+    reading.seconds_valid = false;
+  }
+  try {
+    reading.monotonic_ns = mono_clock_();
+    reading.monotonic_valid = reading.monotonic_ns > 0;
+  } catch (const std::exception &) {
+    reading.monotonic_valid = false;
+  }
+  return reading;
 }
 
 void Go2DriverCore::stopLocked() {
@@ -68,7 +98,7 @@ bool Go2DriverCore::stateFreshLocked(double now) const {
 }
 
 std::optional<SourceIdentity> Go2DriverCore::identityOf(
-  const SportState & message) const {
+    const SportState & message) const {
   if (message.has_tick) {
     return SourceIdentity{SourceIdentity::Kind::kTick, message.tick};
   }
@@ -80,8 +110,18 @@ std::optional<SourceIdentity> Go2DriverCore::identityOf(
 }
 
 bool Go2DriverCore::acceptState(const SportState & message) {
-  const double received = clock_();
-  const std::int64_t ros_ns = ros_clock_();
+  double received = 0.0;
+  std::int64_t ros_ns = 0;
+  try {
+    received = clock_();
+    ros_ns = ros_clock_();
+  } catch (const std::exception & error) {
+    std::lock_guard<std::mutex> guard(lock_);
+    sample_.reset();
+    detail_ = std::string("Sport telemetry clock unavailable: ") + error.what();
+    stopLocked();
+    return false;
+  }
   try {
     const std::optional<SourceIdentity> identity = identityOf(message);
     if (!allFinite(message.position)) {
@@ -177,20 +217,60 @@ bool Go2DriverCore::acceptState(const SportState & message) {
 }
 
 bool Go2DriverCore::acceptCommand(const VelocityCommand & message) {
-  const double received = clock_();
-  const std::int64_t ros_ns = ros_clock_();
+  // The transport clock is read before anything else: without it no deadline
+  // can be checked and no motion may be admitted.
+  const ClockReading reading = readClocks();
+  if (!reading.monotonic_valid || !reading.seconds_valid) {
+    std::lock_guard<std::mutex> guard(lock_);
+    detail_ = "Command clock unavailable";
+    stopLocked();
+    return false;
+  }
+  const std::int64_t mono_now = reading.monotonic_ns;
   try {
-    const std::int64_t source_ns = stampNs(message.stamp);
-    const std::int64_t ttl_ns = static_cast<std::int64_t>(
-      config_.limits.command_timeout_s * kNs);
-    const std::int64_t age_ns = ros_ns - source_ns;
-    if (source_ns <= 0 || age_ns < 0 || age_ns >= ttl_ns) {
+    // The clock domain names the boot instance and the time namespace of the
+    // issue time and of the deadline. An empty or different domain is a
+    // different clock: its numbers cannot be compared with ours. An empty
+    // command domain is already covered by the comparison, because an empty
+    // local domain is refused above.
+    if (config_.clock_domain_id.empty() ||
+        message.clock_domain_id != config_.clock_domain_id) {
       throw std::invalid_argument(
-        "Velocity command timestamp is missing, stale or in the future");
+        "Velocity command clock domain does not match the driver domain");
     }
-    if (message.frame_id != config_.base_frame) {
+    if (config_.base_frame.empty() || message.frame_id != config_.base_frame) {
       throw std::invalid_argument("Velocity command must use frame " +
                                   config_.base_frame);
+    }
+    if (message.stop) {
+      // An explicit stop: six exact zeros and a current issue time. The
+      // source stamp and the expiry are not needed for a stop.
+      for (double value : message.values) {
+        if (value != 0.0) {
+          throw std::invalid_argument(
+            "Stop command must carry six exact zeros");
+        }
+      }
+      if (message.issued_monotonic_ns <= 0 ||
+          message.issued_monotonic_ns > mono_now) {
+        throw std::invalid_argument(
+          "Stop command issue time is missing or in the future");
+      }
+      std::lock_guard<std::mutex> guard(lock_);
+      // The barrier only ever rises: a duplicate or older stop is safe and
+      // idempotent, and it never lowers the barrier.
+      last_command_issued_mono_ns_ =
+        std::max(last_command_issued_mono_ns_, message.issued_monotonic_ns);
+      stopLocked();
+      return true;
+    }
+
+    // Ordinary motion. Every input is checked before the command and the
+    // watermark are committed.
+    const std::int64_t source_ns = stampNs(message.stamp);
+    if (source_ns <= 0) {
+      throw std::invalid_argument(
+        "Velocity command timestamp is missing");
     }
     const std::array<double, 6> & twist = message.values;
     for (double value : twist) {
@@ -210,25 +290,42 @@ bool Go2DriverCore::acceptCommand(const VelocityCommand & message) {
       throw std::invalid_argument(
         "Velocity command exceeds configured speed limits");
     }
-    const std::array<double, 3> values{vx, vy, wz};
-    // Source age consumes the receiving watchdog budget; later ROS clock
-    // corrections can never extend this monotonic deadline.
-    Velocity command;
-    command.values = values;
-    command.monotonic_deadline =
-      received + static_cast<double>(ttl_ns - age_ns) / kNs;
-    command.source_deadline_ns = source_ns + ttl_ns;
-    command.received_ros_ns = ros_ns;
-    std::lock_guard<std::mutex> guard(lock_);
-    if (isZero(values)) {
-      // A stop is also a source-time barrier: delayed commands sent before
-      // it must not restart motion after the zero is issued.
-      last_command_stamp_ns_ = std::max(last_command_stamp_ns_, source_ns);
-      stopLocked();
-      return true;
+    if (message.issued_monotonic_ns <= 0) {
+      throw std::invalid_argument(
+        "Velocity command issue time is missing");
     }
-    if (source_ns <= last_command_stamp_ns_) {
-      detail_ = "Repeated or backward velocity command timestamp";
+    if (message.expires_monotonic_ns <= 0) {
+      throw std::invalid_argument(
+        "Velocity command deadline is missing");
+    }
+    if (message.issued_monotonic_ns > mono_now) {
+      throw std::invalid_argument(
+        "Velocity command issue time is in the future");
+    }
+    if (mono_now >= message.expires_monotonic_ns) {
+      throw std::invalid_argument(
+        "Velocity command deadline has already passed");
+    }
+    const std::optional<std::int64_t> cap_ns =
+      chaos::runtime::driver_deadline::floorDurationNs(
+        config_.limits.command_timeout_s);
+    if (!cap_ns.has_value()) {
+      throw std::invalid_argument(
+        "Configured command cap is not a usable interval");
+    }
+    // Both operands are positive and the deadline is larger than the issue
+    // time, so the difference cannot overflow.
+    if (message.expires_monotonic_ns - message.issued_monotonic_ns > *cap_ns) {
+      throw std::invalid_argument(
+        "Velocity command exceeds the driver command cap");
+    }
+
+    const std::array<double, 3> values{vx, vy, wz};
+    std::lock_guard<std::mutex> guard(lock_);
+    if (message.issued_monotonic_ns <= last_command_issued_mono_ns_) {
+      // The replay barrier is the issue time of the transport. The original
+      // source stamp is never compared with it.
+      detail_ = "Repeated or backward velocity command issue time";
       return false;
     }
     if (closed_ || !fault_.empty() || stop_pending_ ||
@@ -239,8 +336,12 @@ bool Go2DriverCore::acceptCommand(const VelocityCommand & message) {
       stopLocked();
       return false;
     }
-    command_ = command;
-    last_command_stamp_ns_ = source_ns;
+    Velocity velocity;
+    velocity.values = values;
+    velocity.expires_monotonic_ns = message.expires_monotonic_ns;
+    velocity.issued_monotonic_ns = message.issued_monotonic_ns;
+    command_ = velocity;
+    last_command_issued_mono_ns_ = message.issued_monotonic_ns;
     return true;
   } catch (const std::exception & error) {
     std::lock_guard<std::mutex> guard(lock_);
@@ -250,16 +351,19 @@ bool Go2DriverCore::acceptCommand(const VelocityCommand & message) {
   }
 }
 
-bool Go2DriverCore::expireLocked(double now, std::int64_t ros_ns) {
-  const bool fresh = stateFreshLocked(now);
-  const std::optional<Velocity> command = command_;
+bool Go2DriverCore::expireLocked(const ClockReading & reading) {
+  const bool fresh =
+    reading.seconds_valid && stateFreshLocked(reading.seconds);
+  // The expiry depends on the monotonic deadline only. The ROS clock of the
+  // driver never ages the command a second time.
   const bool expired =
-    command.has_value() &&
-    (now >= command->monotonic_deadline ||
-     ros_ns >= command->source_deadline_ns ||
-     ros_ns < command->received_ros_ns);
+    command_.has_value() &&
+    (!reading.monotonic_valid ||
+     reading.monotonic_ns >= command_->expires_monotonic_ns);
+  // An unavailable clock or a stale sample invalidates every cached motion,
+  // whichever issue identity it carries.
   if ((!fresh || expired || closed_ || !fault_.empty()) &&
-      command.has_value()) {
+      command_.has_value()) {
     stopLocked();
   }
   if (!fresh) {
