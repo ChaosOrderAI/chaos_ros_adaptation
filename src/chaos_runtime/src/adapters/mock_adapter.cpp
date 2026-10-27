@@ -5,11 +5,12 @@
 #include <cmath>
 
 #include "chaos_runtime/asset_config.hpp"
+#include "chaos_runtime/asset_validation.hpp"
 
 namespace chaos::runtime {
 
 std::set<std::string> MockAdapter::capabilitiesFor(const std::string & kind) {
-  std::set<std::string> all = info().supported_capabilities;
+  std::set<std::string> all = pluginSpec("mock").supported_capabilities;
   if (kind == "ugv" || kind == "quadruped") {
     all.erase("flight.takeoff");
     all.erase("flight.land");
@@ -19,7 +20,7 @@ std::set<std::string> MockAdapter::capabilitiesFor(const std::string & kind) {
 
 std::string MockAdapter::validateOptions(const AssetConfig & asset) {
   for (const auto & key : asset.options.items()) {
-    if (!key.key().empty() && info().option_names.count(key.key()) == 0) {
+    if (!key.key().empty() && pluginSpec("mock").option_names.count(key.key()) == 0) {
       throw AssetConfigError("Unsupported mock options: " + key.key());
     }
   }

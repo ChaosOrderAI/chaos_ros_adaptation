@@ -1,15 +1,12 @@
 #include "chaos_bringup/runtime.hpp"
 
-#include <unistd.h>
-
 #include <filesystem>
 #include <string>
 #include <vector>
 
-#include <ament_index_cpp/get_package_prefix.hpp>
-
 #include "chaos_assets/errors.hpp"
 #include "chaos_assets/process.hpp"
+#include "installed_executable.hpp"
 
 namespace chaos::bringup {
 
@@ -22,20 +19,12 @@ using chaos::assets::ConfigurationError;
 // The executable is looked up in the sourced ROS installation, so the same
 // build that provides the node provides the interface.
 std::string resolve_executable(const std::string& package, const std::string& executable) {
-  std::string prefix;
-  try {
-    prefix = ament_index_cpp::get_package_prefix(package);
-  } catch (const std::exception&) {
-    throw ConfigurationError("the runtime package '" + package +
-                             "' is unavailable; build and source its ROS workspace");
-  }
-  const std::filesystem::path path =
-      std::filesystem::path(prefix) / "lib" / package / executable;
-  if (!std::filesystem::is_regular_file(path) || ::access(path.c_str(), X_OK) != 0) {
-    throw ConfigurationError("the runtime executable is unavailable: " + package + "/" +
-                             executable);
-  }
-  return std::filesystem::absolute(path).string();
+  return resolve_installed_executable(
+      package, executable, {},
+      "the runtime package '" + package + "' is unavailable; build and source its ROS workspace",
+      [&](const std::filesystem::path&) {
+        return "the runtime executable is unavailable: " + package + "/" + executable;
+      });
 }
 
 // The executable of one interface.

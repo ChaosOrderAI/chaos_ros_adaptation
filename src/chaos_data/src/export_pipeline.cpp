@@ -28,6 +28,7 @@
 
 #include <boost/multiprecision/cpp_int.hpp>
 
+#include "chaos_core/time.hpp"
 #include "chaos_data/file_io.hpp"
 #include "chaos_data/npy.hpp"
 #include "export_hash.hpp"
@@ -132,11 +133,12 @@ bool sampleStamp(const DecodedMessage & message, const FeatureSpec & feature,
       value.kind != FieldValue::Kind::kTimestamp) {
     return false;
   }
-  if (value.seconds < 0 || value.nanoseconds >= 1000000000U) {
-    return false;
-  }
-  const std::int64_t result = value.seconds * kNanoseconds + value.nanoseconds;
-  if (result == 0) {
+  std::int64_t result = 0;
+  // Zero is a valid ROS time, but a sample without a source time cannot refresh
+  // an observation, so it is rejected here rather than inside rosStampToNs.
+  if (!chaos::rosStampToNs(value.seconds, static_cast<std::int64_t>(value.nanoseconds),
+                           result) ||
+      result == 0) {
     return false;
   }
   stamp = result;

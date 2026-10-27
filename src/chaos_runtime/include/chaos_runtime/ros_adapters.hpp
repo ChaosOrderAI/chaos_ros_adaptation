@@ -44,10 +44,6 @@ std::optional<AdapterSnapshot> odometrySnapshot(
 
 class LingaoAdapter : public Adapter {
 public:
-  static AdapterInfo info() {
-    return AdapterInfo{{"state", "motion.velocity", "motion.stop"},
-                       {"odom_topic", "cmd_vel_topic"}};
-  }
   static void validateOptions(const AssetConfig & asset);
 
   LingaoAdapter(rclcpp::Node & node, const AssetConfig & asset);
@@ -77,12 +73,6 @@ private:
 
 class Go2Adapter : public Adapter {
 public:
-  static AdapterInfo info() {
-    return AdapterInfo{{"state", "motion.velocity", "motion.stop"},
-                       {"odom_topic", "cmd_vel_topic", "network_interface",
-                        "dds_domain_id", "sport_state_topic",
-                        "velocity_frame"}};
-  }
   static void validateOptions(const AssetConfig & asset);
 
   Go2Adapter(rclcpp::Node & node, const AssetConfig & asset);
@@ -135,7 +125,6 @@ private:
 
 class DjiLegacyAdapter : public Adapter {
 public:
-  static AdapterInfo info() { return AdapterInfo{{"state"}, {"status_topic"}}; }
   static void validateOptions(const AssetConfig & asset);
 
   DjiLegacyAdapter(rclcpp::Node & node, const AssetConfig & asset);

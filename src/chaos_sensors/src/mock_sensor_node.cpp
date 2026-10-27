@@ -21,37 +21,16 @@
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 
-#include "chaos_core/time.hpp"
 #include "chaos_sensors/mock_sensor_node.hpp"
+#include "chaos_sensors/ros_stamp.hpp"
 #include "chaos_sensors/sensor_config.hpp"
+#include "chaos_sensors/stream_qos.hpp"
 
 namespace chaos::sensors {
 namespace {
 
 constexpr std::int32_t kImageHeight = 48;
 constexpr std::int32_t kImageWidth = 64;
-
-rclcpp::QoS publisherQoS(const std::string & name) {
-  if (name == "sensor_data") {
-    return rclcpp::SensorDataQoS();
-  }
-  if (name == "reliable") {
-    return rclcpp::QoS(5).reliability(rclcpp::ReliabilityPolicy::Reliable);
-  }
-  throw SensorConfigError("unsupported sensor QoS");
-}
-
-// Converts a ROS clock reading (nanoseconds since the epoch, possibly
-// negative for a simulated clock moved before the epoch) into a ROS time
-// message. The remainder is normalized, so the nanosecond field never
-// becomes an invalid huge unsigned value.
-void stampFromNs(std::int64_t ns, builtin_interfaces::msg::Time & stamp) {
-  std::int64_t sec = 0;
-  std::int64_t nanosec = 0;
-  chaos::rosStampFromNs(ns, sec, nanosec);
-  stamp.sec = static_cast<std::int32_t>(sec);
-  stamp.nanosec = static_cast<std::uint32_t>(nanosec);
-}
 
 sensor_msgs::msg::Image makeImage(const std::string & frame_id) {
   sensor_msgs::msg::Image message;
@@ -185,7 +164,7 @@ private:
     auto runtime = std::make_shared<StreamRuntime<MessageT>>();
     runtime->config = stream;
     runtime->publisher = create_publisher<MessageT>(
-      stream.topic, publisherQoS(stream.qos));
+      stream.topic, streamQoS(stream.qos));
     runtime->message = std::make_shared<MessageT>(std::move(message));
     const auto payload = runtime->message;
     const auto publisher = runtime->publisher;

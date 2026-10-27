@@ -25,12 +25,8 @@ std::string toHex(const unsigned char * digest, unsigned int length)
   return result;
 }
 
-}  // namespace
-
-std::string digestOfBytes(const void * data, std::size_t size)
+std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> openSha256()
 {
-  // The context owns the resources of the digest and releases them even when
-  // an error is thrown.
   std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(
     EVP_MD_CTX_new(), &EVP_MD_CTX_free);
   if (!context) {
@@ -39,15 +35,28 @@ std::string digestOfBytes(const void * data, std::size_t size)
   if (EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1) {
     throw std::runtime_error("cannot start the digest");
   }
-  if (size > 0 && EVP_DigestUpdate(context.get(), data, size) != 1) {
-    throw std::runtime_error("cannot update the digest");
-  }
+  return context;
+}
+
+std::string finishSha256(EVP_MD_CTX * context)
+{
   unsigned char digest[EVP_MAX_MD_SIZE];
   unsigned int length = 0;
-  if (EVP_DigestFinal_ex(context.get(), digest, &length) != 1) {
+  if (EVP_DigestFinal_ex(context, digest, &length) != 1) {
     throw std::runtime_error("cannot finish the digest");
   }
   return toHex(digest, length);
+}
+
+}  // namespace
+
+std::string digestOfBytes(const void * data, std::size_t size)
+{
+  auto context = openSha256();
+  if (size > 0 && EVP_DigestUpdate(context.get(), data, size) != 1) {
+    throw std::runtime_error("cannot update the digest");
+  }
+  return finishSha256(context.get());
 }
 
 std::string digestOf(const std::filesystem::path & path)
@@ -56,14 +65,7 @@ std::string digestOf(const std::filesystem::path & path)
   if (!input) {
     throw std::runtime_error("cannot read the source file: " + path.string());
   }
-  std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(
-    EVP_MD_CTX_new(), &EVP_MD_CTX_free);
-  if (!context) {
-    throw std::runtime_error("cannot create the digest context");
-  }
-  if (EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1) {
-    throw std::runtime_error("cannot start the digest");
-  }
+  auto context = openSha256();
   std::vector<char> chunk(1024 * 1024);
   while (input) {
     input.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
@@ -79,12 +81,7 @@ std::string digestOf(const std::filesystem::path & path)
   if (!input.eof()) {
     throw std::runtime_error("cannot read the source file: " + path.string());
   }
-  unsigned char digest[EVP_MAX_MD_SIZE];
-  unsigned int length = 0;
-  if (EVP_DigestFinal_ex(context.get(), digest, &length) != 1) {
-    throw std::runtime_error("cannot finish the digest");
-  }
-  return toHex(digest, length);
+  return finishSha256(context.get());
 }
 
 }  // namespace internal

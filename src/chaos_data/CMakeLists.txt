@@ -147,6 +147,7 @@ target_include_directories(chaos_data_audit PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(chaos_data_audit PUBLIC
+  chaos_core::chaos_core
   chaos_data_ros_message
   chaos_data_file_io
   rosbag2_cpp::rosbag2_cpp
@@ -170,6 +171,7 @@ target_include_directories(chaos_data_export PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(chaos_data_export PUBLIC
+  chaos_core::chaos_core
   chaos_data_ros_message
   chaos_data_file_io
   rosbag2_cpp::rosbag2_cpp

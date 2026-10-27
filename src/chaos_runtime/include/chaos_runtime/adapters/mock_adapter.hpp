@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <set>
 #include <string>
 
 #include "chaos_runtime/adapter.hpp"
@@ -11,12 +12,6 @@ namespace chaos::runtime {
 
 class MockAdapter : public Adapter {
 public:
-  static AdapterInfo info() {
-    return AdapterInfo{{"state", "motion.velocity", "motion.stop",
-                        "navigation.pose", "flight.takeoff", "flight.land"},
-                       {"kind"}};
-  }
-
   // Mirrors MockAdapter.capabilities_for: ground kinds drop flight actions.
   static std::set<std::string> capabilitiesFor(const std::string & kind);
 

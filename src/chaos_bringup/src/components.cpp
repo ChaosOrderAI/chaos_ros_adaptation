@@ -13,11 +13,10 @@
 #include <string>
 #include <vector>
 
-#include <ament_index_cpp/get_package_prefix.hpp>
-
 #include "chaos_assets/errors.hpp"
 #include "chaos_assets/sensors.hpp"
 #include "chaos_assets/yaml.hpp"
+#include "installed_executable.hpp"
 
 namespace chaos::bringup {
 
@@ -230,18 +229,12 @@ Json plan_summary(const LaunchPlan& plan) {
 }
 
 void require_executable(const std::string& package, const std::string& executable) {
-  std::string prefix;
-  try {
-    prefix = ament_index_cpp::get_package_prefix(package);
-  } catch (const std::exception&) {
-    throw ConfigurationError("sensor dependency '" + package +
-                             "' is unavailable; build and source its ROS workspace");
-  }
-  const std::filesystem::path path =
-      std::filesystem::path(prefix) / "lib" / package / executable;
-  if (!std::filesystem::is_regular_file(path) || ::access(path.c_str(), X_OK) != 0) {
-    throw ConfigurationError("sensor executable is unavailable: " + package + "/" + executable);
-  }
+  resolve_installed_executable(
+      package, executable, {},
+      "sensor dependency '" + package + "' is unavailable; build and source its ROS workspace",
+      [&](const std::filesystem::path&) {
+        return "sensor executable is unavailable: " + package + "/" + executable;
+      });
 }
 
 void check_output_directory(const std::string& path) {

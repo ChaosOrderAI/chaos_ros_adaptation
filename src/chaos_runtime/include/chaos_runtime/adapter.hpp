@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <optional>
 #include <limits>
-#include <set>
 #include <string>
 
 #include "chaos_runtime/control.hpp"
@@ -99,15 +98,5 @@ public:
   virtual void update(double dt) { (void)dt; }
   virtual void close() { stop(); }
 };
-
-struct AdapterInfo {
-  std::set<std::string> supported_capabilities;
-  std::set<std::string> option_names;
-};
-
-// Validates plugin/options/capabilities against an already parsed asset,
-// mirroring chaos_runtime.adapters.base.validate_asset. Throws on mismatch.
-void validateAssetForAdapter(const AssetConfig & asset,
-                             const AdapterInfo & info);
 
 }  // namespace chaos::runtime

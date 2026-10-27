@@ -1,10 +1,14 @@
 // Ports of chaos_runtime/adapters/{lingao,go2,dji_legacy}.py.
 #include "chaos_runtime/ros_adapters.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
+#include <mutex>
+#include <optional>
 #include <utility>
 
 #include <chaos_interfaces/msg/driver_velocity_command.hpp>
@@ -149,6 +153,50 @@ bool parseStatus(const std::string & data, bool & ok, bool & flight_fresh) {
   return true;
 }
 
+// Lingao and Go2 share the odometry cache. The attached and stale strings
+// stay at the call site; the stop path does not, because Go2 publishes a
+// deadline stop rather than an empty Twist.
+void ingestOdometry(const nav_msgs::msg::Odometry & message,
+                    const AssetFrames & frames, const control::Limits & limits,
+                    const std::function<std::int64_t()> & ros_now_ns,
+                    const std::function<double()> & mono_s,
+                    const std::string & attached_detail,
+                    const std::string & invalid_detail, std::mutex & cache_mutex,
+                    double & last_received_s, AdapterSnapshot & data) {
+  const auto & p = message.pose.pose.position;
+  const auto & q = message.pose.pose.orientation;
+  const auto & t = message.twist.twist;
+  auto snapshot = odometrySnapshot(
+    frames.odom, frames.base, message.header.frame_id, message.child_frame_id,
+    message.header.stamp.sec, message.header.stamp.nanosec,
+    {p.x, p.y, p.z}, {q.x, q.y, q.z, q.w},
+    {t.linear.x, t.linear.y, t.linear.z, t.angular.x, t.angular.y, t.angular.z},
+    limits.state_timeout_s, ros_now_ns(), mono_s(), attached_detail);
+  std::lock_guard<std::mutex> guard(cache_mutex);
+  if (!snapshot.has_value()) {
+    last_received_s = 0.0;
+    data = AdapterSnapshot{};
+    data.detail = invalid_detail;
+    return;
+  }
+  last_received_s = mono_s() -
+    std::max(0.0, ros_now_ns() / 1e9 - *snapshot->source_stamp_ns / 1e9);
+  data = *snapshot;
+}
+
+AdapterSnapshot cachedOrStale(std::mutex & cache_mutex, double & last_received_s,
+                              const AdapterSnapshot & data,
+                              const std::function<double()> & mono_s,
+                              double timeout_s, const std::string & stale_detail) {
+  std::lock_guard<std::mutex> guard(cache_mutex);
+  if (!last_received_s || mono_s() - last_received_s >= timeout_s) {
+    AdapterSnapshot stale;
+    stale.detail = stale_detail;
+    return stale;
+  }
+  return data;
+}
+
 }  // namespace
 
 std::string requireTopicOption(const nlohmann::json & options,
@@ -211,7 +259,7 @@ std::optional<AdapterSnapshot> odometrySnapshot(
 // --- Lingao --------------------------------------------------------------
 
 void LingaoAdapter::validateOptions(const AssetConfig & asset) {
-  requireKnownOptions(asset.options, info().option_names, "Lingao");
+  requireKnownOptions(asset.options, pluginSpec("lingao_ros2").option_names, "Lingao");
   if (asset.options.find("odom_topic") == asset.options.end() ||
       asset.options.find("cmd_vel_topic") == asset.options.end()) {
     throw AssetConfigError(
@@ -242,38 +290,15 @@ LingaoAdapter::LingaoAdapter(rclcpp::Node & node, const AssetConfig & asset)
 }
 
 void LingaoAdapter::onOdometry(const nav_msgs::msg::Odometry & message) {
-  const auto & p = message.pose.pose.position;
-  const auto & q = message.pose.pose.orientation;
-  const auto & t = message.twist.twist;
-  auto snapshot = odometrySnapshot(
-    frames_.odom, frames_.base, message.header.frame_id,
-    message.child_frame_id, message.header.stamp.sec,
-    message.header.stamp.nanosec, {p.x, p.y, p.z}, {q.x, q.y, q.z, q.w},
-    {t.linear.x, t.linear.y, t.linear.z, t.angular.x, t.angular.y,
-     t.angular.z},
-    limits_.state_timeout_s, ros_now_ns_(), mono_s_(),
-    "Attached to Lingao odometry; driver must be independently running");
-  std::lock_guard<std::mutex> guard(cache_mutex_);
-  if (!snapshot.has_value()) {
-    last_received_s_ = 0.0;
-    data_ = AdapterSnapshot{};
-    data_.detail = "Invalid odometry values or frame mismatch or stale source stamp";
-    return;
-  }
-  last_received_s_ = mono_s_() -
-    std::max(0.0, ros_now_ns_() / 1e9 - *snapshot->source_stamp_ns / 1e9);
-  data_ = *snapshot;
+  ingestOdometry(message, frames_, limits_, ros_now_ns_, mono_s_,
+                 "Attached to Lingao odometry; driver must be independently running",
+                 "Invalid odometry values or frame mismatch or stale source stamp",
+                 cache_mutex_, last_received_s_, data_);
 }
 
 AdapterSnapshot LingaoAdapter::snapshot() {
-  std::lock_guard<std::mutex> guard(cache_mutex_);
-  if (!last_received_s_ ||
-      mono_s_() - last_received_s_ >= limits_.state_timeout_s) {
-    AdapterSnapshot stale;
-    stale.detail = "Lingao odometry unavailable or stale";
-    return stale;
-  }
-  return data_;
+  return cachedOrStale(cache_mutex_, last_received_s_, data_, mono_s_,
+                       limits_.state_timeout_s, "Lingao odometry unavailable or stale");
 }
 
 void LingaoAdapter::validateVelocity(const std::array<double, 6> & values) {
@@ -311,8 +336,9 @@ void LingaoAdapter::controlledStop() {
 // --- Unitree Go2 ---------------------------------------------------------
 
 void Go2Adapter::validateOptions(const AssetConfig & asset) {
-  requireKnownOptions(asset.options, info().option_names, "Go2");
-  for (const auto & name : info().option_names) {
+  const PluginSpec & spec = pluginSpec("unitree_go2");
+  requireKnownOptions(asset.options, spec.option_names, "Go2");
+  for (const auto & name : spec.option_names) {
     if (asset.options.find(name) == asset.options.end()) {
       throw AssetConfigError("Go2 requires explicit option " + name);
     }
@@ -387,38 +413,16 @@ Go2Adapter::Go2Adapter(rclcpp::Node & node, const AssetConfig & asset)
 }
 
 void Go2Adapter::onOdometry(const nav_msgs::msg::Odometry & message) {
-  const auto & p = message.pose.pose.position;
-  const auto & q = message.pose.pose.orientation;
-  const auto & t = message.twist.twist;
-  auto snapshot = odometrySnapshot(
-    frames_.odom, frames_.base, message.header.frame_id,
-    message.child_frame_id, message.header.stamp.sec,
-    message.header.stamp.nanosec, {p.x, p.y, p.z}, {q.x, q.y, q.z, q.w},
-    {t.linear.x, t.linear.y, t.linear.z, t.angular.x, t.angular.y,
-     t.angular.z},
-    limits_.state_timeout_s, ros_now_ns_(), mono_s_(),
-    "Go2 DDS telemetry via managed driver; movement requires an operable sport mode");
-  std::lock_guard<std::mutex> guard(cache_mutex_);
-  if (!snapshot.has_value()) {
-    last_received_s_ = 0.0;
-    data_ = AdapterSnapshot{};
-    data_.detail = "Go2 odometry invalid, stale or frame mismatch";
-    return;
-  }
-  last_received_s_ = mono_s_() -
-    std::max(0.0, ros_now_ns_() / 1e9 - *snapshot->source_stamp_ns / 1e9);
-  data_ = *snapshot;
+  ingestOdometry(message, frames_, limits_, ros_now_ns_, mono_s_,
+                 "Go2 DDS telemetry via managed driver; movement requires an operable sport mode",
+                 "Go2 odometry invalid, stale or frame mismatch",
+                 cache_mutex_, last_received_s_, data_);
 }
 
 AdapterSnapshot Go2Adapter::snapshot() {
-  std::lock_guard<std::mutex> guard(cache_mutex_);
-  if (!last_received_s_ ||
-      mono_s_() - last_received_s_ >= limits_.state_timeout_s) {
-    AdapterSnapshot stale;
-    stale.detail = "Go2 driver telemetry unavailable or stale";
-    return stale;
-  }
-  return data_;
+  return cachedOrStale(cache_mutex_, last_received_s_, data_, mono_s_,
+                       limits_.state_timeout_s,
+                       "Go2 driver telemetry unavailable or stale");
 }
 
 void Go2Adapter::validateVelocity(const std::array<double, 6> & values) {
@@ -548,7 +552,7 @@ void Go2Adapter::controlledStop() {
 // --- Legacy DJI (read-only) ----------------------------------------------
 
 void DjiLegacyAdapter::validateOptions(const AssetConfig & asset) {
-  requireKnownOptions(asset.options, info().option_names, "DJI");
+  requireKnownOptions(asset.options, pluginSpec("dji_psdk_legacy").option_names, "DJI");
   const std::string topic =
     asset.options.find("status_topic") != asset.options.end()
       ? requireStringOption(asset.options, "status_topic", "DJI")

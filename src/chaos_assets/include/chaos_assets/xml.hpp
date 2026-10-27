@@ -7,6 +7,13 @@
 
 namespace chaos::assets {
 
+// True when the text contains a DOCTYPE or ENTITY declaration.
+//
+// The scan also rejects the spaced form `<! DOCTYPE`, which the xacro bridge
+// already rejects. A contiguous `<!doctype` remains rejected, so this does not
+// accept a document the previous native check refused.
+bool declares_doctype_or_entity(const std::string& xml);
+
 // One attribute of an XML element.
 struct XmlAttribute {
   std::string name;            // local name, without namespace prefix

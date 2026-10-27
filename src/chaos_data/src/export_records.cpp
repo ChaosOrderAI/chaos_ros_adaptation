@@ -26,6 +26,7 @@
 #include <chaos_interfaces/msg/control_trace.hpp>
 #include <chaos_interfaces/msg/robot_state.hpp>
 
+#include "chaos_core/time.hpp"
 #include "chaos_data/file_io.hpp"
 #include "chaos_data/ros_message.hpp"
 
@@ -293,10 +294,8 @@ ControlJournalSummary readControlEvents(
       continue;
     }
     const chaos_interfaces::msg::ControlTrace & trace = *record.message.trace();
-    const std::int64_t stamp =
-      static_cast<std::int64_t>(trace.header.stamp.sec) * kNanoseconds +
-      static_cast<std::int64_t>(trace.header.stamp.nanosec);
-    if (trace.header.stamp.sec < 0 || trace.header.stamp.nanosec >= 1000000000U ||
+    std::int64_t stamp = 0;
+    if (!chaos::rosStampToNs(trace.header.stamp.sec, trace.header.stamp.nanosec, stamp) ||
         stamp == 0) {
       throw std::runtime_error(
         "a ControlTrace requires a valid nonzero header timestamp");

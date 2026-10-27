@@ -268,13 +268,7 @@ std::string read_source(const std::string& path, const std::string& where) {
 }
 
 void reject_entities(const std::string& xml, const std::string& where) {
-  std::string lowered;
-  lowered.reserve(xml.size());
-  for (char c : xml) {
-    lowered += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  if (lowered.find("<!doctype") != std::string::npos ||
-      lowered.find("<!entity") != std::string::npos) {
+  if (declares_doctype_or_entity(xml)) {
     throw ConfigurationError(where + ": DOCTYPE and ENTITY declarations are not allowed");
   }
 }

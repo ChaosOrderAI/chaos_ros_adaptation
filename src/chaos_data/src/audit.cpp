@@ -5,7 +5,6 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <memory>
 #include <stdexcept>
 
@@ -17,6 +16,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 
+#include "chaos_core/time.hpp"
 #include "chaos_data/ros_message.hpp"
 #include "chaos_data/file_io.hpp"
 
@@ -25,16 +25,16 @@ namespace {
 
 constexpr std::int64_t kNanoseconds = 1000000000LL;
 
-// A source stamp that is valid for the ROS range.
+// A source stamp in the ROS range. Zero is a valid ROS time, but the audit
+// records it as its own category and does not treat it as a source time.
 bool stampFromSeconds(std::int64_t seconds, std::uint32_t nanoseconds,
                       AuditTracker::Observation & observation)
 {
-  if (seconds < 0 || seconds > std::numeric_limits<std::int32_t>::max() ||
-      nanoseconds >= static_cast<std::uint32_t>(kNanoseconds)) {
+  std::int64_t value = 0;
+  if (!chaos::rosStampToNs(seconds, static_cast<std::int64_t>(nanoseconds), value)) {
     observation.stamp_kind = "invalid";
     return false;
   }
-  const std::int64_t value = seconds * kNanoseconds + nanoseconds;
   if (value == 0) {
     observation.stamp_kind = "zero";
     return false;
@@ -116,19 +116,7 @@ AuditTracker::Observation sourceStamp(const DynamicMessage & message,
       observation.stamp_kind = "invalid";
       return observation;
     }
-    if (seconds < 0 || seconds > std::numeric_limits<std::int32_t>::max() ||
-        nanoseconds >= static_cast<std::uint32_t>(kNanoseconds)) {
-      observation.stamp_kind = "invalid";
-      return observation;
-    }
-    const std::int64_t value = seconds * kNanoseconds + nanoseconds;
-    if (value == 0) {
-      observation.stamp_kind = "zero";
-      return observation;
-    }
-    observation.has_source = true;
-    observation.source_ns = value;
-    observation.stamp_kind = "valid";
+    stampFromSeconds(seconds, nanoseconds, observation);
     return observation;
   }
   // A message without a header may still carry a top level stamp.
@@ -138,20 +126,7 @@ AuditTracker::Observation sourceStamp(const DynamicMessage & message,
       observation.stamp_kind = "invalid";
       return observation;
     }
-    if (value.seconds < 0 ||
-        value.seconds > std::numeric_limits<std::int32_t>::max() ||
-        value.nanoseconds >= static_cast<std::uint32_t>(kNanoseconds)) {
-      observation.stamp_kind = "invalid";
-      return observation;
-    }
-    const std::int64_t stamp = value.seconds * kNanoseconds + value.nanoseconds;
-    if (stamp == 0) {
-      observation.stamp_kind = "zero";
-      return observation;
-    }
-    observation.has_source = true;
-    observation.source_ns = stamp;
-    observation.stamp_kind = "valid";
+    stampFromSeconds(value.seconds, value.nanoseconds, observation);
     return observation;
   }
   observation.stamp_kind = "missing";

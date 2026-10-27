@@ -7,6 +7,7 @@
 
 #include "chaos_runtime/driver_deadline.hpp"
 #include "chaos_runtime/ros_adapters.hpp"
+#include "chaos_runtime/ros_stamp.hpp"
 
 namespace chaos::go2 {
 
@@ -15,10 +16,8 @@ nav_msgs::msg::Odometry fillOdometry(const SportSample & sample,
                                      const std::string & base_frame) {
   nav_msgs::msg::Odometry message;
   // Keep the DDS acquisition timestamp; timer publication never restamps.
-  message.header.stamp.sec =
-    static_cast<std::int32_t>(sample.ros_stamp_ns / 1000000000LL);
-  message.header.stamp.nanosec =
-    static_cast<std::uint32_t>(sample.ros_stamp_ns % 1000000000LL);
+  // A clock moved before the epoch still has to produce a valid ROS time.
+  chaos::runtime::stampFromNs(sample.ros_stamp_ns, message.header.stamp);
   message.header.frame_id = odom_frame;
   message.child_frame_id = base_frame;
   message.pose.pose.position.x = sample.position[0];

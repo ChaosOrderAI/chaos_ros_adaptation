@@ -13,21 +13,43 @@ namespace chaos::assets {
 
 namespace {
 
-// The largest document the parser accepts.
-constexpr size_t kMaxBytes = 4u * 1024u * 1024u;
+bool has_declaration(const std::string& lowered, const char* keyword) {
+  const std::string tight = std::string("<!") + keyword;
+  if (lowered.find(tight) != std::string::npos) return true;
+  const std::string marker = "<!";
+  for (size_t at = lowered.find(marker); at != std::string::npos; at = lowered.find(marker, at + 1)) {
+    size_t cursor = at + marker.size();
+    if (cursor >= lowered.size() || !std::isspace(static_cast<unsigned char>(lowered[cursor]))) {
+      continue;
+    }
+    while (cursor < lowered.size() && std::isspace(static_cast<unsigned char>(lowered[cursor]))) {
+      ++cursor;
+    }
+    const size_t length = std::char_traits<char>::length(keyword);
+    if (lowered.compare(cursor, length, keyword) != 0) continue;
+    const size_t end = cursor + length;
+    if (end == lowered.size() || !std::isalnum(static_cast<unsigned char>(lowered[end]))) {
+      return true;
+    }
+  }
+  return false;
+}
 
-// DOCTYPE and ENTITY declarations are rejected before libxml2 sees the
-// document: an internal subset can define recursive entities, and an
-// external subset can pull a network resource.
+}  // namespace
+
 bool declares_doctype_or_entity(const std::string& xml) {
   std::string lowered;
   lowered.reserve(xml.size());
-  for (char c : xml) {
-    lowered += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  for (unsigned char c : xml) {
+    lowered.push_back(static_cast<char>(std::tolower(c)));
   }
-  return lowered.find("<!doctype") != std::string::npos ||
-         lowered.find("<!entity") != std::string::npos;
+  return has_declaration(lowered, "doctype") || has_declaration(lowered, "entity");
 }
+
+namespace {
+
+// The largest document the parser accepts.
+constexpr size_t kMaxBytes = 4u * 1024u * 1024u;
 
 using NodeMap = std::map<const XmlElement*, xmlNodePtr>;
 

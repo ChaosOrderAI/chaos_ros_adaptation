@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "chaos_core/clock.hpp"
+#include "chaos_runtime/ros_stamp.hpp"
 #include "chaos_runtime/asset_config.hpp"
 #include "chaos_runtime/driver_deadline.hpp"
 #include "chaos_runtime/observation.hpp"
@@ -20,19 +21,6 @@ namespace chaos::runtime {
 namespace {
 using NavigatePose = chaos_interfaces::action::NavigatePose;
 using Flight = chaos_interfaces::action::Flight;
-
-void stampFromNs(std::int64_t ns, builtin_interfaces::msg::Time & stamp) {
-  // A simulated clock can be negative: normalize the remainder so the
-  // nanosecond field never becomes an invalid huge unsigned value.
-  std::int64_t sec = ns / 1000000000LL;
-  std::int64_t nanosec = ns % 1000000000LL;
-  if (nanosec < 0) {
-    nanosec += 1000000000LL;
-    --sec;
-  }
-  stamp.sec = static_cast<std::int32_t>(sec);
-  stamp.nanosec = static_cast<std::uint32_t>(nanosec);
-}
 
 // The ROS control trace sink. It is owned by the observation service, which
 // destroys it with the registration: the sink holds the publisher by value

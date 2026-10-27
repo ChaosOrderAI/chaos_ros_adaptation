@@ -21,25 +21,14 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/string.hpp>
 
-#include "chaos_core/time.hpp"
 #include "chaos_sensors/health.hpp"
+#include "chaos_sensors/ros_stamp.hpp"
 #include "chaos_sensors/sensor_config.hpp"
 #include "chaos_sensors/sensor_monitor_node.hpp"
+#include "chaos_sensors/stream_qos.hpp"
 
 namespace chaos::sensors {
 namespace {
-
-// Converts a ROS clock reading into a ROS time message. The remainder is
-// normalized, so a simulated clock that was moved before the epoch still
-// produces a valid sec/nanosec pair. The rule is shared with the mock sensor
-// (chaos::rosStampFromNs), so both nodes stamp identically.
-void stampFromNs(std::int64_t ns, builtin_interfaces::msg::Time & stamp) {
-  std::int64_t sec = 0;
-  std::int64_t nanosec = 0;
-  chaos::rosStampFromNs(ns, sec, nanosec);
-  stamp.sec = static_cast<std::int32_t>(sec);
-  stamp.nanosec = static_cast<std::uint32_t>(nanosec);
-}
 
 struct MonitoredStream {
   std::string sensor_id;
@@ -108,7 +97,7 @@ private:
       [this] { return get_clock()->now().nanoseconds(); });
     const auto tracker = monitored.tracker;
     auto subscription = create_subscription<MessageT>(
-      config.topic, rclcpp::SensorDataQoS(),
+      config.topic, streamQoS(config.qos),
       [tracker](const MessageT & message) {
         tracker->observe(message.header.stamp.sec, message.header.stamp.nanosec,
                          message.header.frame_id);

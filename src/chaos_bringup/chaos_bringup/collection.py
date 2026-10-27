@@ -7,8 +7,6 @@ process specification into a ROS action.
 """
 
 import launch.logging
-from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 
 from chaos_assets import ConfigurationError  # noqa: F401  (shared error type)
 
@@ -16,19 +14,7 @@ from ._chaos_bringup_core import (
     check_output_directory as _check_output_directory,
     collection_processes as _collection_processes,
     collection_summary as _collection_summary,
-    require_executable as _require_executable,
 )
-
-
-def require_executable(package, executable):
-    """Resolve a ROS executable without importing or invoking a vendor driver."""
-    return _require_executable(package, executable)
-
-
-def enabled_collection(asset):
-    """The recording policy of an asset, or None when it is disabled."""
-    config = asset.get('data_collection')
-    return config if config and config.get('enabled', False) else None
 
 
 def collection_summary(asset):
@@ -55,36 +41,14 @@ def check_output_directory(path):
     return _check_output_directory(path)
 
 
-def preflight_collection(plan):
-    """Check enabled recorders before any component starts; clock checks run onboard."""
-    from .planning import preflight as _preflight
-
-    _preflight(plan, registered_writers=sorted(registered_writers()), check_files=True)
-
-
-def _node(spec, environment):
-    # The parameters keep the structure of the native specification: one
-    # dictionary per entry, so a caller sees the same parameters as the
-    # native planner derived them.
-    parameters = []
-    for entry in spec['parameters']:
-        parameters.append({key: ParameterValue(value, value_type=str)
-                           if isinstance(value, str) else value
-                           for key, value in entry.items()})
-    return Node(package=spec['package'], executable=spec['executable'], name=spec['name'],
-                namespace=spec['namespace'], output='screen',
-                arguments=list(spec['arguments']), parameters=parameters,
-                remappings=[tuple(rule) for rule in spec['remappings']],
-                additional_env=environment,
-                # Allow a signal during an in-flight probe/startup as well as the
-                # native stop/flush deadline (5 + 15 + 5 + 10 seconds, plus child
-                # cleanup).
-                sigterm_timeout='40.0', sigkill_timeout='5.0')
-
-
 def collection_processes(asset, environment):
     """Return (label, process) pairs for the enabled recorder."""
-    return [(spec['label'], _node(spec, environment))
+    from .nodes import node_action
+
+    # Allow a signal during an in-flight probe/startup as well as the native
+    # stop/flush deadline (5 + 15 + 5 + 10 seconds, plus child cleanup).
+    return [(spec['label'], node_action(spec, environment, sigterm_timeout='40.0',
+                                         sigkill_timeout='5.0'))
             for spec in _collection_processes(asset)]
 
 

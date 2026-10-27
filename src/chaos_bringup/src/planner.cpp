@@ -7,10 +7,9 @@
 #include <string>
 #include <vector>
 
-#include <ament_index_cpp/get_package_prefix.hpp>
-
 #include "chaos_assets/errors.hpp"
 #include "chaos_assets/inventory.hpp"
+#include "installed_executable.hpp"
 
 namespace chaos::bringup {
 
@@ -265,25 +264,13 @@ LaunchPlan prepare_edge_plan(const std::string& inventory_path, const std::strin
 std::string resolve_mqtt_executable(const std::string& executable,
                                     const PackagePrefixResolver& prefix_resolver) {
   if (executable == "mqtt_transport" || executable == "mqtt_ros2_adapter") {
-    std::string prefix;
-    try {
-      if (prefix_resolver) {
-        prefix = prefix_resolver("chaos_mqtt");
-      } else {
-        prefix = ament_index_cpp::get_package_prefix("chaos_mqtt");
-      }
-    } catch (const std::exception&) {
-      throw ConfigurationError(
-          "Unified chaos_mqtt package not found; build the workspace with colcon and source its "
-          "install/local_setup.bash");
-    }
-    const std::filesystem::path path =
-        std::filesystem::path(prefix) / "lib" / "chaos_mqtt" / "mqtt_transport";
-    if (!std::filesystem::is_regular_file(path) || ::access(path.c_str(), X_OK) != 0) {
-      throw ConfigurationError("Installed MQTT executable not found or not executable: " +
-                               path.string());
-    }
-    return std::filesystem::absolute(path).string();
+    return resolve_installed_executable(
+        "chaos_mqtt", "mqtt_transport", prefix_resolver,
+        "Unified chaos_mqtt package not found; build the workspace with colcon and source its "
+        "install/local_setup.bash",
+        [](const std::filesystem::path& path) {
+          return "Installed MQTT executable not found or not executable: " + path.string();
+        });
   }
   const std::string found = which(executable);
   if (found.empty()) {
