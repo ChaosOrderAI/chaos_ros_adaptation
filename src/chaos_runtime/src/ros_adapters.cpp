@@ -22,6 +22,7 @@
 #include "chaos_runtime/adapters/mock_adapter.hpp"
 #include "chaos_runtime/asset_validation.hpp"
 #include "chaos_runtime/driver_deadline.hpp"
+#include "chaos_runtime/humanoid/ros_adapter.hpp"
 
 namespace chaos::runtime {
 
@@ -620,6 +621,9 @@ std::unique_ptr<Adapter> createAdapter(const std::string & plugin,
   if (plugin == "unitree_go2") {
     Go2Adapter::validateOptions(asset);
     return std::make_unique<Go2Adapter>(node, asset);
+  }
+  if (plugin == "humanoid") {
+    return std::make_unique<HumanoidAdapter>(node, asset);
   }
   if (plugin == "dji_psdk_legacy") {
     DjiLegacyAdapter::validateOptions(asset);

@@ -3,12 +3,14 @@
 #include <unistd.h>
 
 #include <filesystem>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "chaos_assets/errors.hpp"
 #include "chaos_assets/inventory.hpp"
+#include "chaos_bringup/driver_registry.hpp"
 #include "installed_executable.hpp"
 
 namespace chaos::bringup {
@@ -75,6 +77,24 @@ std::string which(const std::string& executable) {
   return std::string();
 }
 
+// The identity of the DDS endpoint of an asset.
+//
+// The endpoint of a plugin is the vendor DDS domain and the network
+// interface of the process. A plugin that binds its endpoint to the host
+// owns the endpoint together with the host. A plugin whose vendor topics
+// are unsuffixed owns the whole domain: a second asset in the same domain
+// would receive the state of the first one, so the host is not part of the
+// identity and the domain is owned conservatively.
+std::string dds_connection_of(const Json& asset, const Json& options,
+                              const DriverMetadata& metadata) {
+  const std::string domain = option_of(options, "dds_domain_id");
+  if (metadata.dds_ownership == DdsOwnership::kDomainEndpoint) {
+    return "dds_domain_id=" + domain;
+  }
+  return asset.at("host").get_ref<const std::string&>() + "|" +
+         option_of(options, "network_interface") + "|" + domain;
+}
+
 LaunchPlan plan_inventory(const Inventory& inventory, const std::string& host_id,
                           const std::vector<std::string>& asset_ids, bool enable_mqtt,
                           bool check_files, const MqttConfigFactory& mqtt_config) {
@@ -85,8 +105,10 @@ LaunchPlan plan_inventory(const Inventory& inventory, const std::string& host_id
   std::set<std::string> client_ids;
   std::set<std::string> topics;
   std::set<std::string> outputs;
-  std::set<std::string> go2_connections;
-  std::set<std::string> go2_state_outputs;
+  // The owned DDS endpoints and the owned odometry outputs, with the family
+  // of the plugin that owns them.
+  std::set<std::string> dds_connections;
+  std::map<std::string, std::string> state_outputs;
   std::vector<Json> plan;
 
   for (const Json& asset : inventory.assets()) {
@@ -94,19 +116,25 @@ LaunchPlan plan_inventory(const Inventory& inventory, const std::string& host_id
     const std::string asset_id = asset.at("id").get_ref<const std::string&>();
     const Json& options = asset.at("driver").at("options");
     const bool real = asset.at("mode").get_ref<const std::string&>() == "real";
-    if (real && asset.at("driver").at("plugin").get_ref<const std::string&>() == "unitree_go2") {
-      const std::string connection = asset.at("host").get_ref<const std::string&>() + "|" +
-                                     option_of(options, "network_interface") + "|" +
-                                     option_of(options, "dds_domain_id");
-      if (!go2_connections.insert(connection).second) {
-        throw ConfigurationError("multiple Go2 assets own the same DDS connection: " + connection);
-      }
-      const std::string state_output =
-          std::to_string(asset.at("ros_domain_id").get<int64_t>()) + "|" +
-          option_of(options, "odom_topic");
-      if (!go2_state_outputs.insert(state_output).second) {
-        throw ConfigurationError(
-            "multiple Go2 assets own the same odometry output: " + state_output);
+    if (real) {
+      // A real asset with a managed driver owns a DDS endpoint and an
+      // odometry output. The registry knows how the plugin owns its
+      // endpoint, so a further vendor plugin follows the same rules.
+      const std::string plugin = asset.at("driver").at("plugin").get_ref<const std::string&>();
+      const DriverMetadata* metadata = driver_metadata_for(plugin);
+      if (metadata != nullptr) {
+        const std::string connection = dds_connection_of(asset, options, *metadata);
+        if (!dds_connections.insert(connection).second) {
+          throw ConfigurationError("multiple " + std::string(metadata->family) +
+                                   " assets own the same DDS connection: " + connection);
+        }
+        const std::string state_output =
+            std::to_string(asset.at("ros_domain_id").get<int64_t>()) + "|" +
+            option_of(options, "odom_topic");
+        if (!state_outputs.emplace(state_output, metadata->family).second) {
+          throw ConfigurationError("multiple " + std::string(metadata->family) +
+                                   " assets own the same odometry output: " + state_output);
+        }
       }
     }
     if (real && options.contains("cmd_vel_topic")) {
@@ -176,9 +204,9 @@ LaunchPlan plan_inventory(const Inventory& inventory, const std::string& host_id
       plan.push_back(item);
     }
   }
-  for (const std::string& output : go2_state_outputs) {
-    if (outputs.count(output) != 0) {
-      throw ConfigurationError("Go2 odometry output conflicts with a velocity output");
+  for (const auto& entry : state_outputs) {
+    if (outputs.count(entry.first) != 0) {
+      throw ConfigurationError(entry.second + " odometry output conflicts with a velocity output");
     }
   }
   return LaunchPlan::from_items(plan);

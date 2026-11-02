@@ -1,0 +1,14 @@
+<mujoco>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <worldbody>
+    <body>
+      <freejoint/>
+      <geom type="sphere" size=".1"/>
+      <body pos=".2 0 0">
+        <joint name="hinge" type="hinge" range="-1 1"/>
+        <geom type="sphere" size=".04"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator><motor joint="hinge"/></actuator>
+</mujoco>

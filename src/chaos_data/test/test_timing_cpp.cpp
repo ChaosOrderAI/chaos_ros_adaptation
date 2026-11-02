@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include "chaos_core/clock.hpp"
 #include "chaos_data/timing.hpp"
 
 namespace {
@@ -144,6 +145,30 @@ TEST(TimingTest, NonzeroProbeExitCannotUseValidLookingStdout) {
                                                  kTracking};
                           });
   EXPECT_EQ(probe.sample(kWall, kMono).reason, "chronyc_failed");
+}
+
+TEST(TimingTest, LiveSampleStampsCompletionAfterRunnerFinishes) {
+  int calls = 0;
+  // Read both clocks at the end of the runner invocation: the sample must be
+  // stamped no earlier than that, proving the clocks are read after the
+  // runner returned.
+  std::int64_t runner_wall_end = 0;
+  std::int64_t runner_mono_end = 0;
+  const ChronyProbe probe(0.01, 120.0, 1.0,
+                          [&](double) {
+                            ++calls;
+                            const std::string output = changed(3, std::to_string(
+                              static_cast<double>(chaos::systemNs()) / 1e9));
+                            runner_wall_end = chaos::systemNs();
+                            runner_mono_end = chaos::monotonicNs();
+                            return ChronycResult{ChronycResult::Error::kNone, 0,
+                                                 output};
+                          });
+  const TimeSample result = probe.sample();
+  EXPECT_EQ(result.status, "synced");
+  EXPECT_EQ(calls, 1);
+  EXPECT_GE(result.sample_utc_ns, runner_wall_end);
+  EXPECT_GE(result.sample_monotonic_ns, runner_mono_end);
 }
 
 // update() helper mirroring the pytest fixture: reading or sample() at

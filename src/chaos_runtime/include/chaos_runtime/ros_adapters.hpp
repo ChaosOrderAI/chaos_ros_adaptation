@@ -20,6 +20,7 @@
 #include <std_msgs/msg/string.hpp>
 
 #include "chaos_runtime/adapter.hpp"
+#include "chaos_runtime/humanoid/ros_adapter.hpp"
 
 namespace chaos::runtime {
 

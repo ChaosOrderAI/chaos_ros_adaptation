@@ -69,7 +69,7 @@ def record_nodes(monkeypatch):
         recorded.append(kwargs)
         return node_constructor(**kwargs)
 
-    monkeypatch.setattr(description, 'Node', make_node)
+    monkeypatch.setattr('chaos_bringup.nodes.Node', make_node)
     monkeypatch.setattr(launching, 'Node', make_node)
     return recorded
 
@@ -150,7 +150,7 @@ def test_missing_publisher_rejected_before_any_process_is_constructed(tmp_path, 
     capabilities['executable_available'] = unavailable
     monkeypatch.setattr(launching, 'Node',
                         lambda **kwargs: pytest.fail('constructed runtime before preflight'))
-    monkeypatch.setattr(description, 'Node',
+    monkeypatch.setattr('chaos_bringup.nodes.Node',
                         lambda **kwargs: pytest.fail('constructed publisher before preflight'))
     with pytest.raises(ConfigurationError, match='robot_state_publisher'):
         launching.build_launch_actions(plan, capabilities=capabilities)
@@ -209,7 +209,7 @@ def test_explicit_empty_frame_prefix_remains_a_string(tmp_path, monkeypatch):
     asset['description']['use_sim_time'] = True
     asset['description']['joint_states_topic'] = '/driver/measured_joint_states'
     captured = []
-    monkeypatch.setattr(description, 'Node', lambda **kwargs: captured.append(kwargs))
+    monkeypatch.setattr('chaos_bringup.nodes.Node', lambda **kwargs: captured.append(kwargs))
     children = description.description_processes(asset, {})
     assert len(children) == 1
     parameters = evaluated_parameters(captured[0])

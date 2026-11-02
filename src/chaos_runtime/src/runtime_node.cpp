@@ -4,9 +4,12 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <exception>
 #include <functional>
-#include <stdexcept>
 #include <utility>
+
+#include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/twist.hpp>
 
 #include "chaos_core/clock.hpp"
 #include "chaos_runtime/ros_stamp.hpp"
@@ -21,6 +24,31 @@ namespace chaos::runtime {
 namespace {
 using NavigatePose = chaos_interfaces::action::NavigatePose;
 using Flight = chaos_interfaces::action::Flight;
+
+// Fills a ROS pose from the ROS-free adapter snapshot. The header stamp and
+// frame stay with the caller, so the state channel keeps its publication-stamp
+// fallback and the action feedback its optional acquisition stamp.
+void fillPose(const AdapterSnapshot & snapshot,
+              geometry_msgs::msg::Pose & pose) {
+  pose.position.x = snapshot.position[0];
+  pose.position.y = snapshot.position[1];
+  pose.position.z = snapshot.position[2];
+  pose.orientation.x = snapshot.quaternion[0];
+  pose.orientation.y = snapshot.quaternion[1];
+  pose.orientation.z = snapshot.quaternion[2];
+  pose.orientation.w = snapshot.quaternion[3];
+}
+
+// Fills a ROS twist from a 6-vector (linear, then angular).
+void fillTwist(const std::array<double, 6> & values,
+               geometry_msgs::msg::Twist & twist) {
+  twist.linear.x = values[0];
+  twist.linear.y = values[1];
+  twist.linear.z = values[2];
+  twist.angular.x = values[3];
+  twist.angular.y = values[4];
+  twist.angular.z = values[5];
+}
 
 // The ROS control trace sink. It is owned by the observation service, which
 // destroys it with the registration: the sink holds the publisher by value
@@ -44,12 +72,7 @@ public:
     message.code = event.code;
     if (event.velocity.has_value() && event.velocity->valid) {
       message.velocity_valid = true;
-      message.velocity.linear.x = event.velocity->values[0];
-      message.velocity.linear.y = event.velocity->values[1];
-      message.velocity.linear.z = event.velocity->values[2];
-      message.velocity.angular.x = event.velocity->values[3];
-      message.velocity.angular.y = event.velocity->values[4];
-      message.velocity.angular.z = event.velocity->values[5];
+      fillTwist(event.velocity->values, message.velocity);
       message.valid_for_s = event.velocity->valid_for_s;
     } else {
       message.velocity_valid = false;
@@ -71,6 +94,15 @@ void fillActionResult(typename ActionT::Result & result,
   result.message = outcome.message;
 }
 
+// Delivers a typed terminal result by aborting the goal with it.
+template <typename ActionT>
+void abortGoal(std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>> handle,
+               const OperationResult & outcome) {
+  auto message = std::make_shared<typename ActionT::Result>();
+  fillActionResult<ActionT>(*message, outcome);
+  handle->abort(message);
+}
+
 template <typename ActionT>
 class TypedGoalContext : public GoalContext {
 public:
@@ -84,9 +116,9 @@ public:
   bool isActive() override { return handle_->is_active(); }
   void publishFeedback(double progress,
                        const AdapterSnapshot & snapshot) override {
-    typename ActionT::Feedback feedback;
-    fillFeedback(feedback, progress, snapshot);
-    handle_->publish_feedback(std::make_shared<typename ActionT::Feedback>(feedback));
+    auto feedback = std::make_shared<typename ActionT::Feedback>();
+    fillFeedback(*feedback, progress, snapshot);
+    handle_->publish_feedback(feedback);
   }
   void succeed(const OperationResult & outcome) override {
     auto message = std::make_shared<typename ActionT::Result>();
@@ -119,13 +151,7 @@ void TypedGoalContext<NavigatePose>::fillFeedback(
   if (snapshot.source_stamp_ns.has_value()) {
     stampFromNs(*snapshot.source_stamp_ns, feedback.current_pose.header.stamp);
   }
-  feedback.current_pose.pose.position.x = snapshot.position[0];
-  feedback.current_pose.pose.position.y = snapshot.position[1];
-  feedback.current_pose.pose.position.z = snapshot.position[2];
-  feedback.current_pose.pose.orientation.x = snapshot.quaternion[0];
-  feedback.current_pose.pose.orientation.y = snapshot.quaternion[1];
-  feedback.current_pose.pose.orientation.z = snapshot.quaternion[2];
-  feedback.current_pose.pose.orientation.w = snapshot.quaternion[3];
+  fillPose(snapshot, feedback.current_pose.pose);
   feedback.progress = static_cast<float>(progress);
 }
 
@@ -142,8 +168,7 @@ void TypedGoalContext<Flight>::fillFeedback(
 RobotRuntimeNode::RobotRuntimeNode(const rclcpp::NodeOptions & options)
     : rclcpp::Node("robot_runtime", options) {
   declare_parameter<std::string>("asset_json", "{}");
-  const std::string asset_json = get_parameter("asset_json").as_string();
-  asset_ = parseAssetJson(asset_json);
+  asset_ = parseAssetJson(get_parameter("asset_json").as_string());
 
   clocks_.steady_s = chaos::monotonicSeconds;
   clocks_.mono_ns = chaos::monotonicNs;
@@ -206,21 +231,10 @@ RobotRuntimeNode::RobotRuntimeNode(const rclcpp::NodeOptions & options)
       stampFromNs(view.stamp_ns, state.pose.header.stamp);
     }
     state.pose.header.frame_id = snapshot.pose_frame;
-    state.pose.pose.position.x = snapshot.position[0];
-    state.pose.pose.position.y = snapshot.position[1];
-    state.pose.pose.position.z = snapshot.position[2];
-    state.pose.pose.orientation.x = snapshot.quaternion[0];
-    state.pose.pose.orientation.y = snapshot.quaternion[1];
-    state.pose.pose.orientation.z = snapshot.quaternion[2];
-    state.pose.pose.orientation.w = snapshot.quaternion[3];
+    fillPose(snapshot, state.pose.pose);
     state.twist.header = state.pose.header;
     state.twist.header.frame_id = snapshot.twist_frame;
-    state.twist.twist.linear.x = snapshot.velocity[0];
-    state.twist.twist.linear.y = snapshot.velocity[1];
-    state.twist.twist.linear.z = snapshot.velocity[2];
-    state.twist.twist.angular.x = snapshot.velocity[3];
-    state.twist.twist.angular.y = snapshot.velocity[4];
-    state.twist.twist.angular.z = snapshot.velocity[5];
+    fillTwist(snapshot.velocity, state.twist.twist);
     state.battery_percentage =
       static_cast<float>(snapshot.battery);  // NaN stays NaN
     state.detail = view.detail;
@@ -248,7 +262,6 @@ RobotRuntimeNode::RobotRuntimeNode(const rclcpp::NodeOptions & options)
   adapter->update(0.0);
   coordinator_ = std::make_unique<ControlCoordinator>(asset_, std::move(adapter),
                                                       clocks_, observations_);
-  action_worker_ = std::make_unique<ActionWorker>();
 
   // Endpoints must be stored: rclcpp::Node keeps only weak references, so a
   // temporary returned here would be destroyed immediately and the endpoint
@@ -313,7 +326,9 @@ RobotRuntimeNode::~RobotRuntimeNode() {
   // is closed last, after every final control event has been admitted.
   timer_->cancel();
   coordinator_->close();
-  action_worker_->stop();
+  if (action_worker_) {
+    action_worker_->stop();
+  }
   coordinator_->finalize();
   observations_->close();
 }
@@ -476,6 +491,15 @@ void RobotRuntimeNode::makeActionServer(OperationKind kind,
   typename rclcpp_action::Server<ActionT>::GoalCallback goal_callback =
     [this, kind](const rclcpp_action::GoalUUID & uuid,
                  std::shared_ptr<const typename ActionT::Goal> goal) {
+      // Start before reserving control: allocation/thread failures cannot
+      // leave an accepted goal without a worker to finish its reservation.
+      if (!action_worker_) {
+        try {
+          action_worker_ = std::make_unique<ActionWorker>();
+        } catch (const std::exception &) {
+          return rclcpp_action::GoalResponse::REJECT;
+        }
+      }
       GoalRequestView view;
       view.lease_token = goal->lease_token;
       view.expires_at = control::RosTime{goal->expires_at.sec,
@@ -494,7 +518,6 @@ void RobotRuntimeNode::makeActionServer(OperationKind kind,
         view.altitude_m = goal->altitude_m;
       }
       const GoalTokensPtr tokens = tokensFor(uuid);
-      tokens->goal_token = goal.get();
       // The terminal publisher resolves the action handle lazily: it may be
       // called before the accepted callback installed the handle (lost
       // reservation), in which case the result is parked and delivered as
@@ -547,9 +570,7 @@ void RobotRuntimeNode::makeActionServer(OperationKind kind,
       {
         std::lock_guard<std::mutex> guard(tokens->terminal_mutex);
         tokens->terminal = [goal_handle](const OperationResult & outcome) {
-          auto message = std::make_shared<typename ActionT::Result>();
-          fillActionResult<ActionT>(*message, outcome);
-          goal_handle->abort(message);
+          abortGoal<ActionT>(goal_handle, outcome);
         };
         parked = tokens->pending_terminal;
         tokens->pending_terminal.reset();
@@ -580,22 +601,18 @@ void RobotRuntimeNode::makeActionServer(OperationKind kind,
           if (action_worker_->stopping()) {
             // The runtime is shutting down: deliver a terminal result
             // instead of starting motion.
-            auto message = std::make_shared<typename ActionT::Result>();
-            fillActionResult<ActionT>(*message,
-                                      OperationResult{false, "SHUTDOWN",
-                                                      "Runtime stopped"});
-            goal_handle->abort(message);
+            abortGoal<ActionT>(goal_handle,
+                               OperationResult{false, "SHUTDOWN",
+                                               "Runtime stopped"});
             return;
           }
           executeGoal<ActionT>(kind, goal_handle->get_goal_id(), goal_handle);        });
       if (!queued) {
         // The worker is stopping or full: the client must still receive a
         // typed terminal result.
-        auto message = std::make_shared<typename ActionT::Result>();
-        fillActionResult<ActionT>(*message,
-                                  OperationResult{false, "BUSY",
-                                                  "Action worker unavailable"});
-        goal_handle->abort(message);
+        abortGoal<ActionT>(goal_handle,
+                           OperationResult{false, "BUSY",
+                                           "Action worker unavailable"});
       }
     };
   auto server = rclcpp_action::create_server<ActionT>(

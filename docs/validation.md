@@ -1,5 +1,20 @@
 # C++ 重构验证记录
 
+## 2026-10-31 精简、资源优化与 MuJoCo
+
+本轮复用 `build-cpp-humanoid` / `install-cpp-humanoid` 的 Release 安装；ROS 2 Jazzy、MuJoCo 3.15.0，厂商 SDK 后端关闭。保留工作区原有人形机器人改动，精简 runtime、SDK、传感器、MQTT 和授时转换；新增可选 `chaos_sim`。
+
+- 9 个生产包及仿真包回归完成；`colcon test-result` 汇总 **961 条记录，0 errors、0 failures、5 skipped**。汇总包含 CTest 包装记录，不等于独立用例数。
+- 双 mock、传感器、双人形 mock 三项 ROS smoke 均通过。MuJoCo smoke 使用两个官方模型，验证真实关节位移和力矩、无效目标拒绝、超时保持、不经过 reset 的暂停/恢复、独立重置和 SIGINT 退出。
+- 单 mock runtime 空闲线程 **22 → 21**；首次 Action 后升到 22，随后三次 Action 保持 22，四次均成功，进程正常退出。约 8 MiB 的虚拟地址空间减少来自省去的空闲线程栈映射；RSS 约 33 MiB，未测出显著下降。
+- 双模型 headless 仿真在同一主机上，禁用编译资产缓存前 RSS **973,264 KiB**，最终采样 **108,600 KiB**（约 106 MiB）；20 次采样覆盖 10 秒，线程始终 14，RSS 中位数增长 0 KiB。采样不包含独立查看器，也不包含启动编译峰值。
+- 两个查看器已在实际 X11 会话开窗运行，并分别通过 SIGINT 正常退出；等待首条状态期间退出也通过。查看器禁用编译缓存后，Go2 RSS **495,996 KiB**、T2 **1,197,660 KiB**，低于禁用前的 558,724 / 1,482,520 KiB；这部分包含完整视觉模型和图形资源，不计入 headless 内存数据。
+- 剔除纯视觉资源后，Go2 `mjModel` 缓冲由 44,892,116 降至 52,500 字节，T2 由 183,372,344 降至 339,192 字节。这是模型缓冲而非整个进程 RSS；碰撞、惯量、浮动根动力学保留。核心用例验证连续 200 次目标/步进/读取复用状态缓冲且没有新增 C++ `new` 分配，不据此声称 ROS/DDS 全链路零分配。
+
+构建、模型来源与复现命令见 [MuJoCo 说明](mujoco.md)，数据与线程所有权见 [数据流转](data-flow.md)。T2 平衡与统一速度行走尚未接入，本轮未做实机验收。执行日志与资源原始采样保留在 `work/multi-model-team/simplify-20261031/`。2026-10-31 清理构建缓存及旧安装目录后，colcon 日志和测试 XML 已归档至 `work/multi-model-team/cleanup-20261031/colcon-logs-and-test-results.tar.gz`；当前两个 `install-cpp-humanoid*` 安装目录仍保留，重新执行构建测试前需生成 build 目录。
+
+## 前期 C++ 迁移验收
+
 本次验收针对 9 个生产 ROS 包和 1 个基准包的统一 Release 普通安装产物。自研业务实现为 C++17；Python 保留 launch、薄绑定、第三方 Xacro 桥接和工具/测试脚本。导入的 Rust MQTT 传输与厂商驱动不属于这次语言迁移。
 
 ## 构建与功能验收

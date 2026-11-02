@@ -1,0 +1,37 @@
+# Copy to /etc/chaos/asset.yaml on ONE Booster T2. Set its actual identity,
+# network interface, frames, ROS domain, broker and certificates before starting.
+# ROS Domain 55 follows the legacy deployment and must be checked on the device.
+# The Booster DDS domain (driver.options.dds_domain_id) is independent.
+#
+# The vendor topics of the SDK are unsuffixed, so the DDS domain belongs to
+# one humanoid. Give every robot of a fleet its own dds_domain_id.
+schema_version: 1
+hosts:
+  onboard: {ros_domain_id: 55}
+transports:
+  platform:
+    config:
+      network: {access: system}
+      mqtt:
+        host: mqtt.example.com
+        port: 8883
+        client_id: chaos-{asset_id}
+        ca_file: /etc/chaos/certs/ca.crt
+        client_certificate_file: /etc/chaos/certs/client.crt
+        client_key_file: /etc/chaos/certs/client.key
+        password_environment: MQTT_PASSWORD
+assets:
+  - id: t2_001
+    model_file: package://chaos_assets/models/booster_t2/v1/model.yaml
+    host: onboard
+    mode: real
+    frames: {base: t2_001/base_link, odom: t2_001/odom, map: t2_001/map}
+    driver:
+      options:
+        network_interface: eth0
+        dds_domain_id: 0
+        source_odom_frame: odom
+        source_base_frame: base_link
+        cmd_vel_topic: /t2_001/cmd_vel
+        odom_topic: /t2_001/odom
+    transport: platform

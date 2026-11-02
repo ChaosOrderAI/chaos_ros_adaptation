@@ -22,24 +22,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --- C++ domain libraries (ROS-free) ---------------------------------------
-#
-# chaos_runtime_core is the ROS-free domain library: the asset contract, the
-# control coordinator and the mock adapter. It links chaos_control only, so a
-# domain test or an external consumer never has to pull in rclcpp or DDS.
-
-add_library(chaos_runtime_core
-  src/asset_config.cpp
-  src/asset_validation.cpp
-  src/coordinator.cpp
-  src/observation.cpp
-  src/adapters/mock_adapter.cpp)
-target_compile_features(chaos_runtime_core PUBLIC cxx_std_17)
-target_include_directories(chaos_runtime_core PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
-target_link_libraries(chaos_runtime_core PUBLIC chaos_control
-  nlohmann_json::nlohmann_json
-  Threads::Threads)
 
 add_library(chaos_control src/control.cpp)
 target_compile_features(chaos_control PUBLIC cxx_std_17)
@@ -55,6 +37,37 @@ target_include_directories(chaos_go2_core PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(chaos_go2_core PUBLIC chaos_control)
 
+# Humanoid transport safety is a separate core, not a Go2 subclass. Its
+# registry and driver have no ROS or vendor-sdk includes.
+add_library(chaos_humanoid_core
+  src/humanoid/backend.cpp
+  src/humanoid/options.cpp
+  src/humanoid/driver_core.cpp
+  src/humanoid/process_guard.cpp)
+target_compile_features(chaos_humanoid_core PUBLIC cxx_std_17)
+target_include_directories(chaos_humanoid_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(chaos_humanoid_core PUBLIC chaos_control
+  nlohmann_json::nlohmann_json)
+
+# chaos_runtime_core remains ROS-free and DDS-free; humanoid preflight is
+# linked into it so --validate-asset and startup share the complete checks.
+add_library(chaos_runtime_core
+  src/asset_config.cpp
+  src/asset_validation.cpp
+  src/coordinator.cpp
+  src/observation.cpp
+  src/adapters/mock_adapter.cpp)
+target_compile_features(chaos_runtime_core PUBLIC cxx_std_17)
+target_include_directories(chaos_runtime_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(chaos_runtime_core PUBLIC chaos_control
+  chaos_humanoid_core
+  nlohmann_json::nlohmann_json
+  Threads::Threads)
+
 # --- Native ROS runtime ----------------------------------------------------
 #
 # The ROS facade (runtime_node / ros_adapters) is a thin translation layer:
@@ -63,6 +76,7 @@ target_link_libraries(chaos_go2_core PUBLIC chaos_control)
 
 add_library(chaos_runtime_ros
   src/ros_adapters.cpp
+  src/humanoid/ros_adapter.cpp
   src/runtime_node.cpp)
 target_compile_features(chaos_runtime_ros PUBLIC cxx_std_17)
 target_include_directories(chaos_runtime_ros PUBLIC
@@ -111,6 +125,47 @@ if(CHAOS_GO2_WITH_UNITREE_SDK)
   ament_export_dependencies(unitree_sdk2)
 endif()
 
+# --- Native humanoid driver (independent watchdog process) -----------------
+add_library(chaos_humanoid_ros
+  src/humanoid/driver_node.cpp
+  src/humanoid/booster_backend.cpp)
+target_compile_features(chaos_humanoid_ros PUBLIC cxx_std_17)
+target_include_directories(chaos_humanoid_ros PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(chaos_humanoid_ros PUBLIC
+  chaos_humanoid_core
+  chaos_runtime_ros
+  chaos_interfaces::chaos_interfaces__rosidl_typesupport_cpp
+  rclcpp::rclcpp
+  nav_msgs::nav_msgs__rosidl_typesupport_cpp
+  Threads::Threads)
+
+option(CHAOS_HUMANOID_WITH_BOOSTER_SDK "Build the Booster humanoid SDK backend" OFF)
+if(CHAOS_HUMANOID_WITH_BOOSTER_SDK)
+  set(BOOSTER_SDK_ROOT "" CACHE PATH "Root of the unpacked Booster Robotics SDK")
+  if(NOT BOOSTER_SDK_ROOT)
+    message(FATAL_ERROR "CHAOS_HUMANOID_WITH_BOOSTER_SDK=ON requires explicit BOOSTER_SDK_ROOT")
+  endif()
+  get_filename_component(BOOSTER_SDK_ROOT "${BOOSTER_SDK_ROOT}" ABSOLUTE)
+  set(BOOSTER_SDK_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+  if(BOOSTER_SDK_ARCH MATCHES "^(AMD64|amd64)$")
+    set(BOOSTER_SDK_ARCH x86_64)
+  endif()
+  set(BOOSTER_SDK_LIBRARY
+    "${BOOSTER_SDK_ROOT}/lib/${BOOSTER_SDK_ARCH}/libbooster_robotics_sdk.a")
+  if(NOT EXISTS "${BOOSTER_SDK_ROOT}/include/booster/robot/b1/b1_loco_client.hpp")
+    message(FATAL_ERROR "Booster SDK includes not found below ${BOOSTER_SDK_ROOT}/include")
+  endif()
+  if(NOT EXISTS "${BOOSTER_SDK_LIBRARY}")
+    message(FATAL_ERROR "Booster SDK static library not found: ${BOOSTER_SDK_LIBRARY}")
+  endif()
+  target_compile_definitions(chaos_humanoid_ros PUBLIC CHAOS_HUMANOID_WITH_BOOSTER_SDK)
+  target_include_directories(chaos_humanoid_ros PRIVATE "${BOOSTER_SDK_ROOT}/include")
+  target_link_libraries(chaos_humanoid_ros PRIVATE
+    "${BOOSTER_SDK_LIBRARY}" Threads::Threads ${CMAKE_DL_LIBS} rt)
+endif()
+
 # --- Native host shutdown helper -------------------------------------------
 #
 # The host helper owns the scoped signal handlers, the single host supervisor
@@ -133,18 +188,21 @@ target_link_libraries(robot_runtime PRIVATE chaos_runtime_host chaos_runtime_ros
 add_executable(go2_driver src/go2_driver_main.cpp)
 target_link_libraries(go2_driver PRIVATE chaos_go2_ros)
 
+add_executable(humanoid_driver src/humanoid_driver_main.cpp)
+target_link_libraries(humanoid_driver PRIVATE chaos_humanoid_ros)
+
 # The host shutdown helper is internal: it owns the terminating host paths,
 # so its header stays out of the installed public surface. The package build
 # and the child harness of the host test task still see it.
 install(DIRECTORY include/ DESTINATION include
   PATTERN "runtime_shutdown.hpp" EXCLUDE)
-install(TARGETS chaos_control chaos_go2_core chaos_runtime_core chaos_runtime_ros
-  chaos_go2_ros
+install(TARGETS chaos_control chaos_go2_core chaos_humanoid_core
+  chaos_runtime_core chaos_runtime_ros chaos_go2_ros chaos_humanoid_ros
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
-install(TARGETS robot_runtime go2_driver
+install(TARGETS robot_runtime go2_driver humanoid_driver
   DESTINATION lib/${PROJECT_NAME})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
@@ -157,6 +215,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_control_cpp chaos_control)
   ament_add_gtest(test_go2_driver_core_cpp test/test_go2_driver_core.cpp)
   target_link_libraries(test_go2_driver_core_cpp chaos_go2_core)
+  ament_add_gtest(test_humanoid_driver_core_cpp test/test_humanoid_driver_core.cpp TIMEOUT 30)
+  target_link_libraries(test_humanoid_driver_core_cpp chaos_humanoid_core Threads::Threads)
+  ament_add_gtest(test_humanoid_validation_mock_cpp test/test_humanoid_validation_mock.cpp)
+  target_link_libraries(test_humanoid_validation_mock_cpp chaos_humanoid_ros)
   # The domain test links the ROS-free domain library only.
   ament_add_gtest(test_coordinator_cpp test/test_coordinator_cpp.cpp)
   target_link_libraries(test_coordinator_cpp chaos_runtime_core)
@@ -170,6 +232,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_asset_validation_cpp chaos_runtime_core)
   ament_add_gtest(test_go2_driver_ros_cpp test/test_go2_driver_ros_cpp.cpp)
   target_link_libraries(test_go2_driver_ros_cpp chaos_go2_ros)
+  ament_add_gtest(test_humanoid_driver_ros_cpp test/test_humanoid_driver_ros.cpp TIMEOUT 30)
+  target_link_libraries(test_humanoid_driver_ros_cpp chaos_humanoid_ros)
   # The driver deadline helper is a ROS-free header-only facility; its test
   # links the ROS-free domain library only.
   ament_add_gtest(test_driver_deadline_cpp test/test_driver_deadline_cpp.cpp)

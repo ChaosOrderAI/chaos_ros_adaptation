@@ -16,6 +16,7 @@
 #include "chaos_assets/errors.hpp"
 #include "chaos_assets/sensors.hpp"
 #include "chaos_assets/yaml.hpp"
+#include "chaos_bringup/driver_registry.hpp"
 #include "installed_executable.hpp"
 
 namespace chaos::bringup {
@@ -401,9 +402,12 @@ void preflight(const LaunchPlan& plan, const PreflightOptions& options) {
           collection->at("output_dir").get_ref<const std::string&>());
       dependencies.insert({"chaos_data", "collector"});
     }
-    if (asset.at("mode").get_ref<const std::string&>() == "real" &&
-        asset.at("driver").at("plugin").get_ref<const std::string&>() == "unitree_go2") {
-      driver_plugins.push_back(asset.at("driver").at("plugin").get_ref<const std::string&>());
+    if (asset.at("mode").get_ref<const std::string&>() == "real") {
+      // Every real asset with a managed driver needs the native backend of
+      // its plugin in the build. The registry knows which plugins have a
+      // managed driver, so a further vendor plugin is covered by its entry.
+      const std::string plugin = asset.at("driver").at("plugin").get_ref<const std::string&>();
+      if (driver_metadata_for(plugin) != nullptr) driver_plugins.push_back(plugin);
     }
   }
   // The runtime validates every selected asset before a single process action
@@ -449,15 +453,17 @@ void preflight(const LaunchPlan& plan, const PreflightOptions& options) {
 
 std::vector<ProcessSpec> driver_processes(const Json& asset) {
   std::vector<ProcessSpec> result;
-  if (asset.at("mode").get_ref<const std::string&>() != "real" ||
-      asset.at("driver").at("plugin").get_ref<const std::string&>() != "unitree_go2") {
-    return result;
-  }
+  if (asset.at("mode").get_ref<const std::string&>() != "real") return result;
+  const std::string plugin = asset.at("driver").at("plugin").get_ref<const std::string&>();
+  const DriverMetadata* metadata = driver_metadata_for(plugin);
+  // A plugin without a managed driver has no process of its own; the mock
+  // backend of an asset is served by the coordinator.
+  if (metadata == nullptr) return result;
   ProcessSpec spec;
-  spec.label = "Go2 driver " + asset.at("id").get_ref<const std::string&>();
+  spec.label = std::string(metadata->label) + " " + asset.at("id").get_ref<const std::string&>();
   spec.package = "chaos_runtime";
-  spec.executable = "go2_driver";
-  spec.name = "go2_driver";
+  spec.executable = metadata->driver_executable;
+  spec.name = metadata->driver_name;
   spec.node_namespace = asset.at("namespace").get_ref<const std::string&>();
   Json parameters = Json::array();
   Json entry = Json::object();

@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -130,17 +129,6 @@ sensor_msgs::msg::Imu makeImu(const std::string & frame_id) {
 
 }  // namespace
 
-// One published stream: the message payload is allocated once and reused
-// on every publication. Only the payload buffers are preallocated; the DDS
-// transport and the message serialization may still allocate.
-template <typename MessageT>
-struct StreamRuntime {
-  StreamConfig config;
-  typename rclcpp::Publisher<MessageT>::SharedPtr publisher;
-  std::shared_ptr<MessageT> message;
-  rclcpp::TimerBase::SharedPtr timer;
-};
-
 class MockSensorNode : public rclcpp::Node {
 public:
   explicit MockSensorNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
@@ -148,9 +136,6 @@ public:
     declare_parameter<std::string>("sensor_json", "{}");
     const SensorConfig sensor =
       parseSensorJson(get_parameter("sensor_json").as_string());
-    if (sensor.driver_mode != "mock") {
-      throw SensorConfigError("mock_sensor requires driver.mode=mock");
-    }
     for (const auto & entry : sensor.streams) {
       addStream(entry.second);
     }
@@ -159,27 +144,26 @@ public:
   }
 
 private:
+  // The message payload is allocated once and reused on every publication;
+  // the timer callback owns the publisher and the payload by value. Only the
+  // payload buffers are preallocated; the DDS transport and the message
+  // serialization may still allocate.
   template <typename MessageT>
   void addTypedStream(const StreamConfig & stream, MessageT message) {
-    auto runtime = std::make_shared<StreamRuntime<MessageT>>();
-    runtime->config = stream;
-    runtime->publisher = create_publisher<MessageT>(
+    auto publisher = create_publisher<MessageT>(
       stream.topic, streamQoS(stream.qos));
-    runtime->message = std::make_shared<MessageT>(std::move(message));
-    const auto payload = runtime->message;
-    const auto publisher = runtime->publisher;
+    auto payload = std::make_shared<MessageT>(std::move(message));
     // The sampling cadence follows the node clock, exactly like the
     // pre-migration mock: a paused or rewound /clock stops the synthetic
     // samples, because a sample is a simulated acquisition and its stamp
     // would otherwise repeat. The monitor and the runtime watchdog use the
     // steady clock instead, because their duty is liveness, not simulation.
-    runtime->timer = create_timer(
+    timers_.push_back(create_timer(
       std::chrono::duration<double>(1.0 / stream.rate_hz),
-      [this, payload, publisher] {
+      [this, payload = std::move(payload), publisher = std::move(publisher)] {
         stampFromNs(get_clock()->now().nanoseconds(), payload->header.stamp);
         publisher->publish(*payload);
-      });
-    streams_.push_back(runtime);
+      }));
   }
 
   void addStream(const StreamConfig & stream) {
@@ -202,8 +186,8 @@ private:
     }
   }
 
-  // Type-erased owners: the node keeps every stream alive.
-  std::vector<std::shared_ptr<void>> streams_;
+  // Owners of the stream timers: the node keeps every stream alive.
+  std::vector<rclcpp::TimerBase::SharedPtr> timers_;
 };
 
 }  // namespace chaos::sensors

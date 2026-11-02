@@ -6,7 +6,8 @@
 //! - automatic reconnect with exponential backoff (1 s .. 30 s), matching
 //!   `mosquitto_reconnect_delay_set(client, 1, 30, true)`
 //! - password supplied through the environment variable named by
-//!   `mqtt.password_environment` (same as the C++ gateway)
+//!   `mqtt.password_environment` (same as the C++ gateway). A username with
+//!   a missing or empty password aborts startup instead of connecting.
 //!
 //! The manager owns the connection lifecycle. Commands received from the
 //! broker are forwarded as raw payloads over `command_tx`; the adapter hands
@@ -249,6 +250,22 @@ fn configure_delivery(options: &mut MqttOptions, packet_limit: usize) {
     options.set_inflight(MAX_INFLIGHT);
 }
 
+fn required_password(
+    username: &str,
+    environment: &str,
+    password: Option<&str>,
+) -> Result<Option<String>, String> {
+    if username.is_empty() {
+        return Ok(None);
+    }
+    match password {
+        Some(value) if !value.is_empty() => Ok(Some(value.to_string())),
+        _ => Err(format!(
+            "MQTT username is set but {environment} is missing or empty"
+        )),
+    }
+}
+
 fn build_options(transport: &TransportConfig) -> Result<MqttOptions, String> {
     let config = &transport.mqtt;
     let mut options = MqttOptions::new(&config.client_id, &config.host, config.port);
@@ -279,17 +296,13 @@ fn build_options(transport: &TransportConfig) -> Result<MqttOptions, String> {
         client_auth: Some((client_cert, client_key)),
     }));
 
-    if !config.username.is_empty() {
-        let password = std::env::var(&config.password_environment)
-            .ok()
-            .filter(|value| !value.is_empty());
-        if password.is_none() {
-            warn!(
-                environment = %config.password_environment,
-                "MQTT username is set but the password environment variable is missing/empty"
-            );
-        }
-        options.set_credentials(&config.username, password.unwrap_or_default());
+    let looked_up = std::env::var(&config.password_environment).ok();
+    if let Some(password) = required_password(
+        &config.username,
+        &config.password_environment,
+        looked_up.as_deref(),
+    )? {
+        options.set_credentials(&config.username, &password);
     }
 
     Ok(options)

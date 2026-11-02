@@ -69,7 +69,7 @@ class Settler
 {
 public:
   Settler()
-  : promise_(std::make_shared<std::promise<T>>()), future_(promise_->get_future().share()) {}
+  : future_(promise_.get_future().share()) {}
 
   std::shared_future<T> future() const {return future_;}
 
@@ -81,7 +81,7 @@ public:
     }
     settled_ = true;
     try {
-      promise_->set_value(value);
+      promise_.set_value(value);
     } catch (const std::exception &) {
     }
   }
@@ -94,7 +94,7 @@ public:
     }
     settled_ = true;
     try {
-      promise_->set_exception(error);
+      promise_.set_exception(error);
     } catch (const std::exception &) {
     }
   }
@@ -102,7 +102,9 @@ public:
 private:
   mutable std::mutex mutex_;
   bool settled_ = false;
-  std::shared_ptr<std::promise<T>> promise_;
+  // Owned directly: the Settler lives in a shared_ptr and never moves or
+  // copies, so the promise needs no extra allocation and never escapes.
+  std::promise<T> promise_;
   std::shared_future<T> future_;
 };
 
@@ -157,7 +159,6 @@ struct Robot::Impl
   /// a late goal acceptance finds no entry and must not change any state.
   struct Operation
   {
-    std::uint64_t id = 0;
     std::chrono::steady_clock::time_point deadline;
     /// Set while the operation is still registered. The watchdog and
     /// close() set it under the mutex while claiming the entry, so a late
@@ -383,6 +384,11 @@ struct Robot::Impl
         }
         ++it;
       }
+    }
+    if (expired.empty()) {
+      // Nothing timed out: skip the exception allocation on the idle path (the
+      // scan and the deferred sends above already ran under the lock).
+      return;
     }
     const auto error = std::make_exception_ptr(
       TimeoutError("no response before the local response timeout"));
@@ -970,7 +976,6 @@ std::shared_future<typename ServiceT::Response> Robot::send_control(
     const std::uint64_t id = impl_->next_operation_id++;
     *operation_id = id;
     Impl::Operation operation;
-    operation.id = id;
     operation.deadline = deadline_after(impl_->response_timeout_s);
     operation.cancelled = cancelled;
     operation.cancel_local = [client, cancelled, request_id](StopReason) {
@@ -1056,7 +1061,6 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
 
     operation_id = impl_->next_operation_id++;
     Impl::Operation operation;
-    operation.id = operation_id;
     operation.deadline = deadline_after(impl_->response_timeout_s);
     operation.cancelled = std::make_shared<std::atomic_bool>(false);
     if (has_feedback) {
@@ -1317,7 +1321,6 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
                 }
                 const std::uint64_t id = impl->next_operation_id++;
                 Impl::Operation operation;
-                operation.id = id;
                 operation.deadline = deadline_after(impl->response_timeout_s);
                 operation.cancelled = std::make_shared<std::atomic_bool>(false);
                 // The cancel request has no per request cleanup in

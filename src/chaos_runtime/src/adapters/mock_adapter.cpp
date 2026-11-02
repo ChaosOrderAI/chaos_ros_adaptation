@@ -11,7 +11,7 @@ namespace chaos::runtime {
 
 std::set<std::string> MockAdapter::capabilitiesFor(const std::string & kind) {
   std::set<std::string> all = pluginSpec("mock").supported_capabilities;
-  if (kind == "ugv" || kind == "quadruped") {
+  if (kind == "ugv" || kind == "quadruped" || kind == "humanoid") {
     all.erase("flight.takeoff");
     all.erase("flight.land");
   }
@@ -28,8 +28,8 @@ std::string MockAdapter::validateOptions(const AssetConfig & asset) {
   const std::string kind = kind_option != asset.options.end()
                              ? kind_option->get<std::string>()
                              : asset.kind;
-  if (kind != "ugv" && kind != "uav" && kind != "quadruped") {
-    throw AssetConfigError("mock kind must be ugv, uav or quadruped");
+  if (kind != "ugv" && kind != "uav" && kind != "quadruped" && kind != "humanoid") {
+    throw AssetConfigError("mock kind must be ugv, uav, quadruped or humanoid");
   }
   if (asset.kind != kind) {
     throw AssetConfigError("mock options.kind must agree with the asset kind");
@@ -51,7 +51,11 @@ AdapterSnapshot MockAdapter::snapshot() {
   snapshot.position = position_;
   snapshot.quaternion = {0.0, 0.0, std::sin(yaw_ / 2), std::cos(yaw_ / 2)};
   snapshot.velocity = velocity_;
-  snapshot.battery = 1.0;
+  // Humanoid battery telemetry is not part of the SDK contract: preserve
+  // AdapterSnapshot's NaN (rendered as null) instead of inventing a value.
+  if (kind_ != "humanoid") {
+    snapshot.battery = 1.0;
+  }
   snapshot.detail = "Synthetic mock telemetry; no hardware connected";
   snapshot.pose_frame = map_frame_;
   snapshot.twist_frame = base_frame_;
@@ -68,10 +72,11 @@ void MockAdapter::validateVelocity(const std::array<double, 6> & values) {
     throw chaos::Rejected("UNSUPPORTED",
                           "Ground velocity supports linear x and angular z only");
   }
-  if (kind_ == "quadruped" && std::abs(values[2]) > 1e-9) {
+  if ((kind_ == "quadruped" || kind_ == "humanoid") &&
+      std::abs(values[2]) > 1e-9) {
     throw chaos::Rejected(
       "UNSUPPORTED",
-      "Quadruped velocity supports linear x/y and angular z only");
+      "Planar velocity supports linear x/y and angular z only");
   }
 }
 

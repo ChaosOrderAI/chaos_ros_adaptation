@@ -475,7 +475,7 @@ void validate_pose(const std::string & frame,
   if (std::abs(quaternion[0]) > 1e-6 || std::abs(quaternion[1]) > 1e-6) {
     throw Rejected("UNSUPPORTED", "Navigation orientation supports yaw only");
   }
-  if ((kind == "ugv" || kind == "quadruped") &&
+  if ((kind == "ugv" || kind == "quadruped" || kind == "humanoid") &&
       std::abs(position[2]) > 1e-6) {
     throw Rejected("UNSUPPORTED", "Ground navigation requires z=0");
   }

@@ -7,6 +7,8 @@
 #include <sstream>
 #include <vector>
 
+#include "chaos_runtime/humanoid/options.hpp"
+
 namespace chaos::runtime {
 
 namespace {
@@ -49,6 +51,16 @@ const std::map<std::string, PluginSpec> & registry() {
       spec.required_options = spec.option_names;
       spec.supported_capabilities = {"state", "motion.velocity",
                                      "motion.stop"};
+      rows.emplace(spec.plugin, spec);
+    }
+    {
+      PluginSpec spec;
+      spec.plugin = "humanoid";
+      spec.option_names = {"backend", "network_interface", "dds_domain_id",
+        "state_topic", "robot_state_topic", "cmd_vel_topic", "odom_topic",
+        "velocity_frame", "source_odom_frame", "source_base_frame"};
+      spec.required_options = spec.option_names;
+      spec.supported_capabilities = {"state", "motion.velocity", "motion.stop"};
       rows.emplace(spec.plugin, spec);
     }
     {
@@ -104,7 +116,7 @@ std::set<std::string> capabilitiesFor(const PluginSpec & spec,
     const std::string kind = asset.options.count("kind") != 0
       ? asset.options.at("kind").get<std::string>()
       : asset.kind;
-    if (kind == "ugv" || kind == "quadruped") {
+    if (kind == "ugv" || kind == "quadruped" || kind == "humanoid") {
       capabilities.erase("flight.takeoff");
       capabilities.erase("flight.land");
     }
@@ -149,6 +161,11 @@ void validateAssetConfig(const AssetConfig & asset) {
   if (!unsupported.empty()) {
     throw AssetConfigError("Adapter " + asset.plugin +
                            " does not support " + joinNames(unsupported));
+  }
+  if (asset.plugin == "humanoid") {
+    // Full type/value validation lives here, not only in the ROS adapter, so
+    // --validate-asset applies exactly the same backend contract.
+    validateHumanoidOptions(asset);
   }
 }
 

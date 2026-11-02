@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CLionExternalBuildManager">
+    <target id="94a3411b-a953-4701-8c88-9c616cc1935f" name="ROS2 Workspace" defaultType="TOOL">
+      <configuration id="656cd997-30ad-42ed-899c-a183e9adef88" name="ROS2 Workspace">
+        <build type="TOOL">
+          <tool actionId="Tool_外部工具_colcon build" />
+        </build>
+      </configuration>
+    </target>
+  </component>
+</project>

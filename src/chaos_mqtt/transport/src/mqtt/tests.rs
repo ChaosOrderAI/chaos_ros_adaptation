@@ -9,6 +9,19 @@ use tokio::time::timeout;
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 const TEST_PACKET_LIMIT: usize = 2 * 1024 * 1024;
 
+#[test]
+fn username_without_a_password_is_rejected() {
+    assert!(super::required_password("", "MQTT_PASSWORD", None).unwrap().is_none());
+    assert_eq!(
+        super::required_password("edge", "MQTT_PASSWORD", Some("secret")).unwrap().as_deref(),
+        Some("secret")
+    );
+    let missing = super::required_password("edge", "MQTT_PASSWORD", None).unwrap_err();
+    assert!(missing.contains("MQTT_PASSWORD"));
+    let empty = super::required_password("edge", "MQTT_PASSWORD", Some("")).unwrap_err();
+    assert!(empty.contains("missing or empty"));
+}
+
 #[tokio::test]
 async fn latest_telemetry_never_occupies_or_blocks_the_reliable_queue() {
     let (tx, mut rx) = mpsc::channel(1);

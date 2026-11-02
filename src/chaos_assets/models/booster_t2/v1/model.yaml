@@ -1,0 +1,43 @@
+# The Booster T2 humanoid.
+#
+# The model is vendor neutral: the kind is "humanoid" and the driver plugin
+# is the generic "humanoid" plugin. The vendor backend is selected by the
+# option "backend", so a further humanoid vendor adds a backend option and
+# no new plugin.
+#
+# The real backend reads the state of the robot from the vendor SDK. The
+# twist of the odometry is the body frame of the robot, which is the frame of
+# the nav_msgs convention. The motion limits are planar: x, y and yaw.
+schema_version: 1
+model: booster_t2
+model_version: v1
+kind: humanoid
+capabilities: [state, motion.velocity, motion.stop, navigation.pose]
+limits:
+  linear_mps: 0.3
+  angular_rps: 0.5
+  command_timeout_s: 0.3
+  state_timeout_s: 1.0
+  lease_max_s: 30.0
+  action_timeout_s: 120.0
+resources: {}
+backends:
+  mock:
+    plugin: mock
+    options: {kind: humanoid}
+    capabilities: [state, motion.velocity, motion.stop, navigation.pose]
+  real:
+    plugin: humanoid
+    options:
+      backend: booster_t2
+      network_interface: eth0
+      dds_domain_id: 0
+      state_topic: rt/odom
+      robot_state_topic: rt/robot_states
+      cmd_vel_topic: /t2/cmd_vel
+      odom_topic: /t2/odom
+      velocity_frame: body
+      # Verify these original SDK names on the target robot.
+      source_odom_frame: odom
+      source_base_frame: base_link
+    capabilities: [state, motion.velocity, motion.stop]

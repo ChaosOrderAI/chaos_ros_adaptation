@@ -1,0 +1,20 @@
+# Two mock humanoids on one development host.
+#
+# The mock backend of a humanoid publishes the same interface as the vendor
+# driver, so the launch, the planner and the MQTT adapter can be exercised
+# without a robot.
+schema_version: 1
+hosts:
+  dev:
+    ros_domain_id: 87
+assets:
+  - id: t2_001
+    model_file: ../models/booster_t2/v1/model.yaml
+    host: dev
+    mode: mock
+    frames: {base: t2_001/base_link, odom: t2_001/odom, map: t2_001/map}
+  - id: t2_002
+    model_file: ../models/booster_t2/v1/model.yaml
+    host: dev
+    mode: mock
+    frames: {base: t2_002/base_link, odom: t2_002/odom, map: t2_002/map}

@@ -318,3 +318,52 @@ TEST(Components, AnUnavailableExecutableIsRejected) {
   options.backend_available = [](const std::string&) { return true; };
   EXPECT_THROW(chaos::bringup::preflight(plan_of(asset), options), ConfigurationError);
 }
+
+namespace {
+
+// An asset with a real humanoid driver.
+//
+// The humanoid plugin is vendor neutral: the vendor backend is selected by
+// the option "backend" of the asset, so the driver of a humanoid is always
+// the same executable.
+Json asset_with_humanoid() {
+  Json asset = asset_with_description();
+  asset["mode"] = "real";
+  asset["driver"]["plugin"] = "humanoid";
+  return asset;
+}
+
+}  // namespace
+
+TEST(Components, ARealHumanoidAssetHasADriverProcess) {
+  const std::vector<chaos::bringup::ProcessSpec> processes =
+      chaos::bringup::driver_processes(asset_with_humanoid());
+  ASSERT_EQ(processes.size(), 1u);
+  const auto& spec = processes.front();
+  EXPECT_EQ(spec.executable, "humanoid_driver");
+  EXPECT_EQ(spec.name, "humanoid_driver");
+  EXPECT_EQ(spec.package, "chaos_runtime");
+  EXPECT_EQ(spec.node_namespace, "/robots/unit");
+  // The driver receives the asset document with the plugin of the asset.
+  ASSERT_EQ(spec.parameters.size(), 1u);
+  const std::string payload =
+      spec.parameters.at(0).at("asset_json").get_ref<const std::string&>();
+  EXPECT_NE(payload.find("humanoid"), std::string::npos);
+}
+
+TEST(Components, ThePreflightChecksTheBackendOfTheHumanoidPlugin) {
+  const Json asset = asset_with_humanoid();
+  chaos::bringup::PreflightOptions options;
+  options.executable_available = [](const std::string&, const std::string&) { return true; };
+  std::string probed;
+  options.backend_available = [&probed](const std::string& plugin) {
+    probed = plugin;
+    return plugin == "humanoid";
+  };
+  EXPECT_NO_THROW(chaos::bringup::preflight(plan_of(asset), options));
+  // The backend of the humanoid plugin is asked for, so a build without the
+  // vendor SDK cannot enter the real mode.
+  EXPECT_EQ(probed, "humanoid");
+  options.backend_available = [](const std::string&) { return false; };
+  EXPECT_THROW(chaos::bringup::preflight(plan_of(asset), options), ConfigurationError);
+}

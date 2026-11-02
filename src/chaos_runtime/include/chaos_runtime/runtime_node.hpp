@@ -7,7 +7,7 @@
 // - services_group (mutually exclusive): lease / stop / description.
 // - action_group (mutually exclusive): goal/cancel/accept callbacks only.
 //   The accepted callback never blocks and never detaches a per-goal thread:
-//   it hands the goal to a single persistent action worker.
+//   it hands the goal to one worker started on the first action request.
 // - timer_group (mutually exclusive): the steady-clock watchdog. It uses
 //   create_wall_timer, so a paused or rewound /clock cannot stop lease
 //   expiry, the velocity timeout, or the stop retry loop.
@@ -71,7 +71,6 @@ private:
   // when the goal reaches a terminal state or is rejected, so a client that
   // floods rejected goals cannot grow the cache without limit.
   struct GoalTokens {
-    const void * goal_token = nullptr;
     // Set by the accepted callback: delivers a typed terminal result to the
     // action server.
     std::function<void(const OperationResult &)> terminal;
@@ -85,10 +84,8 @@ private:
   using GoalTokensPtr = std::shared_ptr<GoalTokens>;
   using GoalIdBytes = std::array<std::uint8_t, 16>;
 
-  // One persistent worker thread drives all action execution. The accepted
-  // callback only enqueues a job (never blocks, never detaches per-goal
-  // threads). The coordinator admits at most one reservation, so the queue
-  // stays shallow by construction; it is still bounded defensively.
+  // Created on the first action request, then reused for all execution.
+  // The accepted callback only enqueues work; the queue is bounded.
   class ActionWorker {
   public:
     ActionWorker() : thread_([this] { run(); }) {}

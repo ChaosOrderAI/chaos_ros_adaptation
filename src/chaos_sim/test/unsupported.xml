@@ -1,0 +1,8 @@
+<mujoco>
+  <worldbody>
+    <body><freejoint/><geom type="sphere" size=".1"/>
+      <body pos=".2 0 0"><joint name="hinge"/><geom type="sphere" size=".04"/></body>
+    </body>
+  </worldbody>
+  <actuator><motor joint="hinge" gear="2"/></actuator>
+</mujoco>

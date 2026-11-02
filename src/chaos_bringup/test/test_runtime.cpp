@@ -16,6 +16,7 @@
 #include <string>
 
 #include "chaos_assets/errors.hpp"
+#include "chaos_bringup/driver_registry.hpp"
 #include "chaos_bringup/runtime.hpp"
 
 using chaos::assets::ConfigurationError;
@@ -126,4 +127,49 @@ TEST(Runtime, AMissingInterfaceRejectsTheAsset) {
   RuntimeInterface interface;
   interface.validate_path = "/nonexistent/robot_runtime";
   EXPECT_THROW(validate_asset_with_runtime(asset_document(), interface), ConfigurationError);
+}
+
+TEST(Runtime, TheHumanoidBackendIsReportedByItsOwnDriver) {
+  const FakeRuntime booster("booster", "{\"booster_sdk\": true}");
+  const FakeRuntime unitree("unitree-key", "{\"unitree_sdk2\": true}");
+  RuntimeInterface interface;
+  interface.capabilities_path = booster.path();
+  // The humanoid plugin is reported by its own driver, under its own key.
+  EXPECT_TRUE(chaos::bringup::native_backend_available("humanoid", interface));
+  // The key of the Go2 driver is not the key of the humanoid plugin.
+  interface.capabilities_path = unitree.path();
+  EXPECT_FALSE(chaos::bringup::native_backend_available("humanoid", interface));
+}
+
+TEST(Runtime, TheGo2BackendKeepsItsOwnKey) {
+  const FakeRuntime unitree("go2-key", "{\"unitree_sdk2\": true}");
+  const FakeRuntime booster("booster-key", "{\"booster_sdk\": true}");
+  RuntimeInterface interface;
+  interface.capabilities_path = unitree.path();
+  EXPECT_TRUE(chaos::bringup::native_backend_available("unitree_go2", interface));
+  interface.capabilities_path = booster.path();
+  EXPECT_FALSE(chaos::bringup::native_backend_available("unitree_go2", interface));
+}
+
+TEST(Runtime, TheDriverRegistryKnowsTheReportingExecutables) {
+  const chaos::bringup::DriverMetadata* humanoid = chaos::bringup::driver_metadata_for("humanoid");
+  ASSERT_NE(humanoid, nullptr);
+  EXPECT_STREQ(humanoid->capabilities_executable, "humanoid_driver");
+  EXPECT_STREQ(humanoid->capability_key, "booster_sdk");
+  EXPECT_EQ(humanoid->driver_executable, std::string("humanoid_driver"));
+  // The vendor topics of the humanoid are unsuffixed, so the DDS domain
+  // belongs to one humanoid.
+  EXPECT_EQ(humanoid->dds_ownership, chaos::bringup::DdsOwnership::kDomainEndpoint);
+
+  const chaos::bringup::DriverMetadata* go2 = chaos::bringup::driver_metadata_for("unitree_go2");
+  ASSERT_NE(go2, nullptr);
+  EXPECT_STREQ(go2->capabilities_executable, "go2_driver");
+  EXPECT_STREQ(go2->capability_key, "unitree_sdk2");
+  EXPECT_EQ(go2->dds_ownership, chaos::bringup::DdsOwnership::kHostEndpoint);
+
+  // The interface of the runtime keeps the default of the Go2 driver.
+  const RuntimeInterface interface;
+  EXPECT_EQ(interface.capabilities_executable, std::string("go2_driver"));
+  EXPECT_EQ(chaos::bringup::capability_of_plugin("humanoid"), std::string("booster_sdk"));
+  EXPECT_EQ(chaos::bringup::capability_of_plugin("unitree_go2"), std::string("unitree_sdk2"));
 }

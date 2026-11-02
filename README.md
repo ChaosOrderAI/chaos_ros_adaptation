@@ -5,11 +5,14 @@
 机载部署使用 `edge.launch.py` 和单设备配置，见 [机载部署说明](docs/onboard-deployment.md)。下方双 mock 的 `system.launch.py` 用于开发验证。
 
 - [架构与当前能力边界](docs/architecture.md)
+- [配置、控制、遥测与训练数据流转](docs/data-flow.md)
 - [C++17 迁移后的最终设计与可移植构建命令](docs/cpp-migration.md)
 - [Kuavo 上游参考与采用范围](docs/upstream-reference.md)
 - [构建与验证记录](docs/validation.md)
 - [机载部署、架构构建与 systemd](docs/onboard-deployment.md)
 - [Unitree Go2 机器狗配置、驱动与部署](docs/unitree-go2.md)
+- [原生人形机器人后端与 Booster T2](docs/humanoid.md)
+- [Go2 / T2 MuJoCo 物理仿真、关节控制与查看器](docs/mujoco.md)
 - [传感器配置、标准接口与诊断](docs/sensors.md)
 - [奥比中光 Gemini 335 官方驱动](docs/orbbec-driver.md)
 - [URDF / Xacro 导入、TF 归属与 RViz](docs/robot-description.md)
@@ -20,7 +23,7 @@
 
 ## 开发环境构建与启动
 
-工作空间包含 **9 个生产 ROS 包和 1 个基准包**，业务运行时全部为原生 C++17 实现（Python 仅保留 launch 胶水、薄绑定、第三方 Xacro 桥接及工具/测试脚本）。
+工作空间包含 **9 个生产 ROS 包、1 个可选仿真包和 1 个基准包**，业务运行时全部为原生 C++17 实现（Python 仅保留 launch 胶水、薄绑定、第三方 Xacro 桥接及工具/测试脚本）。
 
 运行时依赖 ROS 2 Jazzy、colcon、ament_cmake/ament_cmake_python、rclcpp、geometry_msgs、std_msgs、sensor_msgs、nav_msgs、diagnostic_msgs、tf2_ros、action_msgs、rosidl_default_generators、rosbag2_cpp、rosbag2_storage、rosbag2_transport、rosidl_typesupport_introspection_cpp、nlohmann_json、yaml-cpp、Boost 头文件、OpenSSL。`chaos_mqtt` 内置的 Rust 传输还需 Rust/Cargo 与 `build-essential`、`cmake`、`pkg-config`、`libclang-dev`。模型导入使用 robot_state_publisher、urdfdom；Xacro 模型另需 xacro。现有厂商程序无需参与 mock 构建。
 
@@ -72,6 +75,8 @@ ros2 topic echo /robots/drone_001/state
 
 `description` 返回当前后端实际能力。mock 是用于验证接口的运动学模型，不是带碰撞、避障或飞行动力学的仿真器。
 
+需要物理仿真时，按 [MuJoCo 说明](docs/mujoco.md) 显式启用 `chaos_sim`。它提供官方 Go2 / T2 模型、关节 PD 与 ROS 状态；平衡策略及统一速度行走接口尚未接入。
+
 ## 配置组织
 
 ```text
@@ -86,6 +91,7 @@ src/
     transport/        完整 Rust 传输源码及 Cargo 锁文件（导入的第三方实现，不在本轮修改范围）
   chaos_sensors/      模拟传感器、数据新鲜度诊断与传感器目录
   chaos_data/         原生 rosbag2 采集、时间质量门控、审计与离线训练数据导出
+  chaos_sim/          可选 MuJoCo Go2 / T2 物理仿真；独立关节控制与标准 ROS 观测
   chaos_benchmarks/   领域微基准（非生产入口，不参与运行）
 drivers/
   src/OrbbecSDK_ROS2/ 固定版本的官方相机驱动，独立构建
@@ -118,6 +124,8 @@ ros2 launch chaos_bringup system.launch.py \
 | `lingao_ros2` | 新鲜 Odometry 状态、经校验的 Twist 速度与受控停止 | 现有底盘驱动已运行，配置实际 topic 和 frame |
 | `dji_psdk_legacy` | 订阅旧网关 ROS 状态 | 旧网关已经产生 `system/status`；暂无统一飞行控制 |
 | `unitree_go2` | 新鲜 Odometry 状态、平面速度与受控停止；统一 launch 启动 `go2_driver` | 原生 Unitree SDK2：以 `-DCHAOS_GO2_WITH_UNITREE_SDK=ON` 构建，配置设备网卡和 DDS domain |
+| mock humanoid | 状态、控制租约、平面速度、停止、导航 Action | 无设备 |
+| `humanoid`（`backend: booster_t2`） | 新鲜 Odometry 状态、平面速度与受控停止；统一 launch 启动 `humanoid_driver` | 原生 Booster Robotics SDK：以 `-DCHAOS_HUMANOID_WITH_BOOSTER_SDK=ON` 构建，配置设备网卡和 DDS domain |
 
 [edge.example.yaml](src/chaos_assets/config/edge.example.yaml) 是接入模板，域号、话题和 frame 必须与目标设备核对。车辆和 DJI 运动后端采用 attach：底盘驱动和旧 DJI 网关仍由既有服务管理。Go2 驱动由统一 launch 管理，传感器可另选 node 模式纳入统一 launch。无人车旧部署使用 Humble，Jazzy 下的底盘驱动构建与实机验证仍需完成。
 
@@ -275,3 +283,20 @@ smoke test 只构造 mock 资产，使用 localhost 和 Domain 187，启动实�
 新增设备：增加资产实例。新增型号：增加版本化型号文件。新增后端：实现原生 C++ 适配契约 `chaos::runtime::Adapter`（`src/chaos_runtime/include/chaos_runtime/adapter.hpp`），提供 `snapshot()`、`setVelocity()`、`stop()`、`startOperation()` / `pollOperation()` 等能力，并登记到运行时的后端工厂，再通过配置选择该后端。完整方法以该头文件与内置适配器为准；加载适配器时不得连接硬件，连接必须放在实例构造阶段。launch 通过 `chaos_bringup` 的原生预检接口调用运行时校验器，共用资产规则。
 
 当前尚未实现真实 Nav2 Action 封装、真实飞行控制、LifecycleNode、远程部署管理和跨重启任务恢复。这些边界保留在架构文档中，后续可以逐项扩展而不改变已有资产身份与公共控制约定。
+
+## 原生人形机器人（Booster T2）
+
+`chaos_runtime` 新增厂商中立的人形后端契约与原生 C++17 可执行程序 `humanoid_driver`，复用现有 ROS / SDK / MQTT 主接口。真实后端当前只提供状态、平面速度与停止，mock 额外提供导航位姿。
+
+```bash
+# 双 mock 演示：dry_run 只做规划检查，去掉 dry_run:=true 才真正启动
+ros2 launch chaos_bringup system.launch.py \
+  inventory:="$PWD/src/chaos_assets/config/humanoid.demo.yaml" dry_run:=true
+
+# 厂商 SDK 开关自证（默认 OFF）
+ros2 run chaos_runtime humanoid_driver --build-capabilities   # {"booster_sdk":false}
+```
+
+- 实机模板：[t2.onboard.example.yaml](src/chaos_assets/config/t2.onboard.example.yaml)；型号 `src/chaos_assets/models/booster_t2/v1/model.yaml`。
+- 开启厂商 SDK：`-DCHAOS_HUMANOID_WITH_BOOSTER_SDK=ON -DBOOSTER_SDK_ROOT=/absolute/sdk`。
+- 能力边界、frame 选项、安全语义与未完成部分见 [人形机器人后端说明](docs/humanoid.md)。

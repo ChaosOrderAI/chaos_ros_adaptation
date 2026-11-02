@@ -6,6 +6,7 @@
 
 #include "chaos_assets/errors.hpp"
 #include "chaos_assets/process.hpp"
+#include "chaos_bringup/driver_registry.hpp"
 #include "installed_executable.hpp"
 
 namespace chaos::bringup {
@@ -41,9 +42,9 @@ std::string interface_executable(const std::string& explicit_path, const std::st
 }  // namespace
 
 std::string capability_of_plugin(const std::string& plugin) {
-  // The report of the runtime uses the name of the capability. The Go2 driver
-  // is the only plugin whose capability has a different name.
-  if (plugin == "unitree_go2") return "unitree_sdk2";
+  // The report of the runtime uses the capability key of the plugin.
+  const DriverMetadata* metadata = driver_metadata_for(plugin);
+  if (metadata != nullptr) return metadata->capability_key;
   return plugin;
 }
 
@@ -65,12 +66,10 @@ void validate_asset_with_runtime(const Json& asset, const RuntimeInterface& inte
                                                    std::to_string(result.exit_code)
                                               : detail));
   }
-  // The exit code alone is not an answer: the protocol of the runtime is a
-  // JSON object with the field "valid". A runtime that reports something
-  // else - a truncated document, an error text or a missing field - has not
-  // validated the asset, and the startup stops here.
+  // The protocol of the runtime is a JSON object with the field "valid": an
+  // exit code alone does not validate the asset.
   const Json answer = Json::parse(result.out, nullptr, false);
-  if (answer.is_discarded() || !answer.is_object()) {
+  if (!answer.is_object()) {
     throw ConfigurationError(
         "the runtime did not answer with a JSON object; the asset is not validated: " +
         result.out);
@@ -89,14 +88,26 @@ void validate_asset_with_runtime(const Json& asset, const RuntimeInterface& inte
 }
 
 bool native_backend_available(const std::string& plugin, const RuntimeInterface& interface) {
+  const DriverMetadata* metadata = driver_metadata_for(plugin);
   std::string executable;
   try {
-    executable = interface_executable(interface.capabilities_path,
-                                      interface.capabilities_package,
-                                      interface.capabilities_executable);
+    // An explicit path replaces the lookup in the package index, also for a
+    // plugin with its own reporting executable. A plugin reports its backend
+    // with its own executable while the interface keeps its default; a custom
+    // executable of the interface wins over the one of the plugin.
+    if (!interface.capabilities_path.empty()) {
+      executable = interface.capabilities_path;
+    } else {
+      const bool own_executable =
+          metadata != nullptr &&
+          interface.capabilities_executable == RuntimeInterface::kDefaultCapabilitiesExecutable;
+      executable = resolve_executable(interface.capabilities_package,
+                                      own_executable ? metadata->capabilities_executable
+                                                     : interface.capabilities_executable);
+    }
   } catch (const ConfigurationError&) {
-    // A runtime that cannot be reached denies the backend. The preflight
-    // reports the reason, so a real asset never starts without its driver.
+    // A runtime that cannot be reached denies the backend, so a real asset
+    // never starts without its driver.
     return false;
   }
   std::vector<std::string> command{executable, interface.capabilities_argument};
@@ -105,7 +116,7 @@ bool native_backend_available(const std::string& plugin, const RuntimeInterface&
                                  interface.output_limit);
   if (result.exit_code != 0) return false;
   const Json report = Json::parse(result.out, nullptr, false);
-  if (report.is_discarded() || !report.is_object()) return false;
+  if (!report.is_object()) return false;
   const auto found = report.find(capability_of_plugin(plugin));
   if (found == report.end() || !found->is_boolean()) return false;
   return found->get<bool>();

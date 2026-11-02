@@ -394,11 +394,12 @@ ChronyProbe::ChronyProbe(double max_uncertainty_s,
       timeout_s_(positive(timeout_s, "timeout_s")),
       runner_(runner ? std::move(runner) : runChronycTracking) {}
 
-TimeSample ChronyProbe::sample(std::int64_t wall_ns,
-                               std::int64_t monotonic_ns) const {
-  const ChronycResult completed = runner_(timeout_s_);
+namespace {
+// Shared conversion; each overload supplies its own observation timestamps.
+TimeSample finishSample(const ChronycResult & completed, std::int64_t wall_ns,
+                        std::int64_t monotonic_ns, double max_uncertainty_s,
+                        double max_reference_age_s) {
   std::string reason;
-  std::string output;
   if (completed.error == ChronycResult::Error::kNotFound) {
     reason = "chronyc_not_found";
   } else if (completed.error == ChronycResult::Error::kTimeout) {
@@ -407,8 +408,6 @@ TimeSample ChronyProbe::sample(std::int64_t wall_ns,
     reason = "chronyc_unavailable";
   } else if (completed.returncode != 0) {
     reason = "chronyc_failed";
-  } else {
-    output = completed.output;
   }
   if (!reason.empty()) {
     TimeSample sample;
@@ -418,8 +417,15 @@ TimeSample ChronyProbe::sample(std::int64_t wall_ns,
     sample.sample_monotonic_ns = monotonic_ns;
     return sample;
   }
-  return parseTracking(output, wall_ns, monotonic_ns, max_uncertainty_s_,
-                       max_reference_age_s_);
+  return parseTracking(completed.output, wall_ns, monotonic_ns, max_uncertainty_s,
+                       max_reference_age_s);
+}
+}  // namespace
+
+TimeSample ChronyProbe::sample(std::int64_t wall_ns,
+                               std::int64_t monotonic_ns) const {
+  return finishSample(runner_(timeout_s_), wall_ns, monotonic_ns,
+                      max_uncertainty_s_, max_reference_age_s_);
 }
 
 TimeSample ChronyProbe::sample() const {
@@ -428,29 +434,8 @@ TimeSample ChronyProbe::sample() const {
   const ChronycResult completed = runner_(timeout_s_);
   const std::int64_t wall_ns = chaos::systemNs();
   const std::int64_t monotonic_ns = chaos::monotonicNs();
-  std::string reason;
-  std::string output;
-  if (completed.error == ChronycResult::Error::kNotFound) {
-    reason = "chronyc_not_found";
-  } else if (completed.error == ChronycResult::Error::kTimeout) {
-    reason = "chronyc_timeout";
-  } else if (completed.error == ChronycResult::Error::kUnavailable) {
-    reason = "chronyc_unavailable";
-  } else if (completed.returncode != 0) {
-    reason = "chronyc_failed";
-  } else {
-    output = completed.output;
-  }
-  if (!reason.empty()) {
-    TimeSample sample;
-    sample.status = "unknown";
-    sample.reason = reason;
-    sample.sample_utc_ns = wall_ns;
-    sample.sample_monotonic_ns = monotonic_ns;
-    return sample;
-  }
-  return parseTracking(output, wall_ns, monotonic_ns, max_uncertainty_s_,
-                       max_reference_age_s_);
+  return finishSample(completed, wall_ns, monotonic_ns,
+                      max_uncertainty_s_, max_reference_age_s_);
 }
 
 ClockGuard::ClockGuard(int required_samples, double jump_threshold_s,

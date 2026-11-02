@@ -121,6 +121,39 @@ std::string second_go2(const std::string& id, const std::string& options) {
          "      options: {" + options + "}\n";
 }
 
+// An inventory with one real humanoid asset.
+//
+// The model file is referenced by an absolute path, so the inventory does not
+// depend on the location of the temporary file.
+std::string humanoid_inventory(const TemporaryDirectory& directory,
+                               const std::string& second_asset) {
+  const std::string model = share_directory() + "/models/booster_t2/v1/model.yaml";
+  return directory.write("assets.yaml",
+                         "schema_version: 1\n"
+                         "hosts:\n"
+                         "  dev:\n"
+                         "    ros_domain_id: 87\n"
+                         "assets:\n"
+                         "  - id: t2_001\n"
+                         "    model_file: " + model + "\n"
+                         "    host: dev\n"
+                         "    mode: real\n"
+                         "    frames: {base: t2_001/base_link, odom: t2_001/odom, map: t2_001/map}\n" +
+                             second_asset);
+}
+
+// A second humanoid asset with the given driver options.
+std::string second_humanoid(const std::string& id, const std::string& options) {
+  const std::string model = share_directory() + "/models/booster_t2/v1/model.yaml";
+  return "  - id: " + id + "\n"
+         "    model_file: " + model + "\n"
+         "    host: dev\n"
+         "    mode: real\n"
+         "    frames: {base: " + id + "/base_link, odom: " + id + "/odom, map: " + id + "/map}\n"
+         "    driver:\n"
+         "      options: {" + options + "}\n";
+}
+
 // Assert that the planner rejects the request for a specific reason.
 //
 // The reason is part of the contract: a caller has to be able to tell the
@@ -320,6 +353,76 @@ TEST(Planner, TheGo2OdometryCannotConflictWithAVelocityOutput) {
   const TemporaryDirectory directory;
   const std::string path = go2_inventory(
       directory, second_go2("dog_002", "network_interface: eno2, cmd_vel_topic: /go2/odom, odom_topic: /dog2/odom"));
+  PlanRequest request;
+  request.inventory_path = path;
+  request.host_id = "dev";
+  expect_rejected(request, "odometry output conflicts");
+}
+
+TEST(Planner, TwoRealHumanoidAssetsCannotShareOneDdsDomain) {
+  const TemporaryDirectory directory;
+  // The two assets use different ROS topics, so only the vendor DDS domain
+  // can collide. The vendor topics of the SDK are unsuffixed, so the domain
+  // belongs to one humanoid.
+  const std::string path = humanoid_inventory(
+      directory, second_humanoid("t2_002", "cmd_vel_topic: /t2_002/cmd_vel, odom_topic: /t2_002/odom"));
+  PlanRequest request;
+  request.inventory_path = path;
+  request.host_id = "dev";
+  expect_rejected(request, "same DDS connection");
+}
+
+TEST(Planner, TwoHumanoidAssetsOnDifferentHostsCannotShareOneDdsDomain) {
+  const TemporaryDirectory directory;
+  const std::string model = share_directory() + "/models/booster_t2/v1/model.yaml";
+  // The hosts differ and the ROS domains differ, so nothing but the vendor
+  // DDS domain can collide. The host is not part of the identity of the
+  // endpoint of a humanoid.
+  const std::string path = directory.write(
+      "assets.yaml",
+      "schema_version: 1\n"
+      "hosts:\n"
+      "  dev_a:\n"
+      "    ros_domain_id: 87\n"
+      "  dev_b:\n"
+      "    ros_domain_id: 88\n"
+      "assets:\n"
+      "  - id: t2_001\n"
+      "    model_file: " + model + "\n"
+      "    host: dev_a\n"
+      "    mode: real\n"
+      "    frames: {base: t2_001/base_link, odom: t2_001/odom, map: t2_001/map}\n"
+      "    driver:\n"
+      "      options: {cmd_vel_topic: /t2_001/cmd_vel, odom_topic: /t2_001/odom}\n"
+      "  - id: t2_002\n"
+      "    model_file: " + model + "\n"
+      "    host: dev_b\n"
+      "    mode: real\n"
+      "    frames: {base: t2_002/base_link, odom: t2_002/odom, map: t2_002/map}\n"
+      "    driver:\n"
+      "      options: {cmd_vel_topic: /t2_002/cmd_vel, odom_topic: /t2_002/odom}\n");
+  PlanRequest request;
+  request.inventory_path = path;
+  request.host_id = "dev_a";
+  expect_rejected(request, "same DDS connection");
+}
+
+TEST(Planner, TwoRealHumanoidAssetsCannotPublishTheSameOdometry) {
+  const TemporaryDirectory directory;
+  // The DDS domains differ, so the odometry output is the only ownership
+  // that can collide here.
+  const std::string path = humanoid_inventory(
+      directory, second_humanoid("t2_002", "dds_domain_id: 1, cmd_vel_topic: /t2_002/cmd_vel, odom_topic: /t2/odom"));
+  PlanRequest request;
+  request.inventory_path = path;
+  request.host_id = "dev";
+  expect_rejected(request, "same odometry output");
+}
+
+TEST(Planner, TheHumanoidOdometryCannotConflictWithAVelocityOutput) {
+  const TemporaryDirectory directory;
+  const std::string path = humanoid_inventory(
+      directory, second_humanoid("t2_002", "dds_domain_id: 1, cmd_vel_topic: /t2/odom, odom_topic: /t2_002/odom"));
   PlanRequest request;
   request.inventory_path = path;
   request.host_id = "dev";

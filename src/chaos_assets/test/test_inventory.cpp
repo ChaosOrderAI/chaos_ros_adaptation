@@ -261,3 +261,102 @@ TEST(Inventory, ResolvedInventoryCarriesTheDocumentedFields) {
     EXPECT_TRUE(asset.contains(field)) << field;
   }
 }
+
+namespace {
+
+// An inventory with one humanoid asset in the given mode.
+//
+// The model file is referenced by an absolute path, so the inventory does not
+// depend on the location of the temporary file.
+std::string write_humanoid_inventory(const TempDirectory& directory, const std::string& mode) {
+  const std::string model = share_directory() + "/models/booster_t2/v1/model.yaml";
+  return directory.write("humanoid.yaml",
+                         "schema_version: 1\n"
+                         "hosts:\n"
+                         "  dev:\n"
+                         "    ros_domain_id: 87\n"
+                         "assets:\n"
+                         "  - id: t2_001\n"
+                         "    model_file: " + model + "\n"
+                         "    host: dev\n"
+                         "    mode: " + mode + "\n");
+}
+
+}  // namespace
+
+TEST(Inventory, TheHumanoidModelResolvesTheMockBackend) {
+  const TempDirectory directory;
+  const Inventory inventory =
+      chaos::assets::load_inventory(write_humanoid_inventory(directory, "mock"));
+  ASSERT_EQ(inventory.assets().size(), 1u);
+  const Json& asset = inventory.assets()[0];
+  EXPECT_EQ(asset.at("kind"), "humanoid");
+  EXPECT_EQ(asset.at("driver").at("plugin"), "mock");
+  EXPECT_EQ(asset.at("driver").at("options").at("kind"), "humanoid");
+  // The mock backend of a humanoid can be placed on a map.
+  EXPECT_EQ(asset.at("capabilities"),
+            Json::array({Json("state"), Json("motion.velocity"), Json("motion.stop"),
+                         Json("navigation.pose")}));
+  EXPECT_EQ(asset.at("limits").at("linear_mps"), 0.3);
+  EXPECT_EQ(asset.at("limits").at("angular_rps"), 0.5);
+  EXPECT_EQ(asset.at("limits").at("command_timeout_s"), 0.3);
+  EXPECT_EQ(asset.at("limits").at("state_timeout_s"), 1.0);
+}
+
+TEST(Inventory, TheHumanoidModelResolvesTheRealBackend) {
+  const TempDirectory directory;
+  const Inventory inventory =
+      chaos::assets::load_inventory(write_humanoid_inventory(directory, "real"));
+  ASSERT_EQ(inventory.assets().size(), 1u);
+  const Json& asset = inventory.assets()[0];
+  EXPECT_EQ(asset.at("kind"), "humanoid");
+  // The plugin is vendor neutral; the vendor backend is an option.
+  EXPECT_EQ(asset.at("driver").at("plugin"), "humanoid");
+  const Json& options = asset.at("driver").at("options");
+  EXPECT_EQ(options.at("backend"), "booster_t2");
+  EXPECT_EQ(options.at("network_interface"), "eth0");
+  EXPECT_EQ(options.at("dds_domain_id"), 0);
+  EXPECT_EQ(options.at("state_topic"), "rt/odom");
+  EXPECT_EQ(options.at("robot_state_topic"), "rt/robot_states");
+  EXPECT_EQ(options.at("cmd_vel_topic"), "/t2/cmd_vel");
+  EXPECT_EQ(options.at("odom_topic"), "/t2/odom");
+  EXPECT_EQ(options.at("velocity_frame"), "body");
+  // The real backend of a humanoid cannot be placed on a map.
+  EXPECT_EQ(asset.at("capabilities"),
+            Json::array({Json("state"), Json("motion.velocity"), Json("motion.stop")}));
+}
+
+TEST(Inventory, TheHumanoidDemoInventoryResolvesTwoMocks) {
+  const Inventory inventory =
+      chaos::assets::load_inventory(share_directory() + "/config/humanoid.demo.yaml");
+  ASSERT_EQ(inventory.assets().size(), 2u);
+  EXPECT_EQ(inventory.select("dev").size(), 2u);
+  for (const Json& asset : inventory.assets()) {
+    EXPECT_EQ(asset.at("kind"), "humanoid");
+    EXPECT_EQ(asset.at("mode"), "mock");
+    EXPECT_EQ(asset.at("driver").at("plugin"), "mock");
+  }
+  EXPECT_EQ(inventory.assets()[0].at("id"), "t2_001");
+  EXPECT_EQ(inventory.assets()[1].at("id"), "t2_002");
+}
+
+TEST(Inventory, TheHumanoidOnboardExampleResolvesOneRealAsset) {
+  const Inventory inventory =
+      chaos::assets::load_inventory(share_directory() + "/config/t2.onboard.example.yaml");
+  ASSERT_EQ(inventory.assets().size(), 1u);
+  const Json& asset = inventory.assets()[0];
+  EXPECT_EQ(asset.at("id"), "t2_001");
+  EXPECT_EQ(asset.at("kind"), "humanoid");
+  EXPECT_EQ(asset.at("mode"), "real");
+  EXPECT_EQ(asset.at("driver").at("plugin"), "humanoid");
+  const Json& options = asset.at("driver").at("options");
+  EXPECT_EQ(options.at("backend"), "booster_t2");
+  EXPECT_EQ(options.at("dds_domain_id"), 0);
+  // The topics of the example are named after the device.
+  EXPECT_EQ(options.at("cmd_vel_topic"), "/t2_001/cmd_vel");
+  EXPECT_EQ(options.at("odom_topic"), "/t2_001/odom");
+  // The vendor topics of the model are not renamed by the example.
+  EXPECT_EQ(options.at("state_topic"), "rt/odom");
+  EXPECT_EQ(options.at("robot_state_topic"), "rt/robot_states");
+  EXPECT_EQ(options.at("velocity_frame"), "body");
+}

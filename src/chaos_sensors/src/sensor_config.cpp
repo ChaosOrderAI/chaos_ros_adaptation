@@ -124,7 +124,6 @@ std::map<std::string, StreamConfig> parseStreams(const nlohmann::json & sensor,
 
 SensorConfig parseSensor(const std::string & sensor_id,
                          const nlohmann::json & sensor,
-                         const std::string & name_space,
                          const std::string & where) {
   if (!sensor.is_object()) {
     fail(where, "sensor entry must be an object");
@@ -132,9 +131,7 @@ SensorConfig parseSensor(const std::string & sensor_id,
   SensorConfig config;
   config.id = sensor_id;
   config.kind = requireNonEmptyString(sensor, "kind", where);
-  config.name_space = name_space.empty()
-                        ? requireNonEmptyString(sensor, "namespace", where)
-                        : name_space;
+  config.name_space = requireNonEmptyString(sensor, "namespace", where);
   config.frame_id = requireNonEmptyString(sensor, "frame_id", where);
   auto enabled = sensor.find("enabled");
   if (enabled != sensor.end()) {
@@ -174,7 +171,7 @@ SensorConfig parseSensorJson(const std::string & raw) {
     parsed.contains("id") && parsed["id"].is_string()
       ? parsed["id"].get<std::string>()
       : "sensor",
-    parsed, "", "sensor_json");
+    parsed, "sensor_json");
   if (sensor.driver_mode != "mock") {
     fail("sensor_json", "mock_sensor requires driver.mode=mock");
   }
@@ -198,7 +195,7 @@ std::vector<SensorConfig> parseAssetSensorsJson(const std::string & raw,
   for (auto item = sensors->begin(); item != sensors->end(); ++item) {
     const std::string where = "asset_json.sensors." + item.key();
     SensorConfig sensor =
-      parseSensor(item.key(), item.value(), "", where);
+      parseSensor(item.key(), item.value(), where);
     if (!sensor.enabled) {
       continue;
     }

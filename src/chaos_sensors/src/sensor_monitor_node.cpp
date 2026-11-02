@@ -46,14 +46,14 @@ public:
   explicit SensorMonitorNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
       : rclcpp::Node("sensor_monitor", options) {
     declare_parameter<std::string>("asset_json", "{}");
-    std::string asset_id;
-    std::string asset_namespace;
+    std::string name_space;
     const std::vector<SensorConfig> sensors = parseAssetSensorsJson(
-      get_parameter("asset_json").as_string(), asset_id, asset_namespace);
-    asset_id_ = asset_id;
+      get_parameter("asset_json").as_string(), asset_id_, name_space);
     // The endpoints are derived from the asset namespace, never from a
     // per-sensor namespace: the sensor order must not change them.
-    std::string name_space = asset_namespace;
+    while (!name_space.empty() && name_space.back() == '/') {
+      name_space.pop_back();
+    }
     for (const auto & sensor : sensors) {
       for (const auto & entry : sensor.streams) {
         if (!entry.second.monitor) {
@@ -63,14 +63,10 @@ public:
         addStream(sensor.id, entry.first, entry.second);
       }
     }
-    std::string prefix = name_space;
-    while (!prefix.empty() && prefix.back() == '/') {
-      prefix.pop_back();
-    }
     diagnostics_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
-      prefix + "/sensors/diagnostics", 10);
+      name_space + "/sensors/diagnostics", 10);
     description_pub_ = create_publisher<std_msgs::msg::String>(
-      prefix + "/sensors/description",
+      name_space + "/sensors/description",
       rclcpp::QoS(1).durability(rclcpp::DurabilityPolicy::TransientLocal));
     std_msgs::msg::String description;
     description.data = publicDescription(asset_id_, sensors);
@@ -96,13 +92,12 @@ private:
       config.frame_id, config.timeout_s,
       [this] { return get_clock()->now().nanoseconds(); });
     const auto tracker = monitored.tracker;
-    auto subscription = create_subscription<MessageT>(
+    monitored.subscription = create_subscription<MessageT>(
       config.topic, streamQoS(config.qos),
       [tracker](const MessageT & message) {
         tracker->observe(message.header.stamp.sec, message.header.stamp.nanosec,
                          message.header.frame_id);
       });
-    monitored.subscription = subscription;
     streams_.push_back(std::move(monitored));
   }
 
@@ -142,19 +137,12 @@ private:
       status.message = health.message;
       status.hardware_id = asset_id_ + "/" + monitored.sensor_id;
       for (const auto & [key, value] : health.values) {
-        diagnostic_msgs::msg::KeyValue pair;
-        pair.key = key;
-        pair.value = value;
-        status.values.push_back(pair);
+        status.values.emplace_back().set__key(key).set__value(value);
       }
-      diagnostic_msgs::msg::KeyValue topic;
-      topic.key = "topic";
-      topic.value = monitored.config.topic;
-      status.values.push_back(topic);
-      diagnostic_msgs::msg::KeyValue type;
-      type.key = "message_type";
-      type.value = streamTypeName(monitored.config.type);
-      status.values.push_back(type);
+      status.values.emplace_back().set__key("topic").set__value(
+        monitored.config.topic);
+      status.values.emplace_back().set__key("message_type").set__value(
+        streamTypeName(monitored.config.type));
       message.status.push_back(status);
     }
     diagnostics_pub_->publish(message);

@@ -1,0 +1,338 @@
+[
+  {
+    "name": "go2",
+    "repository": "unitreerobotics/unitree_mujoco",
+    "commit": "1eb6642e3f3fdfb7fb13a9794fd6a2dd93ea0e7d",
+    "prefix": "unitree_robots/go2/",
+    "files": [
+      {
+        "path": "LICENSE",
+        "git_blob_sha": "42d2e648c8881ea075a3bc386c91669290b2e386",
+        "size": 1559
+      },
+      {
+        "path": "unitree_robots/go2/Go2.png",
+        "git_blob_sha": "d5b1202086b47485dd9c3f8f9df94bef8af930d4",
+        "size": 625385
+      },
+      {
+        "path": "unitree_robots/go2/assets/base_0.obj",
+        "git_blob_sha": "f2e688236f56bd2738468a213ea61fd2f69baf0b",
+        "size": 1330465
+      },
+      {
+        "path": "unitree_robots/go2/assets/base_1.obj",
+        "git_blob_sha": "e9a44eb668902b7f934f8328e4d33c6e38df8db9",
+        "size": 811791
+      },
+      {
+        "path": "unitree_robots/go2/assets/base_2.obj",
+        "git_blob_sha": "bc661591f01c760072cb9f3fb6d80b2545bb1d53",
+        "size": 294090
+      },
+      {
+        "path": "unitree_robots/go2/assets/base_3.obj",
+        "git_blob_sha": "5c98393efeb90c26bef36279e000d738dff8ff9d",
+        "size": 379093
+      },
+      {
+        "path": "unitree_robots/go2/assets/base_4.obj",
+        "git_blob_sha": "1f45bc4fa84604cd8e69124084805104b96be188",
+        "size": 7776234
+      },
+      {
+        "path": "unitree_robots/go2/assets/calf_0.obj",
+        "git_blob_sha": "1d9be4c392ba62a96a07043096d96d0a981fb9e9",
+        "size": 877174
+      },
+      {
+        "path": "unitree_robots/go2/assets/calf_1.obj",
+        "git_blob_sha": "01197551ce8ad7d7118590f949897c72a57b0e11",
+        "size": 326865
+      },
+      {
+        "path": "unitree_robots/go2/assets/calf_mirror_0.obj",
+        "git_blob_sha": "710bbe9ee5190e182e31730acb0e9ec6ed4c87db",
+        "size": 876538
+      },
+      {
+        "path": "unitree_robots/go2/assets/calf_mirror_1.obj",
+        "git_blob_sha": "6b27378a4e44d27bf974ec7ba311f5725c4dc2da",
+        "size": 327261
+      },
+      {
+        "path": "unitree_robots/go2/assets/foot.obj",
+        "git_blob_sha": "edc559eeb5b385e3df55573074e35ce1ef227a46",
+        "size": 1144729
+      },
+      {
+        "path": "unitree_robots/go2/assets/hip_0.obj",
+        "git_blob_sha": "551f12437a92cf72206aa56dca412c88220b6c4a",
+        "size": 2863864
+      },
+      {
+        "path": "unitree_robots/go2/assets/hip_1.obj",
+        "git_blob_sha": "ed2bebfc4c2febfef45a1c67c40397964a6df6e4",
+        "size": 2767918
+      },
+      {
+        "path": "unitree_robots/go2/assets/thigh_0.obj",
+        "git_blob_sha": "0b99756ffd7d3391abeff66fc510a1ae7c5a4c8b",
+        "size": 2841868
+      },
+      {
+        "path": "unitree_robots/go2/assets/thigh_1.obj",
+        "git_blob_sha": "5005be1de988534d0f4b94ec51eaf1ff41ba7970",
+        "size": 1491320
+      },
+      {
+        "path": "unitree_robots/go2/assets/thigh_mirror_0.obj",
+        "git_blob_sha": "7c2fd2ce44ed9e4f1d550ca1847c7c9e58f91be1",
+        "size": 2817674
+      },
+      {
+        "path": "unitree_robots/go2/assets/thigh_mirror_1.obj",
+        "git_blob_sha": "fb7e0b4963b9889fe6b1127bbca03844163b1bc7",
+        "size": 1482261
+      },
+      {
+        "path": "unitree_robots/go2/go2.xml",
+        "git_blob_sha": "d970540c8295b2614b043ae282d1804d317edc77",
+        "size": 14881
+      },
+      {
+        "path": "unitree_robots/go2/height_field.png",
+        "git_blob_sha": "3f2fb06d9d6a31a1626ba65150c0428afdc7dc74",
+        "size": 4865
+      },
+      {
+        "path": "unitree_robots/go2/scene.xml",
+        "git_blob_sha": "e7ad5402a9e45fbfa04ca245f3a7ab8843995b47",
+        "size": 1472
+      },
+      {
+        "path": "unitree_robots/go2/scene_terrain.xml",
+        "git_blob_sha": "b6dfae5a470a8fdc34de16b187065d6bbd2b2792",
+        "size": 21302
+      },
+      {
+        "path": "unitree_robots/go2/unitree_hfield.png",
+        "git_blob_sha": "329a6c605adfb3f99cc5fea355be939fcb371dfb",
+        "size": 14273
+      }
+    ]
+  },
+  {
+    "name": "t2",
+    "repository": "BoosterRobotics/booster_assets",
+    "commit": "12a97516f57469078707afb587a5f84c1cb110d1",
+    "prefix": "robots/T2/T2_31dof/",
+    "files": [
+      {
+        "path": "LICENSE",
+        "git_blob_sha": "d7a14af35ecb678236db590d77e29232aed10cdd",
+        "size": 1502
+      },
+      {
+        "path": "robots/T2/T2_31dof/T2_31dof.urdf",
+        "git_blob_sha": "2423b98802b4fc63bd26ad72f5cec9a95002a37f",
+        "size": 38510
+      },
+      {
+        "path": "robots/T2/T2_31dof/T2_31dof.xml",
+        "git_blob_sha": "f67aa34e1df31c2ad3bad539ec8b8438edab59a7",
+        "size": 27923
+      },
+      {
+        "path": "robots/T2/T2_31dof/T2_31dof_parallel.xml",
+        "git_blob_sha": "77d2cb72ffb47b8c607be4e835717cd3018d57f9",
+        "size": 37280
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/head_pitch_link.STL",
+        "git_blob_sha": "d8fe10c8bb95cdc126b012deca870dc312c98420",
+        "size": 3057184
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/head_pitch_link_collision.STL",
+        "git_blob_sha": "7f020eeab0c025ea3f5d8a91f31884db967b4b9d",
+        "size": 12684
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/head_yaw_link.STL",
+        "git_blob_sha": "808911165168713025d00095e188d336a7531ee8",
+        "size": 317284
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_ankle_pitch_link.STL",
+        "git_blob_sha": "5bdefb043421449d978fbbc589a7783600810586",
+        "size": 233884
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_ankle_roll_link.STL",
+        "git_blob_sha": "d9026866a160d6076eeb10aec5921f5d27598120",
+        "size": 1590484
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_elbow_pitch_link.STL",
+        "git_blob_sha": "21aa0aaaaf5b5a7dc73fbccd4cee4ba3276b455f",
+        "size": 1487584
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_elbow_yaw_link.STL",
+        "git_blob_sha": "d4fca79027874e88b033325d8a0c1ce569bfbe83",
+        "size": 1227984
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_hip_pitch_link.STL",
+        "git_blob_sha": "edaa5cfc70eac30d00e69947a1b3fb8eab0ec95c",
+        "size": 1451284
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_hip_roll_link.STL",
+        "git_blob_sha": "0b13a658d153b822c15aecc01b57259adb4dbc41",
+        "size": 838884
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_hip_yaw_link.STL",
+        "git_blob_sha": "8beb9cfc7c8a8e9c1f5ac25137215fc12dad008e",
+        "size": 1801984
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_knee_pitch_link.STL",
+        "git_blob_sha": "32514a06aac4bdf65f1b3d560d96c72e0554ee64",
+        "size": 3525234
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_shoulder_pitch_link.STL",
+        "git_blob_sha": "385fa94d720a45048f4890e39e5820fe0c2a80fe",
+        "size": 1328984
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_shoulder_roll_link.STL",
+        "git_blob_sha": "9520742ac1a6a73b9fbf5381a6bd34ec04045ec9",
+        "size": 1004984
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_wrist_pitch_link.STL",
+        "git_blob_sha": "947b6dfb0cd117b02245f31fb09761306e7a9017",
+        "size": 1657384
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_wrist_roll_link_collision.STL",
+        "git_blob_sha": "5819390eabe832482deb103924c383f70db14ab1",
+        "size": 12484
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_wrist_roll_link_with_hand.STL",
+        "git_blob_sha": "e9cd280561084b26beed0567997e2691a40aaf8f",
+        "size": 2647684
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/left_wrist_yaw_link.STL",
+        "git_blob_sha": "29e5b4853cc87c2af6cb20bd9b364534eec7dab2",
+        "size": 489184
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/logo.STL",
+        "git_blob_sha": "f726a7e53cc20f94d0db75b256c3e76565e20420",
+        "size": 175984
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_ankle_pitch_link.STL",
+        "git_blob_sha": "60e0085fddd49645ad1e12775a4b676f29e4c77f",
+        "size": 233884
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_ankle_roll_link.STL",
+        "git_blob_sha": "69b1aa70f7bb7dc0d3c9fd14e4aa635f2fdf9436",
+        "size": 1590484
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_elbow_pitch_link.STL",
+        "git_blob_sha": "20fdbfc08e98fffd0a2ec4811ebaefbb31440dea",
+        "size": 1481084
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_elbow_yaw_link.STL",
+        "git_blob_sha": "71a1b5f8914121b1cba21bcdab15482a93b5d948",
+        "size": 1237484
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_hip_pitch_link.STL",
+        "git_blob_sha": "9e4414624d04be22dd97d01007e7a8c0f64bc6b7",
+        "size": 1455384
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_hip_roll_link.STL",
+        "git_blob_sha": "124b0102b9e4fbb1a0a502e5d5471f3d6b6380e0",
+        "size": 833384
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_hip_yaw_link.STL",
+        "git_blob_sha": "f306081c3ae6ee523b265d10c146fcac6ed2f822",
+        "size": 1795684
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_knee_pitch_link.STL",
+        "git_blob_sha": "dcdb84ff25b196ed75cebb2cc514407dfc66ceb9",
+        "size": 3538134
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_shoulder_pitch_link.STL",
+        "git_blob_sha": "d7c523b2fcecb639dcc1c2f5ccfa3e39e4ee215b",
+        "size": 1324184
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_shoulder_roll_link.STL",
+        "git_blob_sha": "1c81428c1da759b33a95d52cba47fb6310e59aec",
+        "size": 1021984
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_wrist_pitch_link.STL",
+        "git_blob_sha": "cc2786408ee2a3f9395963e49e6bfd6abe7a5242",
+        "size": 1638284
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_wrist_roll_link_collision.STL",
+        "git_blob_sha": "d7413eb609fb4401112ac947d106ef6a007318c6",
+        "size": 12484
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_wrist_roll_link_with_hand.STL",
+        "git_blob_sha": "df358055172752fac0c29405c3cce69b0bda7d56",
+        "size": 2707084
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/right_wrist_yaw_link.STL",
+        "git_blob_sha": "8200070bbc4fa37ae6e123e87ccb112b8a42c0ba",
+        "size": 487084
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/trunk.STL",
+        "git_blob_sha": "bc5d9d090678835b546ebe6d6bc13d35509feac6",
+        "size": 4222284
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/waist_pitch_link.STL",
+        "git_blob_sha": "c9c4150a6c70e9a11950e402b7a1f9ff4a70a795",
+        "size": 233884
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/waist_roll_link.STL",
+        "git_blob_sha": "e8499c96d264438ac434d573c291062b9eb54fb3",
+        "size": 849884
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/waist_yaw_link.STL",
+        "git_blob_sha": "8a8e6bc08b4b4f04520340a4279971dd0b5912c3",
+        "size": 1987684
+      },
+      {
+        "path": "robots/T2/T2_31dof/meshes/waist_yaw_link_collision.STL",
+        "git_blob_sha": "21e3cee8fd0d4e7f1deb4fef11069f076f978f16",
+        "size": 12684
+      }
+    ]
+  }
+]

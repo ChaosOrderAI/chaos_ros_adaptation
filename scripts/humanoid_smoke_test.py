@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""Exercise the installed Humanoid mock through unified launch and the Python SDK.
+
+Requires a built, sourced chaos_ws. Uses localhost discovery in ROS domain 196,
+an explicitly mock-only temporary inventory, and no MQTT or Booster driver.
+"""
+
+import math
+import os
+from pathlib import Path
+import signal
+import subprocess
+import tempfile
+import time
+
+from action_msgs.msg import GoalStatus
+from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import PoseStamped
+import rclpy
+from rclpy.node import Node
+import yaml
+
+from chaos_assets import load_inventory
+from chaos_interfaces.msg import CommandResult
+from chaos_sdk import Robot
+
+
+def run():
+    domain = 196
+    environment_keys = ('ROS_DOMAIN_ID', 'ROS_AUTOMATIC_DISCOVERY_RANGE',
+                        'ROS_LOCALHOST_ONLY', 'ROS_LOG_DIR')
+    previous_environment = {key: os.environ.get(key) for key in environment_keys}
+    os.environ['ROS_DOMAIN_ID'] = str(domain)
+    os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] = 'LOCALHOST'
+    os.environ.pop('ROS_LOCALHOST_ONLY', None)
+    try:
+        with tempfile.TemporaryDirectory(prefix='chaos-humanoid-smoke-') as directory:
+            root = Path(directory)
+            share = Path(get_package_share_directory('chaos_assets'))
+            source = share / 'config/humanoid.demo.yaml'
+            installed = load_inventory(source, mode='mock')
+            assert len(installed.assets) == 2, 'Humanoid demo must contain two robots'
+            # Rebuild a minimal inventory, using the resolved absolute model path.
+            # No deployment transport, credentials or instance driver overrides
+            # are copied from the source configuration.
+            inventory = root / 'inventory.yaml'
+            inventory.write_text(yaml.safe_dump({
+                'schema_version': 1,
+                'hosts': {'smoke': {'ros_domain_id': domain}},
+                'assets': [{
+                    'id': entry['id'], 'model_file': entry['model_file'],
+                    'host': 'smoke', 'mode': 'mock', 'frames': entry['frames'],
+                } for entry in installed.assets],
+            }), encoding='utf-8')
+            resolved = load_inventory(inventory, mode='mock').select('smoke')
+            assert all(a['mode'] == 'mock' and a['driver']['plugin'] == 'mock'
+                       and a['transport'] is None and not a['sensors']
+                       and not a['description'] and not a['data_collection'] for a in resolved)
+            asset = resolved[0]
+            assert asset['kind'] == 'humanoid'
+            assert asset['mode'] == 'mock' and asset['driver'] == {
+                'plugin': 'mock', 'options': {'kind': 'humanoid'}}
+            assert asset['transport'] is None
+            assert not asset['sensors'], 'This smoke test must not start sensor drivers'
+            assert not asset['description'], 'This smoke test requires only the robot runtime'
+            assert not asset['data_collection'], 'This smoke test must not start recorders'
+
+            os.environ['ROS_LOG_DIR'] = str(root / 'ros-log')
+            process = None
+            node = None
+            sdk = None
+            peer = None
+            with (root / 'launch.log').open('w+', encoding='utf-8') as logfile:
+                try:
+                    process = subprocess.Popen(
+                        ['ros2', 'launch', 'chaos_bringup', 'system.launch.py',
+                         f'inventory:={inventory}', 'host_id:=smoke', 'mode:=mock',
+                         'enable_mqtt:=false', 'discovery_range:=LOCALHOST'],
+                        stdout=logfile, stderr=subprocess.STDOUT, start_new_session=True)
+                    rclpy.init()
+                    node = Node('chaos_humanoid_smoke_client')
+                    # The native client owns its context, its node and its
+                    # executor thread: it does not share the node of this
+                    # script and it has no private service handles.
+                    sdk = Robot(asset['id'])
+                    peer = Robot(installed.assets[1]['id'])
+                    results = {}
+                    result_subscription = node.create_subscription(
+                        CommandResult, asset['namespace'] + '/command_results',
+                        lambda message: results.__setitem__(message.request_id, message), 50)
+
+                    def wait(predicate, label, timeout=10.0):
+                        deadline = time.monotonic() + timeout
+                        while not predicate():
+                            if process.poll() is not None:
+                                raise AssertionError(f'Launch exited early: {process.returncode}')
+                            if time.monotonic() >= deadline:
+                                raise AssertionError(f'Timed out waiting for {label}; received result IDs: {list(results)}')
+                            rclpy.spin_once(node, timeout_sec=0.03)
+
+                    def future_result(future, label, timeout=10.0):
+                        wait(future.done, label, timeout)
+                        return future.result()
+
+                    def velocity(**values):
+                        request_id = sdk.velocity(**values)
+                        wait(lambda: request_id in results, 'velocity acknowledgement')
+                        return results.pop(request_id)
+
+                    def velocity_values():
+                        state = sdk.state()
+                        if state is None:
+                            return None
+                        twist = state.twist.twist
+                        return (twist.linear.x, twist.linear.y, twist.linear.z,
+                                twist.angular.x, twist.angular.y, twist.angular.z)
+
+                    def stopped():
+                        values = velocity_values()
+                        return values is not None and all(abs(value) < 1e-6 for value in values)
+
+                    # The native client waits for the discovery of the
+                    # description service itself; it exposes no private
+                    # service handle any more.
+                    assert sdk.wait_ready(20.0), 'description service was not discovered'
+                    description = future_result(sdk.describe(), 'description response')
+                    assert description.asset_id == asset['id']
+                    assert description.model == 'booster_t2'
+                    assert description.base_frame == asset['frames']['base']
+                    assert description.map_frame == asset['frames']['map']
+                    assert set(description.capabilities) == {
+                        'state', 'motion.velocity', 'motion.stop', 'navigation.pose'}
+                    assert not any(capability.startswith('flight.')
+                                   for capability in description.capabilities)
+                    wait(lambda: sdk.state() is not None and sdk.state().ready
+                         and sdk.state().connected and sdk.state().pose_valid,
+                         'ready mock humanoid')
+                    assert 'mock' in sdk.state().detail.lower()
+                    names = node.get_node_names_and_namespaces()
+                    assert not any('humanoid_driver' in name or 'mqtt' in name for name, _ in names)
+                    print('PASS: installed humanoid model, SDK discovery and capabilities without flight')
+                    assert peer.wait_ready(20.0), 'second humanoid was not discovered'
+                    peer_description = future_result(peer.describe(), 'peer description')
+                    assert peer_description.asset_id == installed.assets[1]['id']
+                    wait(lambda: peer.state() is not None and peer.state().ready, 'peer ready')
+                    peer_start = peer.state().pose.pose.position
+                    peer_origin = (peer_start.x, peer_start.y, peer_start.z)
+
+                    lease = future_result(sdk.acquire('humanoid-smoke', 30.0), 'control lease')
+                    assert lease.success and sdk.lease_token, lease.message
+                    wait(lambda: node.count_subscribers(asset['namespace'] + '/motion/velocity') > 0,
+                         'velocity subscriber')
+                    wait(lambda: result_subscription.get_publisher_count() > 0,
+                         'result publisher discovery')
+                    wait(lambda: node.count_publishers(asset['namespace'] + '/motion/velocity') > 0,
+                         'SDK velocity publisher discovery')
+                    start = sdk.state().pose.pose.position
+                    start_x, start_y, start_z = start.x, start.y, start.z
+                    command = velocity(x=0.1, y=0.1, yaw=0.2)
+                    assert command.success, command.message
+                    wait(lambda: velocity_values() is not None and all(
+                        math.isclose(actual, expected, abs_tol=1e-6)
+                        for actual, expected in zip(velocity_values(), (0.1, 0.1, 0, 0, 0, 0.2))),
+                        'x/y/yaw velocity telemetry')
+                    wait(lambda: sdk.state().pose.pose.position.x > start_x + 0.005
+                         and sdk.state().pose.pose.position.y > start_y + 0.005
+                         and abs(sdk.state().pose.pose.orientation.z) > 0.001,
+                         'forward, sideways and yaw motion')
+                    wait(stopped, 'command watchdog stop', timeout=3.0)
+                    assert math.isclose(sdk.state().pose.pose.position.z, start_z, abs_tol=1e-9)
+                    print('PASS: leased x/y/yaw motion, lateral displacement and command watchdog stop')
+                    peer_pose = peer.state().pose.pose.position
+                    assert all(math.isclose(a, b, abs_tol=1e-9) for a, b in
+                               zip((peer_pose.x, peer_pose.y, peer_pose.z), peer_origin))
+                    peer_twist = peer.state().twist.twist
+                    assert peer_twist.linear.x == peer_twist.linear.y == peer_twist.angular.z == 0
+                    print('PASS: command and state isolation across two humanoid assets')
+
+                    rejected = velocity(z=0.1)
+                    assert not rejected.success and rejected.code == 'UNSUPPORTED', rejected.message
+                    assert stopped(), 'Rejected vertical velocity must not move the humanoid'
+                    assert velocity(y=0.1).success
+                    wait(lambda: abs(velocity_values()[1]) > 0.05, 'lateral motion before explicit stop')
+                    stop = future_result(sdk.stop(), 'motion.stop response')
+                    assert stop.success, stop.message
+                    # An accepted stop revokes the runtime control lease and
+                    # the SDK drops its cached token; navigation afterwards
+                    # needs a fresh acquire.
+                    assert not sdk.lease_token, 'motion.stop must clear the cached SDK token'
+                    wait(stopped, 'explicit stop telemetry')
+                    print('PASS: unsupported vertical velocity rejected and motion.stop clears motion')
+
+                    lease = future_result(sdk.acquire('humanoid-smoke', 30.0), 'control lease')
+                    assert lease.success and sdk.lease_token, lease.message
+                    target = PoseStamped()
+                    target.header.frame_id = description.map_frame
+                    target.header.stamp = node.get_clock().now().to_msg()
+                    target.pose.position.x = sdk.state().pose.pose.position.x + 0.12
+                    target.pose.position.y = sdk.state().pose.pose.position.y + 0.10
+                    target.pose.orientation.z = math.sin(0.15 / 2)
+                    target.pose.orientation.w = math.cos(0.15 / 2)
+                    handle = future_result(sdk.navigate(target), 'planar navigation acceptance')
+                    assert handle.accepted, 'Mock planar navigation should be accepted'
+                    # The typed task exposes the result of the goal; the
+                    # status is reported as the numeric goal status.
+                    result = handle.result()
+                    assert result['ros_goal_status'] == GoalStatus.STATUS_SUCCEEDED, result
+                    assert result['ok'], result['message']
+                    wait(lambda: math.isclose(sdk.state().pose.pose.position.x,
+                                             target.pose.position.x, abs_tol=1e-4)
+                         and math.isclose(sdk.state().pose.pose.position.y,
+                                          target.pose.position.y, abs_tol=1e-4)
+                         and math.isclose(sdk.state().pose.pose.orientation.z,
+                                          target.pose.orientation.z, abs_tol=1e-4)
+                         and stopped(), 'final planar navigation pose')
+                    target.pose.position.z = 0.1
+                    # The Python facade preserves a Task for refused goals;
+                    # accepted is false when the native task is empty.
+                    rejected = future_result(sdk.navigate(target),
+                                             'vertical navigation rejection')
+                    assert not rejected.accepted, 'Quadruped navigation must reject nonzero z'
+                    assert abs(sdk.state().pose.pose.position.z) < 1e-9
+                    print('PASS: mock planar navigation completes and nonzero-z target is rejected')
+
+                    released = future_result(sdk.release(), 'control lease release')
+                    assert released.success and not sdk.lease_token, released.message
+                    wait(stopped, 'stationary state after lease release')
+                    try:
+                        sdk.velocity(y=0.1)
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError('SDK must require control after lease release')
+                    node.destroy_subscription(result_subscription)
+                    print('PASS: lease release clears cached control and prevents further SDK motion')
+                except Exception:
+                    logfile.flush()
+                    logfile.seek(0)
+                    print(logfile.read())
+                    raise
+                finally:
+                    if process is not None and process.poll() is None:
+                        os.killpg(process.pid, signal.SIGINT)
+                        try:
+                            process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(process.pid, signal.SIGKILL)
+                            process.wait(timeout=3)
+                    if peer is not None:
+                        peer.close()
+                    if sdk is not None:
+                        sdk.close()
+                    if node is not None:
+                        node.destroy_node()
+                    if rclpy.ok():
+                        rclpy.shutdown()
+                if process.returncode not in (0, -signal.SIGINT):
+                    raise AssertionError(f'Launch failed during shutdown: {process.returncode}')
+    finally:
+        for key, value in previous_environment.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    print('All Humanoid mock ROS integration checks passed; no hardware or broker was used.')
+
+
+if __name__ == '__main__':
+    run()

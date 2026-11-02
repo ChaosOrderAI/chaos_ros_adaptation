@@ -25,13 +25,20 @@ namespace chaos::bringup {
 // Both interfaces are executed under a deadline and with a bounded output, so
 // a stuck or chatty runtime cannot block the startup.
 struct RuntimeInterface {
+  // The default executable of the capability report.
+  //
+  // The Go2 driver keeps the default of the interface, so an existing
+  // deployment is unchanged. A plugin with its own reporting executable
+  // replaces it, and an explicit value of the interface replaces the
+  // executable of the plugin as well.
+  static constexpr const char* kDefaultCapabilitiesExecutable = "go2_driver";
   // The package and the executable of the asset validation.
   std::string validate_package = "chaos_runtime";
   std::string validate_executable = "robot_runtime";
   std::string validate_argument = "--validate-asset";
   // The package and the executable of the capability report.
   std::string capabilities_package = "chaos_runtime";
-  std::string capabilities_executable = "go2_driver";
+  std::string capabilities_executable = kDefaultCapabilitiesExecutable;
   std::string capabilities_argument = "--build-capabilities";
   // An explicit path of the interface, which replaces the lookup in the
   // package index.

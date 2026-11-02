@@ -1,0 +1,9 @@
+<toolSet name="外部工具">
+  <tool name="colcon build" showInMainMenu="false" showInEditor="false" showInProject="false" showInSearchPopup="false" disabled="false" useConsole="true" showConsoleOnStdOut="false" showConsoleOnStdErr="false" synchronizeAfterRun="true">
+    <exec>
+      <option name="COMMAND" value="/bin/bash" />
+      <option name="PARAMETERS" value="-c &quot;source /opt/ros/jazzy/setup.bash &amp;&amp; exec colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON&quot;" />
+      <option name="WORKING_DIRECTORY" value="$USER_HOME$/chaos_ros_adaptation" />
+    </exec>
+  </tool>
+</toolSet>

@@ -156,7 +156,7 @@ def test_collector_receives_frozen_asset_environment_and_shutdown_grace(tmp_path
         captured.append(kwargs)
         return SimpleNamespace(**kwargs)
 
-    monkeypatch.setattr(collection, 'Node', node)
+    monkeypatch.setattr('chaos_bringup.nodes.Node', node)
     children = collection.collection_processes(asset, environment)
     assert len(children) == 1
     options = captured[0]

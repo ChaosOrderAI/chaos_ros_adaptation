@@ -1,0 +1,26 @@
+<mujoco model="tiny floating robot">
+  <compiler angle="radian"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <worldbody>
+    <geom type="plane" size="5 5 .1"/>
+    <body name="base" pos="0 0 2">
+      <freejoint/>
+      <geom type="sphere" size=".1" mass="1"/>
+      <body pos=".2 0 0">
+        <joint name="hinge" axis="0 1 0" range="-1 1" damping=".1"/>
+        <geom type="capsule" fromto="0 0 0 .2 0 0" size=".04" mass=".1"/>
+      </body>
+      <body pos="-.2 0 0">
+        <joint name="slide" type="slide" axis="1 0 0" range="-.1 .1" damping=".1"/>
+        <geom type="sphere" size=".04" mass=".1"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor joint="hinge" ctrlrange="-2 2"/>
+    <motor joint="slide" ctrlrange="-2 2"/>
+  </actuator>
+  <keyframe>
+    <key name="home" time="4" qpos="0 0 2 1 0 0 0 .2 .03" qvel="1 1 1 1 1 1 1 1" ctrl="1 1"/>
+  </keyframe>
+</mujoco>

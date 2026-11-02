@@ -5,9 +5,9 @@
 #include <chrono>
 #include <cmath>
 #include <mutex>
-#include <sstream>
 #include <utility>
 
+#include <builtin_interfaces/msg/time.hpp>
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 
@@ -31,10 +31,16 @@ double monotonic_now_s()
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+/// Seconds and nanoseconds of a ROS timestamp.
+Json time_json(const builtin_interfaces::msg::Time & stamp)
+{
+  return Json{{"sec", stamp.sec}, {"nanosec", stamp.nanosec}};
+}
+
 Json header_json(const std_msgs::msg::Header & header)
 {
   return Json{
-    {"stamp", Json{{"sec", header.stamp.sec}, {"nanosec", header.stamp.nanosec}}},
+    {"stamp", time_json(header.stamp)},
     {"frame_id", header.frame_id},
   };
 }
@@ -64,7 +70,7 @@ Json twist_json(const geometry_msgs::msg::Twist & twist)
 Json state_json(const chaos_interfaces::msg::RobotState & state)
 {
   return Json{
-    {"stamp", Json{{"sec", state.stamp.sec}, {"nanosec", state.stamp.nanosec}}},
+    {"stamp", time_json(state.stamp)},
     {"asset_id", state.asset_id},
     {"model", state.model},
     {"operational_state", state.operational_state},
@@ -78,46 +84,44 @@ Json state_json(const chaos_interfaces::msg::RobotState & state)
   };
 }
 
-Json response_data(const chaos_interfaces::srv::GetDescription::Response & result)
+// Keep response envelope fields separate from response.data.
+struct ServiceReply
+{
+  bool success = true;
+  std::string code = "OK";
+  std::string message;
+  Json data;
+};
+
+ServiceReply service_reply(const chaos_interfaces::srv::GetDescription::Response & result)
 {
   // GetDescription carries no success/code/message; the gateway reports OK.
-  Json capabilities = Json::array();
-  for (const auto & capability : result.capabilities) {
-    capabilities.push_back(capability);
-  }
-  return Json{
-    {"asset_id", result.asset_id},
-    {"model", result.model},
-    {"model_version", result.model_version},
-    {"capabilities", std::move(capabilities)},
-    {"base_frame", result.base_frame},
-    {"odom_frame", result.odom_frame},
-    {"map_frame", result.map_frame},
-    {"linear_limit_mps", result.linear_limit_mps},
-    {"angular_limit_rps", result.angular_limit_rps},
-    {"command_timeout_s", result.command_timeout_s},
-    {"lease_max_s", result.lease_max_s},
-  };
+  return ServiceReply{true, "OK", "", Json{
+      {"asset_id", result.asset_id},
+      {"model", result.model},
+      {"model_version", result.model_version},
+      {"capabilities", result.capabilities},
+      {"base_frame", result.base_frame},
+      {"odom_frame", result.odom_frame},
+      {"map_frame", result.map_frame},
+      {"linear_limit_mps", result.linear_limit_mps},
+      {"angular_limit_rps", result.angular_limit_rps},
+      {"command_timeout_s", result.command_timeout_s},
+      {"lease_max_s", result.lease_max_s},
+  }};
 }
 
-Json response_data(const chaos_interfaces::srv::ControlLease::Response & result)
+ServiceReply service_reply(const chaos_interfaces::srv::ControlLease::Response & result)
 {
-  return Json{
-    {"success", result.success},
-    {"code", result.code},
-    {"message", result.message},
-    {"token", result.token},
-    {"remaining_s", result.remaining_s},
-  };
+  return ServiceReply{result.success, result.code, result.message, Json{
+      {"token", result.token},
+      {"remaining_s", result.remaining_s},
+  }};
 }
 
-Json response_data(const chaos_interfaces::srv::Stop::Response & result)
+ServiceReply service_reply(const chaos_interfaces::srv::Stop::Response & result)
 {
-  return Json{
-    {"success", result.success},
-    {"code", result.code},
-    {"message", result.message},
-  };
+  return ServiceReply{result.success, result.code, result.message, Json::object()};
 }
 
 }  // namespace
@@ -483,19 +487,10 @@ void GatewayNode::send_service(
         return;
       }
       try {
-        Json data = response_data(*future.get().second);
-        const bool success = data.value("success", true);
-        const std::string code = data.value("code", "OK");
-        const std::string message = data.value("message", "");
-        // The original gateway popped success/code/message out of the service
-        // payload before nesting the remainder under response.data; the wire
-        // ABI therefore carries the payload fields, not the envelope fields.
-        data.erase("success");
-        data.erase("code");
-        data.erase("message");
+        ServiceReply outcome = service_reply(*future.get().second);
         Json reply = response(
-          request_id, command_name, success, code, message, "result",
-          Json{{"data", std::move(data)}});
+          request_id, command_name, outcome.success, outcome.code, outcome.message, "result",
+          Json{{"data", std::move(outcome.data)}});
         publish_json(result_pub_, reply);
         const std::lock_guard<std::mutex> guard(records_mutex_);
         goal_ids_.erase(request_id);
@@ -657,7 +652,6 @@ void GatewayNode::feedback_callback(
       {"progress", message->feedback.progress},
     };
   }
-  (void)command_name;
   Json event_value;
   {
     const std::lock_guard<std::mutex> guard(records_mutex_);
