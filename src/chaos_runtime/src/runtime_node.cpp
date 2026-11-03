@@ -411,6 +411,13 @@ RobotRuntimeNode::GoalTokensPtr RobotRuntimeNode::tokensFor(
   return entry;
 }
 
+RobotRuntimeNode::GoalTokensPtr RobotRuntimeNode::findTokens(
+  const rclcpp_action::GoalUUID & uuid) {
+  std::lock_guard<std::mutex> guard(tokens_mutex_);
+  const auto found = goal_tokens_.find(uuid);
+  return found == goal_tokens_.end() ? nullptr : found->second;
+}
+
 void RobotRuntimeNode::dropTokens(const rclcpp_action::GoalUUID & uuid) {
   std::lock_guard<std::mutex> guard(tokens_mutex_);
   goal_tokens_.erase(uuid);
@@ -556,7 +563,12 @@ void RobotRuntimeNode::makeActionServer(OperationKind kind,
       if (!goal_handle->is_executing() && !goal_handle->is_canceling()) {
         return rclcpp_action::CancelResponse::REJECT;
       }
-      const GoalTokensPtr tokens = tokensFor(goal_handle->get_goal_id());
+      // The goal may have finished between the status check and this
+      // lookup; its entry is gone then and the cancel has nothing to stop.
+      const GoalTokensPtr tokens = findTokens(goal_handle->get_goal_id());
+      if (!tokens) {
+        return rclcpp_action::CancelResponse::REJECT;
+      }
       const auto decision = coordinator_->cancel(tokens.get(),
                                                  goal_handle.get());
       return decision == ControlCoordinator::CancelDecision::kAccept
@@ -590,8 +602,11 @@ void RobotRuntimeNode::makeActionServer(OperationKind kind,
       if (parked.has_value()) {
         // The reservation was already dropped; deliver the typed terminal
         // result instead of executing the goal.
-        std::lock_guard<std::mutex> guard(tokens->terminal_mutex);
-        tokens->terminal(*parked);
+        {
+          std::lock_guard<std::mutex> guard(tokens->terminal_mutex);
+          tokens->terminal(*parked);
+        }
+        dropTokens(goal_handle->get_goal_id());
         return;
       }
       // Never block the executor and never spawn a per-goal thread: hand
@@ -604,15 +619,18 @@ void RobotRuntimeNode::makeActionServer(OperationKind kind,
             abortGoal<ActionT>(goal_handle,
                                OperationResult{false, "SHUTDOWN",
                                                "Runtime stopped"});
+            dropTokens(goal_handle->get_goal_id());
             return;
           }
-          executeGoal<ActionT>(kind, goal_handle->get_goal_id(), goal_handle);        });
+          executeGoal<ActionT>(kind, goal_handle->get_goal_id(), goal_handle);
+        });
       if (!queued) {
         // The worker is stopping or full: the client must still receive a
         // typed terminal result.
         abortGoal<ActionT>(goal_handle,
                            OperationResult{false, "BUSY",
                                            "Action worker unavailable"});
+        dropTokens(goal_handle->get_goal_id());
       }
     };
   auto server = rclcpp_action::create_server<ActionT>(

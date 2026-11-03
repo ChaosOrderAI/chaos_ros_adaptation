@@ -59,6 +59,14 @@ struct DriverStatus {
   std::int64_t last_command_issued_mono_ns = 0;
 };
 
+// The subset the 10 ms watchdog logs. Both strings are empty in normal
+// operation, so reading it every tick does not allocate.
+struct DriverFaults {
+  std::string fault;
+  std::string output_error;
+  bool initialized = false;
+};
+
 class HumanoidDriverCore {
 public:
   explicit HumanoidDriverCore(
@@ -82,6 +90,7 @@ public:
   void close() noexcept;
 
   DriverStatus status() const;
+  DriverFaults faults() const;
   std::optional<Sample> sample() const;
   const std::string & baseFrame() const { return config_.base_frame; }
   const std::string & odomFrame() const { return config_.odom_frame; }
@@ -115,6 +124,11 @@ private:
   // Caller holds output_mutex_.
   std::optional<Sample> stepUnlocked();
   bool write(const std::array<double, 3> & values, std::uint64_t generation);
+  // Reject paths: record the reason and stop. They reuse detail_'s storage
+  // and never throw for control flow, so a stream of invalid telemetry costs
+  // no exception unwinding.
+  bool rejectOdometry(const char * reason);
+  bool rejectCommand(const char * reason);
 
   DriverConfig config_;
   std::shared_ptr<HumanoidBackend> backend_;

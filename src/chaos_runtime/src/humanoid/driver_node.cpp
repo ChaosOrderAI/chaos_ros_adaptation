@@ -87,12 +87,13 @@ HumanoidDriverNode::HumanoidDriverNode(
   }
   core_->setBackend(std::move(backend));
   publishVendorSession(backend_config.dds_domain_id, backend_config.network_interface);
-  // MoveCommand carries no vendor deadline. A steady thread, not the ROS
-  // executor, owns the zero so a stalled callback cannot keep the last speed.
-  watchdog_ = std::thread([this] { watchdogLoop(); });
   RCLCPP_INFO(get_logger(),
     "%s: humanoid driver started; waiting for odometry and motion-enabled mode",
     asset_.id.c_str());
+  // MoveCommand carries no vendor deadline. A steady thread, not the ROS
+  // executor, owns the zero so a stalled callback cannot keep the last speed.
+  // Started last: a throw before this point does not leave a joinable thread.
+  watchdog_ = std::thread([this] { watchdogLoop(); });
 }
 
 HumanoidDriverNode::~HumanoidDriverNode() { close(); }
@@ -136,7 +137,7 @@ void HumanoidDriverNode::watchdogLoop() {
 
 void HumanoidDriverNode::tick() {
   const auto sample = core_->step();
-  const auto status = core_->status();
+  const auto status = core_->faults();
   if (!status.fault.empty() && status.fault != logged_fault_) {
     logged_fault_ = status.fault;
     RCLCPP_ERROR(get_logger(), "%s; motion disabled until driver restart",

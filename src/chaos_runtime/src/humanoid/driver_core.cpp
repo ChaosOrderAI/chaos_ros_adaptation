@@ -18,14 +18,6 @@ bool allFinite(const std::array<double, N> & values) {
                      [](double value) { return std::isfinite(value); });
 }
 
-std::int64_t stampNs(const Stamp & stamp) {
-  std::int64_t result = 0;
-  if (!chaos::rosStampToNs(stamp.sec, stamp.nanosec, result)) {
-    throw std::invalid_argument("invalid source timestamp");
-  }
-  return result;
-}
-
 }  // namespace
 
 HumanoidDriverCore::HumanoidDriverCore(
@@ -81,64 +73,78 @@ bool HumanoidDriverCore::motionReadyLocked(double now_s) const {
     now_s - mode_received_s_ < config_.limits.state_timeout_s;
 }
 
+bool HumanoidDriverCore::rejectOdometry(const char * reason) {
+  std::lock_guard<std::mutex> guard(cache_mutex_);
+  odometry_.reset();
+  detail_.assign("Invalid humanoid odometry: ").append(reason);
+  stopLocked();
+  return false;
+}
+
+bool HumanoidDriverCore::rejectCommand(const char * reason) {
+  std::lock_guard<std::mutex> guard(cache_mutex_);
+  detail_.assign(reason);
+  stopLocked();
+  return false;
+}
+
 bool HumanoidDriverCore::acceptOdometry(const Odometry & message) {
   double now_s = 0.0;
   std::int64_t ros_now_ns = 0;
   try {
     now_s = steady_clock_();
     ros_now_ns = ros_clock_();
-    if (!std::isfinite(now_s) || ros_now_ns < 0) {
-      throw std::invalid_argument("steady clock is invalid");
-    }
-    if (message.frame_id != config_.source_odom_frame ||
-        message.child_frame_id != config_.source_base_frame) {
-      throw std::invalid_argument("odometry frame mismatch");
-    }
-    if (!allFinite(message.position) || !allFinite(message.quaternion_xyzw) ||
-        !allFinite(message.twist)) {
-      throw std::invalid_argument("odometry contains a non-finite number");
-    }
-    const double norm = std::hypot(message.quaternion_xyzw[0],
-      std::hypot(message.quaternion_xyzw[1],
-        std::hypot(message.quaternion_xyzw[2], message.quaternion_xyzw[3])));
-    if (std::abs(norm - 1.0) > 0.01) {
-      throw std::invalid_argument("invalid orientation quaternion");
-    }
-    const std::int64_t source_ns = stampNs(message.stamp);
-    const std::int64_t ahead_ns = source_ns - ros_now_ns;
-    const std::int64_t age_ns = ros_now_ns > source_ns ? ros_now_ns - source_ns : 0;
-    if (source_ns <= 0 || ahead_ns > 100000000LL ||
-        age_ns >= runtime::driver_deadline::floorDurationNs(
-          config_.limits.state_timeout_s).value_or(0)) {
-      throw std::invalid_argument("odometry source timestamp is absent, future or stale");
-    }
-    Sample sample;
-    sample.source_stamp_ns = source_ns;
-    sample.position = message.position;
-    sample.quaternion_xyzw = {
-      message.quaternion_xyzw[0] / norm, message.quaternion_xyzw[1] / norm,
-      message.quaternion_xyzw[2] / norm, message.quaternion_xyzw[3] / norm};
-    sample.twist = message.twist;
-    const double received_s = now_s - static_cast<double>(age_ns) / 1e9;
-    std::lock_guard<std::mutex> guard(cache_mutex_);
-    if (closed_) {
-      return false;
-    }
-    if (last_source_stamp_ns_ != 0 && source_ns <= last_source_stamp_ns_) {
-      detail_ = "Repeated or backward odometry source timestamp";
-      return false;
-    }
-    last_source_stamp_ns_ = source_ns;
-    odometry_ = CachedOdometry{sample, received_s};
-    ++sequence_;
-    return true;
   } catch (const std::exception & error) {
-    std::lock_guard<std::mutex> guard(cache_mutex_);
-    odometry_.reset();
-    detail_ = std::string("Invalid humanoid odometry: ") + error.what();
-    stopLocked();
+    return rejectOdometry(error.what());
+  }
+  if (!std::isfinite(now_s) || ros_now_ns < 0) {
+    return rejectOdometry("steady clock is invalid");
+  }
+  if (message.frame_id != config_.source_odom_frame ||
+      message.child_frame_id != config_.source_base_frame) {
+    return rejectOdometry("odometry frame mismatch");
+  }
+  if (!allFinite(message.position) || !allFinite(message.quaternion_xyzw) ||
+      !allFinite(message.twist)) {
+    return rejectOdometry("odometry contains a non-finite number");
+  }
+  const double norm = std::hypot(message.quaternion_xyzw[0],
+    std::hypot(message.quaternion_xyzw[1],
+      std::hypot(message.quaternion_xyzw[2], message.quaternion_xyzw[3])));
+  if (std::abs(norm - 1.0) > 0.01) {
+    return rejectOdometry("invalid orientation quaternion");
+  }
+  std::int64_t source_ns = 0;
+  if (!chaos::rosStampToNs(message.stamp.sec, message.stamp.nanosec, source_ns)) {
+    return rejectOdometry("invalid source timestamp");
+  }
+  const std::int64_t ahead_ns = source_ns - ros_now_ns;
+  const std::int64_t age_ns = ros_now_ns > source_ns ? ros_now_ns - source_ns : 0;
+  if (source_ns <= 0 || ahead_ns > 100000000LL ||
+      age_ns >= runtime::driver_deadline::floorDurationNs(
+        config_.limits.state_timeout_s).value_or(0)) {
+    return rejectOdometry("odometry source timestamp is absent, future or stale");
+  }
+  Sample sample;
+  sample.source_stamp_ns = source_ns;
+  sample.position = message.position;
+  sample.quaternion_xyzw = {
+    message.quaternion_xyzw[0] / norm, message.quaternion_xyzw[1] / norm,
+    message.quaternion_xyzw[2] / norm, message.quaternion_xyzw[3] / norm};
+  sample.twist = message.twist;
+  const double received_s = now_s - static_cast<double>(age_ns) / 1e9;
+  std::lock_guard<std::mutex> guard(cache_mutex_);
+  if (closed_) {
     return false;
   }
+  if (last_source_stamp_ns_ != 0 && source_ns <= last_source_stamp_ns_) {
+    detail_ = "Repeated or backward odometry source timestamp";
+    return false;
+  }
+  last_source_stamp_ns_ = source_ns;
+  odometry_ = CachedOdometry{sample, received_s};
+  ++sequence_;
+  return true;
 }
 
 bool HumanoidDriverCore::acceptMotionMode(bool motion_enabled) {
@@ -173,94 +179,91 @@ bool HumanoidDriverCore::acceptMotionMode(bool motion_enabled) {
 bool HumanoidDriverCore::acceptCommand(const VelocityCommand & message) {
   const ClockReading reading = readClocks();
   if (!reading.monotonic_valid) {
+    return rejectCommand("Command monotonic clock unavailable");
+  }
+  if (config_.clock_domain_id.empty() ||
+      message.clock_domain_id != config_.clock_domain_id) {
+    return rejectCommand("Velocity command clock domain does not match the driver domain");
+  }
+  if (config_.base_frame.empty() || message.frame_id != config_.base_frame) {
     std::lock_guard<std::mutex> guard(cache_mutex_);
-    detail_ = "Command monotonic clock unavailable";
+    detail_.assign("Velocity command must use frame ").append(config_.base_frame);
     stopLocked();
     return false;
   }
-  try {
-    if (config_.clock_domain_id.empty() ||
-        message.clock_domain_id != config_.clock_domain_id) {
-      throw std::invalid_argument("Velocity command clock domain does not match the driver domain");
-    }
-    if (config_.base_frame.empty() || message.frame_id != config_.base_frame) {
-      throw std::invalid_argument("Velocity command must use frame " + config_.base_frame);
-    }
-    if (message.stop) {
-      for (double value : message.values) {
-        if (value != 0.0) {
-          throw std::invalid_argument("Stop command must carry six exact zeros");
-        }
+  if (message.stop) {
+    for (double value : message.values) {
+      if (value != 0.0) {
+        return rejectCommand("Stop command must carry six exact zeros");
       }
-      if (message.issued_monotonic_ns <= 0 ||
-          message.issued_monotonic_ns > reading.monotonic_ns) {
-        throw std::invalid_argument("Stop command issue time is missing or in the future");
-      }
-      std::lock_guard<std::mutex> guard(cache_mutex_);
-      last_command_issued_mono_ns_ = std::max(
-        last_command_issued_mono_ns_, message.issued_monotonic_ns);
-      stopLocked();
-      return true;
     }
-    if (!reading.steady_valid) {
-      throw std::invalid_argument("Command steady clock unavailable");
-    }
-    if (stampNs(message.stamp) <= 0) {
-      throw std::invalid_argument("Velocity command timestamp is missing");
-    }
-    if (!allFinite(message.values)) {
-      throw std::invalid_argument("velocity command must contain 6 finite values");
-    }
-    const double vx = message.values[0], vy = message.values[1];
-    const double wz = message.values[5];
-    if (message.values[2] != 0.0 || message.values[3] != 0.0 ||
-        message.values[4] != 0.0) {
-      throw std::invalid_argument("Humanoid accepts only body x/y translation and yaw rotation");
-    }
-    if (std::hypot(vx, vy) > config_.limits.linear_mps ||
-        std::abs(wz) > config_.limits.angular_rps) {
-      throw std::invalid_argument("Velocity command exceeds configured speed limits");
-    }
-    if (message.issued_monotonic_ns <= 0 || message.expires_monotonic_ns <= 0) {
-      throw std::invalid_argument("Velocity command issue time or deadline is missing");
-    }
-    if (message.issued_monotonic_ns > reading.monotonic_ns) {
-      throw std::invalid_argument("Velocity command issue time is in the future");
-    }
-    if (reading.monotonic_ns >= message.expires_monotonic_ns) {
-      throw std::invalid_argument("Velocity command deadline has already passed");
-    }
-    const auto cap_ns = runtime::driver_deadline::floorDurationNs(
-      config_.limits.command_timeout_s);
-    if (!cap_ns.has_value()) {
-      throw std::invalid_argument("Configured command cap is not a usable interval");
-    }
-    if (message.expires_monotonic_ns - message.issued_monotonic_ns > *cap_ns) {
-      throw std::invalid_argument("Velocity command exceeds the driver command cap");
+    if (message.issued_monotonic_ns <= 0 ||
+        message.issued_monotonic_ns > reading.monotonic_ns) {
+      return rejectCommand("Stop command issue time is missing or in the future");
     }
     std::lock_guard<std::mutex> guard(cache_mutex_);
-    if (message.issued_monotonic_ns <= last_command_issued_mono_ns_) {
-      detail_ = "Repeated or backward velocity command issue time";
-      stopLocked();
-      return false;
-    }
-    if (closed_ || !fault_.empty() || stop_pending_ ||
-        !motionReadyLocked(reading.steady_s)) {
-      detail_ = !fault_.empty() ? fault_ :
-        "Motion requires fresh odometry, current motion-enabled mode and a successful zero output";
-      stopLocked();
-      return false;
-    }
-    command_ = Velocity{{vx, vy, wz}, message.issued_monotonic_ns,
-                        message.expires_monotonic_ns};
-    last_command_issued_mono_ns_ = message.issued_monotonic_ns;
+    last_command_issued_mono_ns_ = std::max(
+      last_command_issued_mono_ns_, message.issued_monotonic_ns);
+    stopLocked();
     return true;
-  } catch (const std::exception & error) {
-    std::lock_guard<std::mutex> guard(cache_mutex_);
-    detail_ = error.what();
+  }
+  if (!reading.steady_valid) {
+    return rejectCommand("Command steady clock unavailable");
+  }
+  std::int64_t stamp_ns = 0;
+  if (!chaos::rosStampToNs(message.stamp.sec, message.stamp.nanosec, stamp_ns)) {
+    return rejectCommand("invalid source timestamp");
+  }
+  if (stamp_ns <= 0) {
+    return rejectCommand("Velocity command timestamp is missing");
+  }
+  if (!allFinite(message.values)) {
+    return rejectCommand("velocity command must contain 6 finite values");
+  }
+  const double vx = message.values[0], vy = message.values[1];
+  const double wz = message.values[5];
+  if (message.values[2] != 0.0 || message.values[3] != 0.0 ||
+      message.values[4] != 0.0) {
+    return rejectCommand("Humanoid accepts only body x/y translation and yaw rotation");
+  }
+  if (std::hypot(vx, vy) > config_.limits.linear_mps ||
+      std::abs(wz) > config_.limits.angular_rps) {
+    return rejectCommand("Velocity command exceeds configured speed limits");
+  }
+  if (message.issued_monotonic_ns <= 0 || message.expires_monotonic_ns <= 0) {
+    return rejectCommand("Velocity command issue time or deadline is missing");
+  }
+  if (message.issued_monotonic_ns > reading.monotonic_ns) {
+    return rejectCommand("Velocity command issue time is in the future");
+  }
+  if (reading.monotonic_ns >= message.expires_monotonic_ns) {
+    return rejectCommand("Velocity command deadline has already passed");
+  }
+  const auto cap_ns = runtime::driver_deadline::floorDurationNs(
+    config_.limits.command_timeout_s);
+  if (!cap_ns.has_value()) {
+    return rejectCommand("Configured command cap is not a usable interval");
+  }
+  if (message.expires_monotonic_ns - message.issued_monotonic_ns > *cap_ns) {
+    return rejectCommand("Velocity command exceeds the driver command cap");
+  }
+  std::lock_guard<std::mutex> guard(cache_mutex_);
+  if (message.issued_monotonic_ns <= last_command_issued_mono_ns_) {
+    detail_ = "Repeated or backward velocity command issue time";
     stopLocked();
     return false;
   }
+  if (closed_ || !fault_.empty() || stop_pending_ ||
+      !motionReadyLocked(reading.steady_s)) {
+    detail_ = !fault_.empty() ? fault_ :
+      "Motion requires fresh odometry, current motion-enabled mode and a successful zero output";
+    stopLocked();
+    return false;
+  }
+  command_ = Velocity{{vx, vy, wz}, message.issued_monotonic_ns,
+                      message.expires_monotonic_ns};
+  last_command_issued_mono_ns_ = message.issued_monotonic_ns;
+  return true;
 }
 
 bool HumanoidDriverCore::expireLocked(const ClockReading & reading) {
@@ -475,6 +478,11 @@ DriverStatus HumanoidDriverCore::status() const {
     stop_pending_, closed_, output_owned_, command_.has_value(),
     odometry_.has_value(), has_mode_, motion_enabled_,
     last_command_issued_mono_ns_};
+}
+
+DriverFaults HumanoidDriverCore::faults() const {
+  std::lock_guard<std::mutex> guard(cache_mutex_);
+  return DriverFaults{fault_, output_error_, initialized_};
 }
 
 std::optional<Sample> HumanoidDriverCore::sample() const {

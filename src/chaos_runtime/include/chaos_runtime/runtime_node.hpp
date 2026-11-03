@@ -120,6 +120,9 @@ private:
   std::string endpoint(const std::string & name) const;
 
   GoalTokensPtr tokensFor(const rclcpp_action::GoalUUID & uuid);
+  // Lookup only: never creates an entry, so a late callback cannot
+  // resurrect a goal that already reached its terminal state.
+  GoalTokensPtr findTokens(const rclcpp_action::GoalUUID & uuid);
   void dropTokens(const rclcpp_action::GoalUUID & uuid);
 
   void onVelocity(const chaos_interfaces::msg::VelocityCommand & message);
