@@ -36,7 +36,11 @@ def main():
     import json
 
     root = args.model_root.expanduser().resolve()
-    paths = {'go2': 'go2/unitree_robots/go2/scene.xml', 't2': 't2/robots/T2/T2_31dof/T2_31dof.xml'}
+    paths = {
+        'go2_1': 'go2/unitree_robots/go2/scene.xml',
+        'go2_2': 'go2/unitree_robots/go2/scene.xml',
+        't2': 't2/robots/T2/T2_31dof/T2_31dof.xml',
+    }
     worlds = []
     for robot, relative in paths.items():
         model = root / relative
@@ -117,8 +121,8 @@ def main():
                 def count(robot, key):
                     return int(diagnostics[robot][key])
 
-                wait(lambda: all(r in diagnostics and r in joints and r in odometry for r in paths), 'both model observations')
-                for robot, joint_count in [('go2', 12), ('t2', 31)]:
+                wait(lambda: all(r in diagnostics and r in joints and r in odometry for r in paths), 'all model observations')
+                for robot, joint_count in [('go2_1', 12), ('go2_2', 12), ('t2', 31)]:
                     assert len(joints[robot].name) == joint_count
                     assert len(set(joints[robot].name)) == joint_count
                     assert odometry[robot].header.frame_id == robot + '/odom'
@@ -164,39 +168,44 @@ def main():
                     command(robot, [name], [0.0], False, effort=[0.0])
                     before_timeout = count(robot, 'timeout_count')
                     command(robot, [name], [0.0], True)
+                    if robot == 'go2_1':
+                        assert count('go2_2', 'accepted_count') == 0, 'Go2 command crossed instance namespace'
                     wait(lambda: count(robot, 'timeout_count') == before_timeout + 1, 'steady command timeout')
                     spin_for(0.6)
                     assert count(robot, 'timeout_count') == before_timeout + 1, 'timeout must hold only once'
 
                 # A real target must move the actual joint, beyond a diagnostic acknowledgement.
                 pause_sim(True)
-                call(resets['go2'], Trigger.Request())
-                wait(lambda: float(diagnostics['go2']['sim_time']) == 0 and
-                     max(abs(x) for x in joints['go2'].velocity) < 1e-8, 'Go2 home for motion check')
-                hip = joints['go2'].name[0]
-                initial_position = joints['go2'].position[0]
-                initial_effort = joints['go2'].effort[0]
+                other_times = {robot: float(diagnostics[robot]['sim_time']) for robot in ('go2_2', 't2')}
+                call(resets['go2_1'], Trigger.Request())
+                wait(lambda: float(diagnostics['go2_1']['sim_time']) == 0 and
+                     max(abs(x) for x in joints['go2_1'].velocity) < 1e-8, 'Go2 home for motion check')
+                assert all(float(diagnostics[robot]['sim_time']) == other_times[robot]
+                           for robot in other_times), 'reset crossed instance namespace'
+                hip = joints['go2_1'].name[0]
+                initial_position = joints['go2_1'].position[0]
+                initial_effort = joints['go2_1'].effort[0]
                 pause_sim(False)
                 command_started = time.monotonic()
-                command('go2', [hip], [0.25], True)
-                wait(lambda: joints['go2'].position[0] - initial_position > 0.02 and
-                     abs(joints['go2'].effort[0] - initial_effort) > 0.1,
+                command('go2_1', [hip], [0.25], True)
+                wait(lambda: joints['go2_1'].position[0] - initial_position > 0.02 and
+                     abs(joints['go2_1'].effort[0] - initial_effort) > 0.1,
                      'Go2 target produces joint motion and torque within 0.2s',
                      timeout=max(0.001, 0.2 - (time.monotonic() - command_started)))
-                print(f"PASS accepted target moves Go2 hip by {joints['go2'].position[0] - initial_position:.3f} rad "
-                      f"with effort {joints['go2'].effort[0]:.3f} Nm")
+                print(f"PASS accepted target moves Go2 hip by {joints['go2_1'].position[0] - initial_position:.3f} rad "
+                      f"with effort {joints['go2_1'].effort[0]:.3f} Nm")
 
                 # Prepare a fresh home, then test pause/resume WITHOUT any intervening reset.
                 pause_sim(True)
-                call(resets['go2'], Trigger.Request())
-                wait(lambda: float(diagnostics['go2']['sim_time']) == 0 and
-                     max(abs(x) for x in joints['go2'].velocity) < 1e-8, 'Go2 home for stale-target check')
+                call(resets['go2_1'], Trigger.Request())
+                wait(lambda: float(diagnostics['go2_1']['sim_time']) == 0 and
+                     max(abs(x) for x in joints['go2_1'].velocity) < 1e-8, 'Go2 home for stale-target check')
                 pause_sim(False)
                 old_target = 0.7
-                command('go2', [hip], [old_target], True)
+                command('go2_1', [hip], [old_target], True)
                 pause_sim(True)
                 spin_for(0.05)  # Drain observations published before the pause response.
-                paused_position = joints['go2'].position[0]
+                paused_position = joints['go2_1'].position[0]
                 assert abs(old_target - paused_position) > 0.15, 'pause must precede reaching the old target'
                 paused_time = {r: float(diagnostics[r]['sim_time']) for r in paths}
                 paused_timeouts = {r: count(r, 'timeout_count') for r in paths}
@@ -206,7 +215,7 @@ def main():
                 assert all(float(diagnostics[r]['sim_time']) == paused_time[r] for r in paths), 'paused worlds must freeze'
                 pause_sim(False)
                 spin_for(0.15)
-                resumed_position = joints['go2'].position[0]
+                resumed_position = joints['go2_1'].position[0]
                 assert abs(resumed_position - paused_position) < abs(resumed_position - old_target), (
                     f'resume pursues stale target: paused={paused_position}, resumed={resumed_position}, target={old_target}')
                 spin_for(0.6)
@@ -237,7 +246,8 @@ def main():
                 assert max(s['Threads'] for s in samples) <= samples[0]['Threads'] + 2, 'thread count keeps increasing'
                 rss_growth = statistics.median(s['VmRSS'] for s in samples[-3:]) - statistics.median(s['VmRSS'] for s in samples[:3])
                 assert rss_growth <= 16 * 1024, f'RSS grew by {rss_growth} KiB after warmup'
-                print(f"PASS both official models: ROS states, sim time, target validation, timeout, pause/reset/resume; "
+                print(f"PASS three instances (two Go2 + one T2): isolated ROS state/control/reset, sim time, "
+                      f"target validation, timeout, pause/resume; "
                       f"{len(samples)} samples/{args.sample_seconds:g}s, threads {min(s['Threads'] for s in samples)}.."
                       f"{max(s['Threads'] for s in samples)}, RSS {min(s['VmRSS'] for s in samples)}.."
                       f"{max(s['VmRSS'] for s in samples)} KiB (median growth {rss_growth:g} KiB)")

@@ -1,5 +1,7 @@
 #include "chaos_sim/world.hpp"
 
+#include "scene_internal.hpp"
+
 #include <mujoco/mujoco.h>
 
 #include <algorithm>
@@ -26,6 +28,7 @@ struct World::Impl {
   std::unique_ptr<mjModel, decltype(&mj_deleteModel)> model{nullptr, mj_deleteModel};
   std::unique_ptr<mjData, decltype(&mj_deleteData)> data{nullptr, mj_deleteData};
   double kp, kd;
+  SceneStats scene_stats;
   int base_body = -1;
   int home_key = -1;
   std::vector<std::string> names;
@@ -38,10 +41,7 @@ struct World::Impl {
     require(!config.model_path.empty(), "model_path must not be empty");
     require(std::isfinite(kp) && kp >= 0 && std::isfinite(kd) && kd >= 0,
             "kp and kd must be finite and nonnegative");
-    char error[2048]{};
-    std::unique_ptr<mjSpec, decltype(&mj_deleteSpec)> spec{
-        mj_parseXML(config.model_path.c_str(), nullptr, error, sizeof(error)), mj_deleteSpec};
-    if (!spec) throw std::runtime_error("Cannot parse model: " + std::string(error));
+    SpecPtr spec = loadComposedSpec(config, scene_stats);
     // Set before the first compile: recompiling a visual spec after changing this
     // flag can invalidate mesh/material indices.
     spec->compiler.discardvisual = config.discard_visual;
@@ -131,6 +131,8 @@ const std::vector<std::string>& World::jointNames() const { return impl_->names;
 double World::timestep() const { return impl_->model->opt.timestep; }
 std::size_t World::modelBytes() const { return impl_->model->nbuffer; }
 std::size_t World::arenaBytes() const { return impl_->data->narena; }
+std::size_t World::scenePoints() const { return impl_->scene_stats.input_points; }
+std::size_t World::sceneGeoms() const { return impl_->scene_stats.geoms; }
 
 bool World::setTargets(const std::vector<std::string>& names,
                        const std::vector<double>& positions, std::string& error) {

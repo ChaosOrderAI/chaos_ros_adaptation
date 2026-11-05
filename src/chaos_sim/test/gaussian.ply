@@ -1,0 +1,21 @@
+ply
+format ascii 1.0
+comment 3D Gaussian centers, SH DC color, log scales, quaternion and logit opacity
+element vertex 2
+property float x
+property float y
+property float z
+property float f_dc_0
+property float f_dc_1
+property float f_dc_2
+property float scale_0
+property float scale_1
+property float scale_2
+property float rot_0
+property float rot_1
+property float rot_2
+property float rot_3
+property float opacity
+end_header
+0 0 0.5 1 0 -1 -1.203972804 -2.302585093 -2.995732274 1 0 0 0 0
+1 0 0.8 0 1 0 -0.693147181 -1.609437912 -2.302585093 0.707106781 0 0 0.707106781 2

@@ -84,8 +84,8 @@ class SimulatorNode final : public rclcpp::Node {
     publish_period_ = std::chrono::duration_cast<Nanoseconds>(std::chrono::duration<double>(1 / publish_rate));
     command_timeout_ = std::chrono::duration<double>(timeout);
     const auto entries = nlohmann::json::parse(json);
-    if (!entries.is_array() || entries.empty() || entries.size() > 2)
-      throw std::invalid_argument("worlds_json requires 1..2 worlds");
+    if (!entries.is_array() || entries.empty() || entries.size() > 32)
+      throw std::invalid_argument("worlds_json requires 1..32 worlds");
     std::set<std::string> names, namespaces;
     const std::regex name_pattern("[A-Za-z_][A-Za-z0-9_]*");
     const std::regex ns_pattern("(/[A-Za-z_][A-Za-z0-9_]*)+");
@@ -103,6 +103,24 @@ class SimulatorNode final : public rclcpp::Node {
       config.kp = entry.value("kp", 40.0);
       config.kd = entry.value("kd", 2.0);
       config.discard_visual = discard_visual;
+      config.scene.path = entry.value("scene_path", "");
+      config.scene.voxel_size = entry.value("scene_voxel_size", 0.1);
+      config.scene.point_radius = entry.value("scene_point_radius", 0.03);
+      if (entry.contains("scene_max_geoms")) {
+        const auto& value = entry["scene_max_geoms"];
+        if (!value.is_number_integer()) {
+          throw std::invalid_argument("scene_max_geoms must be a positive integer");
+        }
+        std::int64_t wide = 0;
+        try {
+          wide = value.get<std::int64_t>();
+        } catch (const nlohmann::json::exception&) {
+          throw std::invalid_argument("scene_max_geoms must be a positive integer");
+        }
+        if (wide <= 0) throw std::invalid_argument("scene_max_geoms must be positive");
+        config.scene.max_geoms = static_cast<std::size_t>(wide);
+      }
+      config.scene.collision = entry.value("scene_collision", true);
       if (config.model_path.empty()) throw std::invalid_argument("model_path must not be empty");
       instance->world = std::make_unique<chaos::sim::World>(config);
       const double timestep_us = instance->world->timestep() * 1e6;
@@ -154,7 +172,7 @@ class SimulatorNode final : public rclcpp::Node {
     status.message = "running";
     status.message.reserve(32);
     const std::vector<std::string> keys = {"sim_time", "paused", "accepted_count", "rejected_count",
-      "timeout_count", "model_bytes", "arena_bytes", "dropped_ticks"};
+      "timeout_count", "model_bytes", "arena_bytes", "dropped_ticks", "scene_points", "scene_geoms"};
     status.values.resize(keys.size());
     for (std::size_t i = 0; i < keys.size(); ++i) {
       status.values[i].key = keys[i];
@@ -185,8 +203,9 @@ class SimulatorNode final : public rclcpp::Node {
         response->success = true;
         response->message = "reset to model initial state; targets cleared";
       });
-    RCLCPP_INFO(get_logger(), "%s loaded: %zu joints, dt=%g, model=%zu bytes, arena=%zu bytes",
-      instance.name.c_str(), count, instance.world->timestep(), instance.world->modelBytes(), instance.world->arenaBytes());
+    RCLCPP_INFO(get_logger(), "%s loaded: %zu joints, dt=%g, model=%zu bytes, arena=%zu bytes, scene=%zu/%zu points/geoms",
+      instance.name.c_str(), count, instance.world->timestep(), instance.world->modelBytes(),
+      instance.world->arenaBytes(), instance.world->scenePoints(), instance.world->sceneGeoms());
   }
 
   void tick() {
@@ -257,6 +276,8 @@ class SimulatorNode final : public rclcpp::Node {
     number(values[5].value, instance.world->modelBytes());
     number(values[6].value, instance.world->arenaBytes());
     number(values[7].value, dropped_ticks_);
+    number(values[8].value, instance.world->scenePoints());
+    number(values[9].value, instance.world->sceneGeoms());
     instance.joint_pub->publish(instance.joints);
     instance.odom_pub->publish(instance.odom);
     instance.diagnostic_pub->publish(instance.diagnostics);

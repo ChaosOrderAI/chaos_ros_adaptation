@@ -8,11 +8,20 @@
 
 namespace chaos::sim {
 
+struct SceneConfig {
+  std::string path;  // PLY point cloud / 3D Gaussian PLY, or PCD point cloud
+  double voxel_size = 0.1;
+  double point_radius = 0.03;
+  std::size_t max_geoms = 20000;
+  bool collision = true;
+};
+
 struct WorldConfig {
   std::string model_path;
   double kp = 40.0;
   double kd = 2.0;
   bool discard_visual = true;
+  SceneConfig scene;
 };
 
 struct State {
@@ -36,6 +45,8 @@ class World {
   double timestep() const;
   std::size_t modelBytes() const;
   std::size_t arenaBytes() const;
+  std::size_t scenePoints() const;
+  std::size_t sceneGeoms() const;
   bool setTargets(const std::vector<std::string>& names,
                   const std::vector<double>& positions, std::string& error);
   void hold();  // Capture actual joint positions; never rewrites physical state.

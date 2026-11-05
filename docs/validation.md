@@ -1,5 +1,29 @@
 # C++ 重构验证记录
 
+## 2026-11-04 点云与 3D 高斯场景导入
+
+在 ROS 2 Jazzy、MuJoCo 3.15.0 环境使用 `build-cpp-sim-scene` / `install-cpp-sim-scene` Release 构建。PLY/PCD 点云导入为球体，含 `scale_0/1/2` 的 3D Gaussian PLY 导入为椭球。二者都是 MuJoCo 静态几何代理，不是原生 Gaussian Splatting 渲染。
+
+- `colcon test-result --test-result-base build-cpp-sim-scene` 为 **8 tests，0 errors、0 failures、0 skipped**。汇总包含 CTest 包装记录。`chaos_sim_scene` 通过，5 项 launch pytest 通过。
+- 官方 Go2 `scene.xml` 与 `src/chaos_sim/config/scenes/demo.ply`（体素 0.1 m、半径 0.12 m）导出 `{"input_points":29,"geoms":29,"gaussian":false}`。XML 的 meshdir/texturedir 为绝对路径，Python 重新加载得到 `nq=19`、`ngeom=85`。
+- 同一机器人与 `src/chaos_sim/test/gaussian.ply`（体素 0）导出 `{"input_points":2,"geoms":2,"gaussian":true}`，重新加载得到 `nq=19`、`ngeom=58`、椭球 2 个。
+- `robots:=go2,go2` 加载演示场景后，两个实例的启动日志和诊断都是 `scene_points=29`、`scene_geoms=29`。
+- `go2_1` 查看器在 `DISPLAY=:1` 打开标题为 `MuJoCo : go2 scene` 的窗口，并持续运行超过 2 分钟。查看器使用 `/home/yunze/mujoco_playground/.venv/bin/python`，需要把 `/usr/lib/python3/dist-packages` 加入 `PYTHONPATH`，并与仿真节点同样设置 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`。
+
+随后的代码审查确认了 15 个导入缺陷，均已修复并补进 `chaos_sim_scene`。包括默认体素并格、浮点颜色/透明度、只显示场景被编译删掉、空 `texturedir` 指错目录、PCD 宽度/大小写/`DATA` 模式、子 body 障碍、根 default 接触参数、打包颜色，以及 `--max-geoms -1`。修复后同一测试目录仍是 **8 tests，0 errors、0 failures、0 skipped**。官方 Go2 演示场景重新加载仍为 `nq=19`、`ngeom=85`。
+
+每个实例仍有独立物理世界和自己的场景副本，没有机间碰撞。用法见 [MuJoCo 说明](mujoco.md)。
+
+## 2026-11-04 MuJoCo 多机仿真
+
+在 ROS 2 Jazzy、MuJoCo 3.15.0 环境使用全新 `build-cpp-sim-multi` / `install-cpp-sim-multi` Release 构建。启动列表允许重复 Go2、T2，重复型号按顺序生成独立名称和 ROS 命名空间；单型号旧名称保持不变，单进程上限为 32 个独立物理世界。
+
+- `chaos_sim` 构建成功；`colcon test-result` 为 **6 tests，0 errors、0 failures、0 skipped**，其中包含 CTest 包装记录。4 项 launch 配置用例覆盖旧名称兼容、重复型号编号、非法/超量列表和模型缺失。
+- 真实 smoke 启动 **两台 Go2 + 一台 T2**，验证三实例状态、同型号控制与 reset 隔离、目标校验、超时、暂停/恢复、实际关节位移及 SIGINT 正常退出。10 秒 20 次采样线程始终为 **14**，RSS 为 **105,820 KiB**，中位数增长 **0 KiB**；这只是本次三实例运行结果，不代表其他规模的资源上界。
+- 实际 `ros2 launch ... robots:=go2,go2` 与 `--name go2_2` 查看器联合检查通过，查看器真实开窗、frame 匹配并正常退出。
+
+多机仍采用每实例独立 `mjModel/mjData`，不模拟机间碰撞；查看器每个进程显示一台机器人。统一运动控制、平衡策略及共享物理场景不在本轮范围内。
+
 ## 2026-10-31 精简、资源优化与 MuJoCo
 
 本轮复用 `build-cpp-humanoid` / `install-cpp-humanoid` 的 Release 安装；ROS 2 Jazzy、MuJoCo 3.15.0，厂商 SDK 后端关闭。保留工作区原有人形机器人改动，精简 runtime、SDK、传感器、MQTT 和授时转换；新增可选 `chaos_sim`。

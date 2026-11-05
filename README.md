@@ -75,7 +75,7 @@ ros2 topic echo /robots/drone_001/state
 
 `description` 返回当前后端实际能力。mock 是用于验证接口的运动学模型，不是带碰撞、避障或飞行动力学的仿真器。
 
-需要物理仿真时，按 [MuJoCo 说明](docs/mujoco.md) 显式启用 `chaos_sim`。它提供官方 Go2 / T2 模型、关节 PD 与 ROS 状态；平衡策略及统一速度行走接口尚未接入。
+需要物理仿真时，按 [MuJoCo 说明](docs/mujoco.md) 显式启用 `chaos_sim`。它提供官方 Go2 / T2 模型、同型号多实例与混合多机仿真、关节 PD 和独立 ROS 命名空间，并可把点云或 3D Gaussian PLY 导入为静态几何代理；这不是原生 splatting 渲染。平衡策略及统一速度行走接口尚未接入。
 
 ## 配置组织
 
@@ -91,7 +91,7 @@ src/
     transport/        完整 Rust 传输源码及 Cargo 锁文件（导入的第三方实现，不在本轮修改范围）
   chaos_sensors/      模拟传感器、数据新鲜度诊断与传感器目录
   chaos_data/         原生 rosbag2 采集、时间质量门控、审计与离线训练数据导出
-  chaos_sim/          可选 MuJoCo Go2 / T2 物理仿真；独立关节控制与标准 ROS 观测
+  chaos_sim/          可选 MuJoCo Go2 / T2 物理仿真；点云/3DGS 几何代理、独立关节控制与标准 ROS 观测
   chaos_benchmarks/   领域微基准（非生产入口，不参与运行）
 drivers/
   src/OrbbecSDK_ROS2/ 固定版本的官方相机驱动，独立构建

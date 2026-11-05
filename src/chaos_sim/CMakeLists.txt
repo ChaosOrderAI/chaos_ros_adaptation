@@ -26,7 +26,7 @@ if(CHAOS_SIM_ENABLE_MUJOCO)
   find_package(std_srvs REQUIRED)
   find_package(nlohmann_json REQUIRED)
 
-  add_library(chaos_sim_world SHARED src/world.cpp)
+  add_library(chaos_sim_world SHARED src/world.cpp src/scene.cpp)
   target_compile_features(chaos_sim_world PUBLIC cxx_std_17)
   target_include_directories(chaos_sim_world PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -43,8 +43,15 @@ if(CHAOS_SIM_ENABLE_MUJOCO)
   target_include_directories(chaos_sim_node PRIVATE ${MUJOCO_INCLUDE_DIR})
   target_link_libraries(chaos_sim_node chaos_sim_world nlohmann_json::nlohmann_json ${MUJOCO_LIBRARY})
   ament_target_dependencies(chaos_sim_node rclcpp sensor_msgs nav_msgs diagnostic_msgs std_srvs)
+
+  add_executable(chaos_sim_scene_import src/scene_import.cpp)
+  set_target_properties(chaos_sim_scene_import PROPERTIES OUTPUT_NAME scene_import
+    INSTALL_RPATH "$ORIGIN/..;${MUJOCO_LIBRARY_DIR}")
+  target_compile_features(chaos_sim_scene_import PRIVATE cxx_std_17)
+  target_link_libraries(chaos_sim_scene_import chaos_sim_world)
+
   install(TARGETS chaos_sim_world EXPORT export_${PROJECT_NAME} LIBRARY DESTINATION lib)
-  install(TARGETS chaos_sim_node RUNTIME DESTINATION lib/${PROJECT_NAME})
+  install(TARGETS chaos_sim_node chaos_sim_scene_import RUNTIME DESTINATION lib/${PROJECT_NAME})
   install(DIRECTORY include/ DESTINATION include)
   ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
@@ -54,9 +61,21 @@ if(CHAOS_SIM_ENABLE_MUJOCO)
     target_compile_features(chaos_sim_world_test PRIVATE cxx_std_17)
     target_link_libraries(chaos_sim_world_test PRIVATE chaos_sim_world)
     add_test(NAME chaos_sim_world COMMAND chaos_sim_world_test "${CMAKE_CURRENT_SOURCE_DIR}/test")
+
+    add_executable(chaos_sim_scene_test test/scene_test.cpp)
+    target_compile_features(chaos_sim_scene_test PRIVATE cxx_std_17)
+    target_include_directories(chaos_sim_scene_test PRIVATE ${MUJOCO_INCLUDE_DIR})
+    target_link_libraries(chaos_sim_scene_test PRIVATE chaos_sim_world ${MUJOCO_LIBRARY})
+    add_test(NAME chaos_sim_scene COMMAND chaos_sim_scene_test
+      "${CMAKE_CURRENT_SOURCE_DIR}/test" "${CMAKE_CURRENT_BINARY_DIR}/scene-test")
   endif()
 else()
   message(STATUS "chaos_sim: MuJoCo disabled; launch/config/tools installed, simulator executable is NOT built. Enable CHAOS_SIM_ENABLE_MUJOCO and set MUJOCO_ROOT to build it.")
+endif()
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(chaos_sim_launch_test test/test_simulator_launch.py)
 endif()
 
 ament_package()
