@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <random>
 #include <sstream>
@@ -21,8 +22,30 @@ double validate_ttl(double value)
 
 std::pair<std::int32_t, std::uint32_t> deadline_timespec(double ttl_s, std::int64_t now_ns)
 {
-  const double ttl_ns = validate_ttl(ttl_s) * 1e9;
-  const auto deadline_ns = now_ns + static_cast<std::int64_t>(ttl_ns > 0.0 ? ttl_ns : 1.0);
+  // Truncating the TTL can only shorten it, but a positive TTL must never
+  // expire immediately: a sub-nanosecond TTL floors to one nanosecond. The
+  // rounding happens in integer arithmetic: a double cannot represent every
+  // whole nanosecond count, so scaling the TTL in floating point would both
+  // mis-count and, past 2^63 nanoseconds, overflow to infinity.
+  const double ttl = validate_ttl(ttl_s);
+  const auto ttl_seconds = static_cast<std::int64_t>(ttl);
+  const double fraction = ttl - static_cast<double>(ttl_seconds);
+  // The whole count is kept in a wider type: the largest accepted TTL is 30
+  // seconds, but the intermediate product of the seconds still has to be
+  // exact before it is added to the current time.
+  __int128 ttl_whole = static_cast<__int128>(ttl_seconds) * 1000000000LL +
+    static_cast<__int128>(static_cast<std::int64_t>(fraction * 1e9));
+  if (ttl_whole < 1) {
+    ttl_whole = 1;
+  }
+  // The sum must not wrap: a deadline that overflows the signed range would
+  // land in the past and expire the command at once. The addition happens in
+  // a wider type, so the check itself cannot overflow either.
+  const __int128 deadline_wide = static_cast<__int128>(now_ns) + ttl_whole;
+  if (deadline_wide > static_cast<__int128>(std::numeric_limits<std::int64_t>::max())) {
+    throw std::invalid_argument("deadline is out of the signed 64-bit range");
+  }
+  const auto deadline_ns = static_cast<std::int64_t>(deadline_wide);
   return {
     static_cast<std::int32_t>(deadline_ns / 1000000000),
     static_cast<std::uint32_t>(deadline_ns % 1000000000)};

@@ -203,6 +203,14 @@ public:
   /// Number of in-flight requests (services and actions) being observed.
   std::size_t pending_count() const;
 
+  /// Feedback samples the process dropped because the feedback pool was full
+  /// or its scheduler lock was busy.
+  ///
+  /// The pool is shared by every client of the process, so the count covers
+  /// all of them and is not reset per client. A dropped sample is never
+  /// delivered and never changes the result of its goal.
+  std::size_t feedback_dropped_count() const;
+
   /// Local response timeout in seconds; applies to every pending request.
   /// Must be finite and > 0.
   void set_response_timeout(double seconds);

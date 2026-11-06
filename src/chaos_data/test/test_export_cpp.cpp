@@ -16,6 +16,9 @@
 #include <vector>
 
 #include <sensor_msgs/msg/image.hpp>
+#include <chaos_interfaces/msg/robot_state.hpp>
+#include <rclcpp/serialization.hpp>
+#include <rclcpp/serialized_message.hpp>
 
 #include "chaos_data/export.hpp"
 #include "chaos_data/npy.hpp"
@@ -401,6 +404,52 @@ TEST(ExportNpy, RefusesAnUnsupportedEncoding) {
 // The journal is read while the episode is exported, so a read error has to
 // end the export instead of ending the action silently: the rest of the
 // episode would be labelled with a command that was never stopped.
+// The typed reader of a robot state has to answer the velocity paths. A
+// path it cannot read is reported as a non-finite vector, so a profile that
+// selects the twist would export nothing instead of the velocity.
+TEST(DecodedMessage, ReadsTheTwistOfARobotState) {
+  chaos_interfaces::msg::RobotState state;
+  state.twist.twist.linear.x = 1.25;
+  state.twist.twist.linear.y = -0.5;
+  state.twist.twist.linear.z = 0.0;
+  state.twist.twist.angular.x = 0.0;
+  state.twist.twist.angular.y = 0.0;
+  state.twist.twist.angular.z = 0.3;
+  state.twist.header.stamp.sec = 7;
+  state.twist.header.stamp.nanosec = 42;
+  state.twist.header.frame_id = "vehicle_001/base_link";
+  state.pose.pose.position.x = 3.0;
+
+  rclcpp::SerializedMessage serialized;
+  rclcpp::Serialization<chaos_interfaces::msg::RobotState> serialization;
+  serialization.serialize_message(&state, &serialized);
+  const auto & raw = serialized.get_rcl_serialized_message();
+
+  chaos::data::DecodedMessage message;
+  ASSERT_TRUE(message.decode(
+    "chaos_interfaces/msg/RobotState", raw.buffer, raw.buffer_length));
+
+  chaos::data::FieldValue value;
+  ASSERT_TRUE(message.read("twist.twist.linear.x", value));
+  EXPECT_EQ(value.kind, chaos::data::FieldValue::Kind::kDouble);
+  EXPECT_DOUBLE_EQ(value.number, 1.25);
+  ASSERT_TRUE(message.read("twist.twist.linear.y", value));
+  EXPECT_DOUBLE_EQ(value.number, -0.5);
+  ASSERT_TRUE(message.read("twist.twist.angular.z", value));
+  EXPECT_DOUBLE_EQ(value.number, 0.3);
+  ASSERT_TRUE(message.read("twist.header.stamp", value));
+  EXPECT_EQ(value.kind, chaos::data::FieldValue::Kind::kTimestamp);
+  EXPECT_EQ(value.seconds, 7);
+  EXPECT_EQ(value.nanoseconds, 42u);
+  ASSERT_TRUE(message.read("twist.header.frame_id", value));
+  EXPECT_EQ(value.text, "vehicle_001/base_link");
+  // The pose paths still answer, and a path the message has no reader for
+  // still fails instead of returning a default.
+  ASSERT_TRUE(message.read("pose.pose.position.x", value));
+  EXPECT_DOUBLE_EQ(value.number, 3.0);
+  EXPECT_FALSE(message.read("battery_percentage", value));
+}
+
 TEST(ControlJournalCursor, ReadsTheEventsInTheOrderOfTheJournal) {
   const fs::path directory =
     fs::temp_directory_path() / "chaos_data_journal_cursor_test";

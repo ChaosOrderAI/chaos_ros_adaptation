@@ -269,7 +269,8 @@ if(BUILD_TESTING)
   target_include_directories(test_export_cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(test_export_cpp
     chaos_data_export
-    sensor_msgs::sensor_msgs__rosidl_typesupport_cpp)
+    sensor_msgs::sensor_msgs__rosidl_typesupport_cpp
+    rclcpp::rclcpp)
 
   # The native exporter as a black box: a real bag in both storages, a real
   # session and a real profile, and the exit code of the executable. The

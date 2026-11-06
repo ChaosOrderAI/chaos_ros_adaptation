@@ -96,6 +96,13 @@ if(BUILD_TESTING)
     target_link_options(chaos_sdk_feedback_dispatcher PUBLIC ${_sanitizer_flags})
   endif()
 
+  ament_add_gtest(test_sdk_core test/test_sdk_core.cpp)
+  target_link_libraries(test_sdk_core chaos_sdk)
+  if(CHAOS_SDK_SANITIZE)
+    target_compile_options(test_sdk_core PRIVATE ${_sanitizer_flags})
+    target_link_options(test_sdk_core PRIVATE ${_sanitizer_flags})
+  endif()
+
   ament_add_gtest(test_robot_native test/test_robot_native.cpp)
   target_link_libraries(test_robot_native chaos_sdk)
   if(CHAOS_SDK_SANITIZE)

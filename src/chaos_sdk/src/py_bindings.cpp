@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
+
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -192,6 +194,70 @@ geometry_msgs::msg::PoseStamped pose_from_python(const py::object & target)
   pose.pose.orientation.z = number_at(target, leaf(orientation, "z"), 0.0);
   pose.pose.orientation.w = number_at(target, leaf(orientation, "w"), 1.0);
   return pose;
+}
+
+py::object feedback_view(const chaos_interfaces::action::NavigatePose::Feedback & feedback);
+py::object feedback_view(const chaos_interfaces::action::Flight::Feedback & feedback);
+
+/// One stamped pose as the nested view the rest of the binding uses.
+py::object pose_view(const geometry_msgs::msg::PoseStamped & pose)
+{
+  auto position = message_of({
+    {"x", py::cast(pose.pose.position.x)},
+    {"y", py::cast(pose.pose.position.y)},
+    {"z", py::cast(pose.pose.position.z)},
+  });
+  auto orientation = message_of({
+    {"x", py::cast(pose.pose.orientation.x)},
+    {"y", py::cast(pose.pose.orientation.y)},
+    {"z", py::cast(pose.pose.orientation.z)},
+    {"w", py::cast(pose.pose.orientation.w)},
+  });
+  return message_of({
+    {"header", message_of({{"frame_id", py::cast(pose.header.frame_id)}})},
+    {"pose", message_of({{"position", position}, {"orientation", orientation}})},
+  });
+}
+
+/// Wrap a Python feedback callable so it can run on the native feedback pool.
+///
+/// The pool calls it without the GIL and outside the executor of the client,
+/// so the wrapper acquires the GIL itself and swallows anything the callable
+/// raises: an exception must never escape into the worker.
+template<typename ActionT>
+std::function<void(typename ActionT::Feedback)> feedback_of(const py::object & callback)
+{
+  if (callback.is_none()) {
+    return nullptr;
+  }
+  if (!py::isinstance<py::function>(callback)) {
+    throw std::invalid_argument("feedback_callback must be callable or None");
+  }
+  py::function function = py::reinterpret_borrow<py::function>(callback);
+  return [function](const typename ActionT::Feedback & feedback) {
+    py::gil_scoped_acquire acquire;
+    try {
+      function(feedback_view(feedback));
+    } catch (const py::error_already_set &) {
+      // The sample is lost; the result of the goal stays untouched.
+    }
+  };
+}
+
+py::object feedback_view(const chaos_interfaces::action::NavigatePose::Feedback & feedback)
+{
+  return message_of({
+    {"current_pose", pose_view(feedback.current_pose)},
+    {"progress", py::cast(feedback.progress)},
+  });
+}
+
+py::object feedback_view(const chaos_interfaces::action::Flight::Feedback & feedback)
+{
+  return message_of({
+    {"altitude_m", py::cast(feedback.altitude_m)},
+    {"progress", py::cast(feedback.progress)},
+  });
 }
 
 /// Future wrapper around a native std::shared_future.
@@ -539,7 +605,9 @@ PYBIND11_MODULE(_chaos_sdk, module)
   .def_property_readonly("goal_id", &PyTask::goal_id)
   .def_property_readonly("state", &PyTask::state)
   .def("result", &PyTask::result)
-  .def("cancel", &PyTask::cancel);
+  .def("cancel", &PyTask::cancel)
+  .def("get_result_async", &PyTask::get_result_async)
+  .def("cancel_goal_async", &PyTask::cancel_goal_async);
 
   py::class_<Robot, std::shared_ptr<Robot>>(module, "Robot")
   .def(
@@ -604,34 +672,43 @@ PYBIND11_MODULE(_chaos_sdk, module)
     py::arg("x") = 0.0, py::arg("y") = 0.0, py::arg("z") = 0.0, py::arg("yaw") = 0.0,
     py::arg("valid_for_s") = std::nullopt, py::arg("request_id") = std::nullopt)
   .def(
-    "navigate", [](Robot & self, const py::object & target, const std::optional<double> & ttl_s) {
+    "navigate", [](Robot & self, const py::object & target, const py::object & feedback_callback,
+      const std::optional<double> & ttl_s) {
       const auto pose = pose_from_python(target);
       return make_future(
-        self.navigate(pose, nullptr, ttl_s),
+        self.navigate(pose, feedback_of<chaos_interfaces::action::NavigatePose>(feedback_callback),
+          ttl_s),
         [](const std::shared_ptr<Robot::NavigationTask> & task) {
           return py::cast(PyTask(task));
         });
     },
-    py::arg("target"), py::arg("ttl_s") = std::nullopt,
+    py::arg("target"), py::arg("feedback_callback") = py::none(), py::kw_only(),
+    py::arg("ttl_s") = std::nullopt,
     "Send a navigation goal. The target may be a dict or an object with the "
-    "rclpy message layout (header.frame_id / pose.position).")
+    "rclpy message layout (header.frame_id / pose.position). feedback_callback "
+    "receives current_pose and progress and runs off the executor thread.")
   .def(
-    "takeoff", [](Robot & self, double altitude_m, const std::optional<double> & ttl_s) {
+    "takeoff", [](Robot & self, double altitude_m, const py::object & feedback_callback,
+      const std::optional<double> & ttl_s) {
       return make_future(
-        self.takeoff(altitude_m, nullptr, ttl_s),
+        self.takeoff(altitude_m,
+          feedback_of<chaos_interfaces::action::Flight>(feedback_callback), ttl_s),
         [](const std::shared_ptr<Robot::FlightTask> & task) {
           return py::cast(PyTask(task));
         });
     },
-    py::arg("altitude_m"), py::arg("ttl_s") = std::nullopt)
+    py::arg("altitude_m"), py::arg("feedback_callback") = py::none(), py::kw_only(),
+    py::arg("ttl_s") = std::nullopt)
   .def(
-    "land", [](Robot & self, const std::optional<double> & ttl_s) {
+    "land", [](Robot & self, const py::object & feedback_callback,
+      const std::optional<double> & ttl_s) {
       return make_future(
-        self.land(nullptr, ttl_s),
+        self.land(feedback_of<chaos_interfaces::action::Flight>(feedback_callback), ttl_s),
         [](const std::shared_ptr<Robot::FlightTask> & task) {
           return py::cast(PyTask(task));
         });
     },
+    py::arg("feedback_callback") = py::none(), py::kw_only(),
     py::arg("ttl_s") = std::nullopt)
   .def("state", [](Robot & self) -> py::object {
       const auto state = self.state();
@@ -652,6 +729,7 @@ PYBIND11_MODULE(_chaos_sdk, module)
   .def_property_readonly("command_timeout_s", &Robot::command_timeout_s)
   .def_property_readonly("command_ttl_s", &Robot::command_ttl_s)
   .def_property_readonly("pending_count", &Robot::pending_count)
+  .def_property_readonly("feedback_dropped_count", &Robot::feedback_dropped_count)
   .def_property_readonly("response_timeout_s", &Robot::response_timeout_s)
   .def_property_readonly("action_timeout_s", &Robot::action_timeout_s)
   .def_property_readonly("max_pending", &Robot::max_pending)

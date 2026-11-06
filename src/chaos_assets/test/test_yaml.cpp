@@ -66,6 +66,48 @@ TEST(YamlScalars, ExplicitTagsAreEnforced) {
   EXPECT_DOUBLE_EQ(parse("a: !!float 1")["a"].get<double>(), 1.0);
 }
 
+TEST(YamlScalars, ImplicitFloatRequiresASignedExponent) {
+  // The implicit resolver keeps these as strings, exactly like PyYAML.
+  EXPECT_EQ(parse("a: 1e5")["a"], "1e5");
+  EXPECT_EQ(parse("a: 1.0e5")["a"], "1.0e5");
+  EXPECT_EQ(parse("a: .5e2")["a"], ".5e2");
+  EXPECT_EQ(parse("a: 1e+5")["a"], "1e+5");
+  // A decimal point plus a signed exponent resolves to a float.
+  EXPECT_DOUBLE_EQ(parse("a: 1.0e+5")["a"].get<double>(), 100000.0);
+  EXPECT_DOUBLE_EQ(parse("a: .5e+2")["a"].get<double>(), 50.0);
+  EXPECT_DOUBLE_EQ(parse("a: 1.e+5")["a"].get<double>(), 100000.0);
+  EXPECT_DOUBLE_EQ(parse("a: 1.0e-5")["a"].get<double>(), 1e-5);
+}
+
+TEST(YamlScalars, ExplicitFloatFollowsThePyYamlConstructor) {
+  // The explicit tag is wider than the implicit resolver.
+  EXPECT_DOUBLE_EQ(parse("a: !!float 1e5")["a"].get<double>(), 100000.0);
+  EXPECT_DOUBLE_EQ(parse("a: !!float 1.0e5")["a"].get<double>(), 100000.0);
+  EXPECT_TRUE(std::isinf(parse("a: !!float 1e500")["a"].get<double>()));
+  EXPECT_DOUBLE_EQ(parse("a: !!float 010")["a"].get<double>(), 10.0);
+  EXPECT_DOUBLE_EQ(parse("a: !!float --1")["a"].get<double>(), 1.0);
+  EXPECT_DOUBLE_EQ(parse("a: !!float +-1")["a"].get<double>(), -1.0);
+  EXPECT_DOUBLE_EQ(parse("a: !!float 1:2:3")["a"].get<double>(), 3723.0);
+  EXPECT_DOUBLE_EQ(parse("a: !!float 1:30.5")["a"].get<double>(), 90.5);
+  EXPECT_TRUE(std::isinf(parse("a: !!float inf")["a"].get<double>()));
+  EXPECT_TRUE(std::isnan(parse("a: !!float nan")["a"].get<double>()));
+  // Base prefixes and hexadecimal floats are rejected, and a trailing
+  // suffix is an error rather than a prefix that happens to parse.
+  EXPECT_THROW(parse("a: !!float 0b10"), ConfigurationError);
+  EXPECT_THROW(parse("a: !!float 0x10"), ConfigurationError);
+  EXPECT_THROW(parse("a: !!float 0x1.8p1"), ConfigurationError);
+  EXPECT_THROW(parse("a: !!float 1e5abc"), ConfigurationError);
+  EXPECT_THROW(parse("a: !!float 1e"), ConfigurationError);
+}
+
+TEST(YamlScalars, ASecondDocumentIsRejected) {
+  EXPECT_THROW(parse("a: 1\n---\nb: 2\n"), ConfigurationError);
+  EXPECT_THROW(parse("a: 1\n---\n"), ConfigurationError);
+  // A document end marker does not start a second document.
+  EXPECT_EQ(parse("a: 1\n...\n")["a"], 1);
+  EXPECT_EQ(parse("---\na: 1\n")["a"], 1);
+}
+
 TEST(YamlScalars, DuplicateKeysAreRejected) {
   EXPECT_THROW(parse("a: 1\na: 2\n"), ConfigurationError);
 }

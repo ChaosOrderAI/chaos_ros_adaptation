@@ -178,6 +178,47 @@ bool DecodedMessage::read(const std::string & path, FieldValue & out) const
       out.number = state_->pose.pose.orientation.w;
       return true;
     }
+    if (path == "twist.twist.linear.x") {
+      out.kind = FieldValue::Kind::kDouble;
+      out.number = state_->twist.twist.linear.x;
+      return true;
+    }
+    if (path == "twist.twist.linear.y") {
+      out.kind = FieldValue::Kind::kDouble;
+      out.number = state_->twist.twist.linear.y;
+      return true;
+    }
+    if (path == "twist.twist.linear.z") {
+      out.kind = FieldValue::Kind::kDouble;
+      out.number = state_->twist.twist.linear.z;
+      return true;
+    }
+    if (path == "twist.twist.angular.x") {
+      out.kind = FieldValue::Kind::kDouble;
+      out.number = state_->twist.twist.angular.x;
+      return true;
+    }
+    if (path == "twist.twist.angular.y") {
+      out.kind = FieldValue::Kind::kDouble;
+      out.number = state_->twist.twist.angular.y;
+      return true;
+    }
+    if (path == "twist.twist.angular.z") {
+      out.kind = FieldValue::Kind::kDouble;
+      out.number = state_->twist.twist.angular.z;
+      return true;
+    }
+    if (path == "twist.header.stamp") {
+      out.kind = FieldValue::Kind::kTimestamp;
+      out.seconds = state_->twist.header.stamp.sec;
+      out.nanoseconds = state_->twist.header.stamp.nanosec;
+      return true;
+    }
+    if (path == "twist.header.frame_id") {
+      out.kind = FieldValue::Kind::kString;
+      out.text = state_->twist.header.frame_id;
+      return true;
+    }
     return false;
   }
   if (dynamic_ == nullptr) {

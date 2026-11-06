@@ -455,8 +455,14 @@ Robot::Robot(
     endpoint("motion/velocity"), 1);
 
   std::weak_ptr<Impl> weak = impl_;
+  // The runtime publishes the state as reliable and transient-local, so a
+  // client that subscribes after the first publication still receives the
+  // latched state. A volatile subscription would miss it.
+  const rclcpp::QoS state_qos = rclcpp::QoS(1)
+                                  .reliability(rclcpp::ReliabilityPolicy::Reliable)
+                                  .durability(rclcpp::DurabilityPolicy::TransientLocal);
   impl_->state_sub = node->create_subscription<chaos_interfaces::msg::RobotState>(
-    endpoint("state"), 1,
+    endpoint("state"), state_qos,
     [weak](chaos_interfaces::msg::RobotState::SharedPtr message) {
       auto impl = weak.lock();
       if (!impl) {
@@ -565,6 +571,11 @@ std::size_t Robot::pending_count() const
 {
   const std::lock_guard<std::mutex> guard(impl_->mutex);
   return impl_->pending.size();
+}
+
+std::size_t Robot::feedback_dropped_count() const
+{
+  return internal::FeedbackDispatcher::instance().dropped_count();
 }
 
 void Robot::set_response_timeout(double seconds)

@@ -32,7 +32,10 @@ std::regex int_oct_re(R"(^[-+]?0[0-7_]+$)");
 std::regex int_hex_re(R"(^[-+]?0x[0-9a-fA-F_]+$)");
 std::regex int_bin_re(R"(^[-+]?0b[01_]+$)");
 std::regex int_sex_re(R"(^[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+$)");
-std::regex float_dec_re(R"(^[-+]?(?:[0-9][0-9_]*\.[0-9_]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?$)");
+// The exponent sign is mandatory: PyYAML's implicit float resolver only
+// accepts it that way, so a plain scalar like "1.0e5" stays a string while
+// "1.0e+5" is a float.
+std::regex float_dec_re(R"(^[-+]?(?:[0-9][0-9_]*\.[0-9_]*|\.[0-9]+)(?:[eE][-+][0-9]+)?$)");
 std::regex float_sex_re(R"(^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$)");
 std::regex float_special_re(R"(^[-+]?\.(?:inf|Inf|INF|nan|NaN|NAN)$)");
 
@@ -176,27 +179,47 @@ int64_t strict_int(const std::string& raw, const std::string& where) {
   throw ConfigurationError(where + ": invalid value for explicit YAML tag 'int'");
 }
 
+// Explicit !!float follows PyYAML's construct_yaml_float, which is wider
+// than the implicit resolver: underscores are stripped, one leading sign is
+// peeled off and the rest is handed to the language float conversion. That
+// accepts "1e5" (no exponent sign) and sexagesimal forms, and it rejects base
+// prefixes such as "0b10" and "0x10".
 double strict_float(const std::string& raw, const std::string& where) {
-  if (std::regex_match(raw, float_dec_re)) {
-    return std::strtod(strip_underscores(raw).c_str(), nullptr);
+  if (raw.empty()) {
+    throw ConfigurationError(where + ": invalid value for explicit YAML tag 'float'");
   }
-  if (std::regex_match(raw, float_sex_re)) {
-    return parse_sexagesimal(strip_underscores(raw), where);
+  std::string value = strip_underscores(raw);
+  for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  double sign = 1.0;
+  if (value[0] == '-') sign = -1.0;
+  if (value[0] == '+' || value[0] == '-') value = value.substr(1);
+  if (value.empty()) {
+    throw ConfigurationError(where + ": invalid value for explicit YAML tag 'float'");
   }
-  if (std::regex_match(raw, float_special_re)) {
-    const bool negative = raw[0] == '-';
-    const bool infinite = std::tolower(static_cast<unsigned char>(raw[raw.size() - 3])) == 'i';
-    double value = infinite ? std::numeric_limits<double>::infinity()
-                            : std::numeric_limits<double>::quiet_NaN();
-    return negative ? -value : value;
+  if (value == ".inf" || value == "inf" || value == "infinity") {
+    return sign * std::numeric_limits<double>::infinity();
   }
-  // Integer productions are valid !!float sources (e.g. !!float 1 -> 1.0).
-  if (std::regex_match(raw, int_dec_re) || std::regex_match(raw, int_oct_re) ||
-      std::regex_match(raw, int_hex_re) || std::regex_match(raw, int_bin_re) ||
-      std::regex_match(raw, int_sex_re)) {
-    return static_cast<double>(strict_int(raw, where));
+  if (value == ".nan" || value == "nan") {
+    return sign * std::numeric_limits<double>::quiet_NaN();
   }
-  throw ConfigurationError(where + ": invalid value for explicit YAML tag 'float'");
+  if (value.find(':') != std::string::npos) {
+    return sign * parse_sexagesimal(value, where);
+  }
+  // glibc strtod accepts hexadecimal floats ("0x10"), which Python's
+  // float() rejects, so those are excluded before the conversion. The
+  // conversion itself must consume the whole scalar: a trailing suffix is an
+  // error, not a prefix that happens to parse.
+  if (value.size() > 1 && value[0] == '0' && value[1] == 'x') {
+    throw ConfigurationError(where + ": invalid value for explicit YAML tag 'float'");
+  }
+  // Overflow to infinity mirrors Python float("1e500"); downstream finite
+  // checks reject it with a clear error.
+  char* end = nullptr;
+  const double converted = std::strtod(value.c_str(), &end);
+  if (end == value.c_str() || end == nullptr || *end != '\0') {
+    throw ConfigurationError(where + ": invalid value for explicit YAML tag 'float'");
+  }
+  return sign * converted;
 }
 
 // Convert one already-loaded yaml-cpp node. `ancestors` guards against
@@ -375,12 +398,19 @@ Json load_yaml_string(const std::string& content, const std::string& where) {
   if (!valid_utf8(content)) {
     throw ConfigurationError(where + ": invalid UTF-8");
   }
-  YAML::Node root;
+  // PyYAML's safe_load refuses a stream that holds more than one document.
+  // yaml-cpp's YAML::Load silently returns the first one, so the count has to
+  // be checked separately.
+  std::vector<YAML::Node> documents;
   try {
-    root = YAML::Load(content);
+    documents = YAML::LoadAll(content);
   } catch (const std::exception& error) {
     throw ConfigurationError(where + ": " + error.what());
   }
+  if (documents.size() > 1) {
+    throw ConfigurationError(where + ": expected a single document in the stream");
+  }
+  const YAML::Node root = documents.empty() ? YAML::Node() : documents.front();
   if (root.Type() == YAML::NodeType::Null || root.Type() == YAML::NodeType::Undefined) {
     return nullptr;
   }

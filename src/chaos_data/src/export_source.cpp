@@ -263,6 +263,12 @@ SourceEpisode validateSource(const EpisodeSpec & episode, const Profile & profil
       ++evidence;
     }
   }
+  // The end of the journal is the only reason to stop. A read error has to be
+  // reported: a journal that was read only half way would otherwise pass as a
+  // complete one whenever the session end event happened to come first.
+  if (journal.bad() || (journal.fail() && !journal.eof())) {
+    throw std::runtime_error("cannot read the clock journal: an I/O error occurred");
+  }
   if (!finalized) {
     throw std::runtime_error(
       "the clock journal is incomplete: missing session_end");
