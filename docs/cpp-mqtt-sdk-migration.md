@@ -114,11 +114,11 @@ auto result = task->result().get();              // 终态结果（WrappedResult
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log-cpp build --base-paths src \
-  --build-base build-cpp --install-base install-cpp \
+colcon --log-base log build --base-paths src \
+  --build-base build --install-base install \
   --packages-up-to chaos_sdk chaos_mqtt \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 ```
 
 

@@ -30,10 +30,10 @@ runtime 和驱动必须处于同一主机、同一次启动和同一个 Linux ti
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log-cpp build --base-paths src \
-  --build-base build-cpp --install-base install-cpp \
+colcon --log-base log build --base-paths src \
+  --build-base build --install-base install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 ```
 
 ### 原生 SDK2 门控
@@ -58,12 +58,12 @@ cannot start.
 ```bash
 source /opt/ros/jazzy/setup.bash
 
-colcon --log-base log-cpp-sdk build --base-paths src \
-  --build-base build-cpp-sdk --install-base install-cpp-sdk --symlink-install \
+colcon --log-base log-sdk build --base-paths src \
+  --build-base build-sdk --install-base install-sdk --symlink-install \
   --cmake-args -DCHAOS_GO2_WITH_UNITREE_SDK=ON \
                -DCMAKE_PREFIX_PATH="$UNITREE_SDK2_PREFIX"
 
-source install-cpp-sdk/local_setup.bash
+source install-sdk/local_setup.bash
 ```
 
 `$UNITREE_SDK2_PREFIX` 指向上游 SDK2 的安装前缀（不是系统安装位置）。SDK 通过 `find_package` 的导出 target 消费，不手写 include 或库路径。
@@ -92,7 +92,7 @@ ros2 run chaos_runtime go2_driver --build-capabilities
 
 **当前状态**：SDK-ON 只验证了**编译与链接**，从未在真实机器狗上运行。真实写入时序、DDS 发现延迟和硬件响应均未验证。mock 构建不要求安装 SDK。
 
-后续示例使用 `install-cpp/local_setup.bash`；若采用独立构建目录，改为加载对应前缀的 `local_setup.bash`，不要同时叠加旧安装空间。
+后续示例使用 `install/local_setup.bash`；若采用独立构建目录，改为加载对应前缀的 `local_setup.bash`，不要同时叠加旧安装空间。
 
 实机生产安装应按 [部署说明](onboard-deployment.md) 在目标架构构建普通安装。服务运行账号须能访问 SDK 前缀的库目录和机器狗网卡。
 

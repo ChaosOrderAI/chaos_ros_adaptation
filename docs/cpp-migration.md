@@ -71,12 +71,12 @@ chaos_benchmarks      领域微基准，非生产入口
 ```bash
 source /opt/ros/jazzy/setup.bash
 
-colcon --log-base log-cpp build --base-paths src \
-  --build-base build-cpp \
-  --install-base install-cpp \
+colcon --log-base log build --base-paths src \
+  --build-base build \
+  --install-base install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 ```
 
 `--base-paths src` 是刻意的：工作空间旁边可能存在 ROS 1 工程和厂商 SDK 副本，不应被一并构建。
@@ -90,13 +90,13 @@ source install-cpp/local_setup.bash
 ```bash
 source /opt/ros/jazzy/setup.bash
 
-colcon --log-base log-cpp-sdk build --base-paths src \
-  --build-base build-cpp-sdk \
-  --install-base install-cpp-sdk \
+colcon --log-base log-sdk build --base-paths src \
+  --build-base build-sdk \
+  --install-base install-sdk \
   --cmake-args -DCHAOS_GO2_WITH_UNITREE_SDK=ON \
                -DCMAKE_PREFIX_PATH="$UNITREE_SDK2_PREFIX"
 
-source install-cpp-sdk/local_setup.bash
+source install-sdk/local_setup.bash
 ```
 
 `$UNITREE_SDK2_PREFIX` 指向上游 SDK2 的安装前缀，`find_package(unitree_sdk2 CONFIG REQUIRED)` 必须在该前缀下成立。运行时库搜索顺序见 [Go2 说明](unitree-go2.md)。
@@ -111,17 +111,17 @@ source install-cpp-sdk/local_setup.bash
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 
 # 单元测试：gtest（各包 BUILD_TESTING 下）+ pybind 绑定的 pytest
 colcon test --packages-select \
   chaos_core chaos_interfaces chaos_assets chaos_bringup chaos_runtime \
   chaos_sensors chaos_sdk chaos_mqtt chaos_data \
-  --build-base build-cpp --install-base install-cpp
-colcon test-result --test-result-base build-cpp --verbose
+  --build-base build --install-base install
+colcon test-result --test-result-base build --verbose
 
 # 安装空间的下游消费者：只链接导出的公开 target
-benchmarks/verify_consumer.sh install-cpp
+benchmarks/verify_consumer.sh install
 
 # 领域微基准（非端到端）
 ros2 run chaos_benchmarks micro_benchmark

@@ -13,13 +13,16 @@
 
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
 #include "chaos_interfaces/action/navigate_pose.hpp"
+#include "chaos_interfaces/action/software_update.hpp"
 #include "chaos_interfaces/srv/control_lease.hpp"
 #include "chaos_interfaces/srv/get_description.hpp"
 #include "chaos_interfaces/srv/stop.hpp"
@@ -30,6 +33,7 @@ namespace chaos::runtime {
 namespace {
 
 using NavigatePose = chaos_interfaces::action::NavigatePose;
+using SoftwareUpdate = chaos_interfaces::action::SoftwareUpdate;
 using Clock = std::chrono::steady_clock;
 
 const char * kMockAssetJson = R"({
@@ -40,7 +44,7 @@ const char * kMockAssetJson = R"({
   "namespace": "/mock",
   "ros_domain_id": 0,
   "frames": {"base": "base_link", "odom": "odom", "map": "map"},
-  "capabilities": ["state", "motion.velocity", "motion.stop", "navigation.pose"],
+  "capabilities": ["state", "motion.velocity", "motion.stop", "navigation.pose", "system.ota"],
   "limits": {"linear_mps": 1.0, "angular_rps": 1.0, "command_timeout_s": 0.5,
              "state_timeout_s": 2.0, "lease_max_s": 30.0,
              "action_timeout_s": 120.0},
@@ -299,6 +303,50 @@ TEST_F(RuntimeFixture, NavigationGoalCancelReachesCanceled) {
             std::future_status::ready);
   const auto result = result_future.get();
   EXPECT_EQ(result.code, rclcpp_action::ResultCode::CANCELED);
+}
+
+TEST_F(RuntimeFixture, OtaGoalReportsSimulatedAndDoesNotApply) {
+  auto client = rclcpp_action::create_client<SoftwareUpdate>(node_, "/mock/system/ota");
+  ASSERT_TRUE(waitFor([&] { return client->action_server_is_ready(); },
+                      std::chrono::seconds(5)));
+
+  SoftwareUpdate::Goal goal;
+  goal.lease_token = acquireLease();
+  ASSERT_FALSE(goal.lease_token.empty()) << "lease acquisition failed";
+  goal.artifact_id = "pkg.alpha";
+  goal.version = "1.2.3";
+  goal.sha256 = std::string(64, 'c');
+  goal.size_bytes = 32;
+
+  std::mutex phases_mutex;
+  std::vector<std::string> phases;
+  rclcpp_action::Client<SoftwareUpdate>::SendGoalOptions options;
+  options.feedback_callback =
+    [&](rclcpp_action::ClientGoalHandle<SoftwareUpdate>::SharedPtr,
+        const std::shared_ptr<const SoftwareUpdate::Feedback> feedback) {
+      std::lock_guard<std::mutex> guard(phases_mutex);
+      phases.push_back(feedback->phase);
+    };
+
+  auto goal_future = client->async_send_goal(goal, options);
+  ASSERT_EQ(goal_future.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  auto handle = goal_future.get();
+  ASSERT_NE(handle, nullptr);
+
+  auto result_future = client->async_get_result(handle);
+  ASSERT_EQ(result_future.wait_for(std::chrono::seconds(5)),
+            std::future_status::ready);
+  const auto result = result_future.get();
+  EXPECT_EQ(result.code, rclcpp_action::ResultCode::SUCCEEDED);
+  ASSERT_NE(result.result, nullptr);
+  EXPECT_TRUE(result.result->success) << result.result->message;
+  EXPECT_EQ(result.result->code, "SIMULATED");
+  EXPECT_FALSE(result.result->applied);
+  EXPECT_NE(result.result->message.find("did not read a package"), std::string::npos);
+  std::lock_guard<std::mutex> guard(phases_mutex);
+  ASSERT_FALSE(phases.empty());
+  EXPECT_EQ(phases.front(), "verifying");
 }
 
 // A node whose ROS clock is frozen must still expire its lease: the

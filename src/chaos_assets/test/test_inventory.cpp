@@ -360,3 +360,22 @@ TEST(Inventory, TheHumanoidOnboardExampleResolvesOneRealAsset) {
   EXPECT_EQ(options.at("robot_state_topic"), "rt/robot_states");
   EXPECT_EQ(options.at("velocity_frame"), "body");
 }
+
+TEST(Inventory, TheOtaDemoAdvertisesTheSimulatedCapability) {
+  const Inventory inventory =
+      chaos::assets::load_inventory(share_directory() + "/config/ota.demo.yaml");
+  ASSERT_EQ(inventory.assets().size(), 1u);
+  const Json& asset = inventory.assets()[0];
+  EXPECT_EQ(asset.at("id"), "vehicle_ota");
+  EXPECT_EQ(asset.at("mode"), "mock");
+  EXPECT_EQ(asset.at("driver").at("plugin"), "mock");
+  EXPECT_EQ(asset.at("capabilities"),
+            Json::array({Json("state"), Json("motion.velocity"), Json("motion.stop"),
+                         Json("navigation.pose"), Json("system.ota")}));
+  const Inventory demo = chaos::assets::load_inventory(demo_config());
+  for (const Json& row : demo.assets()) {
+    for (const Json& capability : row.at("capabilities")) {
+      EXPECT_NE(capability, "system.ota");
+    }
+  }
+}

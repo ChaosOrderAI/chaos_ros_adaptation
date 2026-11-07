@@ -1,0 +1,20 @@
+string lease_token
+# Package identity. A token of 1..128 letters, digits, '.', '_' or '-'.
+string artifact_id
+# Requested package version. Same token shape as artifact_id.
+string version
+# Lowercase hex digest of the package. The default executor does not read bytes.
+string sha256
+# Declared package size in bytes. Accepted range is 1..2147483648.
+uint64 size_bytes
+# Unix UTC deadline for starting this goal, not for completing it; zero disables it.
+builtin_interfaces/Time expires_at
+---
+bool success
+string code
+string message
+# True only after a byte commit. The default executor always leaves this false.
+bool applied
+---
+string phase
+float32 progress

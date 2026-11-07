@@ -207,4 +207,85 @@ TEST_F(NodeTest, SequentialActionsReuseTheLease)
   EXPECT_EQ(1, server_->lease_calls());
 }
 
+TEST_F(NodeTest, AHaltedNodeKeepsItsGoalAndReportsTheTerminalState)
+{
+  auto goal = server_->install<chaos_interfaces::action::NavigatePose>();
+  auto tree = make(
+    R"(<root BTCPP_format="4"><BehaviorTree ID="Main"><Navigate frame_id="map" )"
+    R"(x="0" y="0" z="0" yaw="0"/></BehaviorTree></root>)");
+  ASSERT_EQ(BT::NodeStatus::RUNNING, tree.tickOnce());
+  ASSERT_TRUE(goal->wait_accepted(5s));
+  tree.haltTree();
+  ASSERT_TRUE(goal->wait_canceling(5s));
+  goal->finish(false, "CANCELED", "canceled by the tree");
+  BT::NodeStatus status = BT::NodeStatus::RUNNING;
+  for (int i = 0; i < 50 && status == BT::NodeStatus::RUNNING; ++i) {
+    status = tree.tickOnce();
+    std::this_thread::sleep_for(20ms);
+  }
+  // The halted node observed the goal it had sent. It did not start a second
+  // goal for the same asset.
+  EXPECT_EQ(1, server_->goals());
+  EXPECT_EQ(BT::NodeStatus::FAILURE, status);
+  EXPECT_EQ("canceled", tree.rootBlackboard()->get<std::string>("task_state"));
+}
+
+TEST_F(NodeTest, ARefusedCancellationIsReported)
+{
+  server_->set_cancel_accept(false);
+  auto goal = server_->install<chaos_interfaces::action::NavigatePose>();
+  auto tree = make(
+    R"(<root BTCPP_format="4"><BehaviorTree ID="Main"><Navigate frame_id="map" )"
+    R"(x="0" y="0" z="0" yaw="0"/></BehaviorTree></root>)");
+  ASSERT_EQ(BT::NodeStatus::RUNNING, tree.tickOnce());
+  ASSERT_TRUE(goal->wait_accepted(5s));
+  tree.haltTree();
+  std::string code;
+  for (int i = 0; i < 100 && code != "CANCEL_REJECTED"; ++i) {
+    tree.tickOnce();
+    try {
+      code = tree.rootBlackboard()->get<std::string>("code");
+    } catch (const std::exception &) {
+      code.clear();
+    }
+    std::this_thread::sleep_for(20ms);
+  }
+  EXPECT_EQ("CANCEL_REJECTED", code);
+}
+
+TEST_F(NodeTest, ANonFiniteTtlIsAConfigurationError)
+{
+  auto goal = server_->install<chaos_interfaces::action::NavigatePose>();
+  auto tree = make(
+    R"(<root BTCPP_format="4"><BehaviorTree ID="Main"><Navigate frame_id="map" )"
+    R"(x="0" y="0" z="0" yaw="0" ttl_s="nan"/></BehaviorTree></root>)");
+  EXPECT_THROW(tree.tickOnce(), std::exception);
+  // The goal was never sent.
+  EXPECT_EQ(0, server_->goals());
+}
+
+TEST_F(NodeTest, AMissingLeaseIsAConfigurationError)
+{
+  // A robot without a lease cannot send a goal. The node reports the mistake
+  // instead of claiming that the remote action failed.
+  auto robot = std::make_shared<chaos_sdk::Robot>(server_->node(), "no_lease");
+  BT::BehaviorTreeFactory factory;
+  chaos_bt::register_nodes(factory, robot);
+  auto tree = factory.createTreeFromText(
+    R"(<root BTCPP_format="4"><BehaviorTree ID="Main"><Navigate frame_id="map" )"
+    R"(x="0" y="0" z="0" yaw="0"/></BehaviorTree></root>)");
+  EXPECT_THROW(tree.tickOnce(), std::exception);
+  robot->close();
+}
+
+TEST_F(NodeTest, ABrokenOutputRemapIsAConfigurationError)
+{
+  // The port is remapped to something that is not a blackboard entry. The node
+  // must not publish the value somewhere else.
+  auto tree = make(
+    R"(<root BTCPP_format="4"><BehaviorTree ID="Main"><Navigate frame_id="map" )"
+    R"(x="0" y="0" z="0" yaw="0" code="not_a_blackboard_entry"/></BehaviorTree></root>)");
+  EXPECT_THROW(tree.tickOnce(), std::exception);
+}
+
 }  // namespace

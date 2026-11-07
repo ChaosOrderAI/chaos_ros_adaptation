@@ -153,7 +153,7 @@ nlohmann::json build_adapter_config(
   // Emit routes in the stable capability definition order the Rust adapter
   // and tests rely on.
   static const char * kOrder[] = {
-    "system.describe", "control.acquire", "control.renew", "control.release",
+    "system.describe", "system.ota", "control.acquire", "control.renew", "control.release",
     "motion.stop", "motion.velocity", "navigation.to_pose", "flight.takeoff", "flight.land"};
   nlohmann::json routes = nlohmann::json::array();
   for (const char * command : kOrder) {

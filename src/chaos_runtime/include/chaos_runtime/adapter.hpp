@@ -35,7 +35,7 @@ struct AdapterSnapshot {
   std::optional<std::int64_t> source_stamp_ns;
 };
 
-enum class OperationKind { kNavigatePose, kTakeoff, kLand };
+enum class OperationKind { kNavigatePose, kTakeoff, kLand, kOta };
 
 struct PollResult {
   bool done = false;

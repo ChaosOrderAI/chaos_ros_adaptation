@@ -4,10 +4,12 @@
 // chaos_sdk::Robot implementation. Responses are exposed as read-only
 // attribute/dict views so the binding needs no ROS message marshalling.
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -198,6 +200,14 @@ geometry_msgs::msg::PoseStamped pose_from_python(const py::object & target)
 
 py::object feedback_view(const chaos_interfaces::action::NavigatePose::Feedback & feedback);
 py::object feedback_view(const chaos_interfaces::action::Flight::Feedback & feedback);
+py::object feedback_view(const chaos_interfaces::action::SoftwareUpdate::Feedback & feedback);
+
+template<typename T, typename = void>
+struct ResultHasApplied : std::false_type {};
+
+template<typename T>
+struct ResultHasApplied<T, std::void_t<decltype(std::declval<T &>().applied)>>
+: std::true_type {};
 
 /// One stamped pose as the nested view the rest of the binding uses.
 py::object pose_view(const geometry_msgs::msg::PoseStamped & pose)
@@ -260,6 +270,14 @@ py::object feedback_view(const chaos_interfaces::action::Flight::Feedback & feed
   });
 }
 
+py::object feedback_view(const chaos_interfaces::action::SoftwareUpdate::Feedback & feedback)
+{
+  return message_of({
+    {"phase", py::cast(feedback.phase)},
+    {"progress", py::cast(feedback.progress)},
+  });
+}
+
 /// Future wrapper around a native std::shared_future.
 ///
 /// Waiting happens with the GIL released so that feedback or service
@@ -312,12 +330,18 @@ public:
   explicit PyTask(std::shared_ptr<Robot::FlightTask> task)
   : flight_(std::move(task)) {}
 
+  explicit PyTask(std::shared_ptr<Robot::OtaTask> task)
+  : ota_(std::move(task)) {}
+
   bool accepted() const
   {
     if (navigation_) {
       return navigation_->accepted();
     }
-    return flight_ && flight_->accepted();
+    if (flight_) {
+      return flight_->accepted();
+    }
+    return ota_ && ota_->accepted();
   }
 
   std::string goal_id() const
@@ -325,7 +349,10 @@ public:
     if (navigation_) {
       return navigation_->goal_id();
     }
-    return flight_ ? flight_->goal_id() : std::string();
+    if (flight_) {
+      return flight_->goal_id();
+    }
+    return ota_ ? ota_->goal_id() : std::string();
   }
 
   std::string state() const
@@ -333,7 +360,10 @@ public:
     if (navigation_) {
       return chaos_sdk::task_state_name(navigation_->state());
     }
-    return flight_ ? chaos_sdk::task_state_name(flight_->state()) : "unknown";
+    if (flight_) {
+      return chaos_sdk::task_state_name(flight_->state());
+    }
+    return ota_ ? chaos_sdk::task_state_name(ota_->state()) : "unknown";
   }
 
   /// Terminal result of the action.
@@ -345,10 +375,13 @@ public:
     if (navigation_) {
       return convert(navigation_->result());
     }
-    if (!flight_) {
+    if (flight_) {
+      return convert(flight_->result());
+    }
+    if (!ota_) {
       return py::none();
     }
-    return convert(flight_->result());
+    return convert(ota_->result());
   }
 
   /// Compatibility alias of result() for call sites that used the rclpy
@@ -363,11 +396,16 @@ public:
         navigation_->result(),
         [](const auto & wrapped) {return convert_result(wrapped);}));
     }
-    if (!flight_) {
+    if (flight_) {
+      return py::cast(make_future(
+        flight_->result(),
+        [](const auto & wrapped) {return convert_result(wrapped);}));
+    }
+    if (!ota_) {
       return py::none();
     }
     return py::cast(make_future(
-      flight_->result(),
+      ota_->result(),
       [](const auto & wrapped) {return convert_result(wrapped);}));
   }
 
@@ -377,10 +415,13 @@ public:
     if (navigation_) {
       return cancel_outcome(navigation_->cancel());
     }
-    if (!flight_) {
+    if (flight_) {
+      return cancel_outcome(flight_->cancel());
+    }
+    if (!ota_) {
       return py::none();
     }
-    return cancel_outcome(flight_->cancel());
+    return cancel_outcome(ota_->cancel());
   }
   /// Compatibility alias of cancel() for call sites that used the rclpy
   /// naming.
@@ -394,11 +435,16 @@ public:
         navigation_->cancel(),
         [](const chaos_sdk::CancelOutcome & outcome) {return cancel_outcome_value(outcome);}));
     }
-    if (!flight_) {
+    if (flight_) {
+      return py::cast(make_future(
+        flight_->cancel(),
+        [](const chaos_sdk::CancelOutcome & outcome) {return cancel_outcome_value(outcome);}));
+    }
+    if (!ota_) {
       return py::none();
     }
     return py::cast(make_future(
-      flight_->cancel(),
+      ota_->cancel(),
       [](const chaos_sdk::CancelOutcome & outcome) {return cancel_outcome_value(outcome);}));
   }
 
@@ -419,6 +465,12 @@ private:
     out["message"] = wrapped.result ? wrapped.result->message : std::string();
     out["ros_goal_status"] = static_cast<int>(wrapped.code);
     out["state"] = chaos_sdk::task_state_name(state);
+    if (wrapped.result) {
+      using ResultT = typename std::decay_t<decltype(wrapped.result)>::element_type;
+      if constexpr (ResultHasApplied<ResultT>::value) {
+        out["applied"] = wrapped.result->applied;
+      }
+    }
     return out;
   }
 
@@ -457,6 +509,7 @@ private:
 
   std::shared_ptr<Robot::NavigationTask> navigation_;
   std::shared_ptr<Robot::FlightTask> flight_;
+  std::shared_ptr<Robot::OtaTask> ota_;
 };
 
 py::object describe_dict(const chaos_interfaces::srv::GetDescription::Response & response)
@@ -710,6 +763,21 @@ PYBIND11_MODULE(_chaos_sdk, module)
     },
     py::arg("feedback_callback") = py::none(), py::kw_only(),
     py::arg("ttl_s") = std::nullopt)
+  .def(
+    "ota", [](Robot & self, const std::string & artifact_id, const std::string & version,
+      const std::string & sha256, std::uint64_t size_bytes, const py::object & feedback_callback,
+      const std::optional<double> & ttl_s) {
+      return make_future(
+        self.ota(artifact_id, version, sha256, size_bytes,
+          feedback_of<chaos_interfaces::action::SoftwareUpdate>(feedback_callback), ttl_s),
+        [](const std::shared_ptr<Robot::OtaTask> & task) {
+          return py::cast(PyTask(task));
+        });
+    },
+    py::arg("artifact_id"), py::arg("version"), py::arg("sha256"), py::arg("size_bytes"),
+    py::arg("feedback_callback") = py::none(), py::kw_only(),
+    py::arg("ttl_s") = std::nullopt,
+    "Send a software-update goal. The runtime reports whether any bytes were applied.")
   .def("state", [](Robot & self) -> py::object {
       const auto state = self.state();
       if (!state) {

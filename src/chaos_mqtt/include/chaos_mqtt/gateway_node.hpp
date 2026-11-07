@@ -13,6 +13,7 @@
 
 #include "chaos_interfaces/action/flight.hpp"
 #include "chaos_interfaces/action/navigate_pose.hpp"
+#include "chaos_interfaces/action/software_update.hpp"
 #include "chaos_interfaces/msg/command_result.hpp"
 #include "chaos_interfaces/msg/robot_state.hpp"
 #include "chaos_interfaces/msg/velocity_command.hpp"
@@ -44,6 +45,7 @@ class GatewayNode : public rclcpp::Node, private ActionSink
 public:
   using Flight = chaos_interfaces::action::Flight;
   using NavigatePose = chaos_interfaces::action::NavigatePose;
+  using SoftwareUpdate = chaos_interfaces::action::SoftwareUpdate;
 
   explicit GatewayNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
@@ -118,6 +120,7 @@ private:
   ActionSlotPool<NavigatePose> navigation_pool_;
   ActionSlotPool<Flight> takeoff_pool_;
   ActionSlotPool<Flight> land_pool_;
+  ActionSlotPool<SoftwareUpdate> ota_pool_;
 
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr result_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr event_pub_;
@@ -132,6 +135,7 @@ private:
   rclcpp::Subscription<NavigatePose::Impl::FeedbackMessage>::SharedPtr navigation_feedback_sub_;
   rclcpp::Subscription<Flight::Impl::FeedbackMessage>::SharedPtr takeoff_feedback_sub_;
   rclcpp::Subscription<Flight::Impl::FeedbackMessage>::SharedPtr land_feedback_sub_;
+  rclcpp::Subscription<SoftwareUpdate::Impl::FeedbackMessage>::SharedPtr ota_feedback_sub_;
   rclcpp::TimerBase::SharedPtr expire_timer_;
 };
 

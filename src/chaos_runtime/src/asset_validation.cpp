@@ -27,7 +27,7 @@ const std::map<std::string, PluginSpec> & registry() {
       spec.option_names = {"kind"};
       spec.supported_capabilities = {
         "state", "motion.velocity", "motion.stop", "navigation.pose",
-        "flight.takeoff", "flight.land"};
+        "flight.takeoff", "flight.land", "system.ota"};
       spec.flight_only_for_air = true;
       rows.emplace(spec.plugin, spec);
     }

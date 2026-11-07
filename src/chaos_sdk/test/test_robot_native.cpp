@@ -19,6 +19,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 
 #include "chaos_interfaces/action/navigate_pose.hpp"
+#include "chaos_interfaces/action/software_update.hpp"
 #include "chaos_interfaces/msg/velocity_command.hpp"
 #include "chaos_interfaces/srv/control_lease.hpp"
 #include "chaos_interfaces/srv/get_description.hpp"
@@ -2619,6 +2620,103 @@ TEST_F(SdkTest, the_capture_of_a_timed_out_cancel_is_released_after_its_future_s
   EXPECT_TRUE(task->accepted());
   EXPECT_FALSE(task->goal_id().empty());
   EXPECT_EQ(chaos_sdk::TaskState::TIMED_OUT, task->state());
+}
+
+TEST(RobotOta, GoalFieldsReachTheServerAndTheResultStaysSimulated)
+{
+  ensure_init();
+  using SoftwareUpdate = chaos_interfaces::action::SoftwareUpdate;
+  auto server_node = std::make_shared<rclcpp::Node>("ota_sdk_server");
+  auto client_node = std::make_shared<rclcpp::Node>("ota_sdk_client");
+  struct Seen {
+    std::mutex mutex;
+    std::string artifact_id;
+    std::string version;
+    std::string sha256;
+    std::uint64_t size_bytes = 0;
+    std::string lease_token;
+  };
+  auto seen = std::make_shared<Seen>();
+  auto lease_server = server_node->create_service<chaos_interfaces::srv::ControlLease>(
+    "/robots/ota_sdk/control/lease",
+    [](const std::shared_ptr<chaos_interfaces::srv::ControlLease::Request> request,
+       std::shared_ptr<chaos_interfaces::srv::ControlLease::Response> response) {
+      response->success = true;
+      response->code = "OK";
+      response->token = "ota-token";
+      response->remaining_s = request->duration_s;
+    });
+  auto action_server = rclcpp_action::create_server<SoftwareUpdate>(
+    server_node, "/robots/ota_sdk/system/ota",
+    [](const rclcpp_action::GoalUUID &, std::shared_ptr<const SoftwareUpdate::Goal>) {
+      return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    },
+    [](const std::shared_ptr<rclcpp_action::ServerGoalHandle<SoftwareUpdate>>) {
+      return rclcpp_action::CancelResponse::ACCEPT;
+    },
+    [seen](std::shared_ptr<rclcpp_action::ServerGoalHandle<SoftwareUpdate>> handle) {
+      const auto goal = handle->get_goal();
+      {
+        const std::lock_guard<std::mutex> guard(seen->mutex);
+        seen->artifact_id = goal->artifact_id;
+        seen->version = goal->version;
+        seen->sha256 = goal->sha256;
+        seen->size_bytes = goal->size_bytes;
+        seen->lease_token = goal->lease_token;
+      }
+      auto result = std::make_shared<SoftwareUpdate::Result>();
+      result->success = true;
+      result->code = "SIMULATED";
+      result->message = "simulated";
+      result->applied = false;
+      handle->succeed(result);
+    });
+  auto executor = std::make_shared<rclcpp::executors::MultiThreadedExecutor>(
+    rclcpp::ExecutorOptions(), 2);
+  executor->add_node(server_node);
+  executor->add_node(client_node);
+  std::thread spin([executor]() {executor->spin();});
+  auto robot = std::make_shared<chaos_sdk::Robot>(client_node, "ota_sdk");
+  const std::string digest(64, 'd');
+  struct Join {
+    std::shared_ptr<chaos_sdk::Robot> robot;
+    std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor;
+    std::thread * spin = nullptr;
+    ~Join() {
+      if (robot) {
+        robot->close();
+      }
+      if (executor) {
+        executor->cancel();
+      }
+      if (spin != nullptr && spin->joinable()) {
+        spin->join();
+      }
+    }
+  } join{robot, executor, &spin};
+  auto lease = robot->acquire("operator", 5.0);
+  ASSERT_EQ(std::future_status::ready, lease.wait_for(10s));
+  ASSERT_TRUE(lease.get().success);
+  auto accepted = robot->ota("pkg.alpha", "1.2.3", digest, 4096);
+  ASSERT_EQ(std::future_status::ready, accepted.wait_for(10s));
+  auto task = accepted.get();
+  ASSERT_NE(nullptr, task);
+  ASSERT_TRUE(task->accepted());
+  ASSERT_EQ(std::future_status::ready, task->result().wait_for(10s));
+  const auto wrapped = task->result().get();
+  EXPECT_EQ(rclcpp_action::ResultCode::SUCCEEDED, wrapped.code);
+  ASSERT_NE(nullptr, wrapped.result);
+  EXPECT_TRUE(wrapped.result->success);
+  EXPECT_EQ("SIMULATED", wrapped.result->code);
+  EXPECT_FALSE(wrapped.result->applied);
+  const std::lock_guard<std::mutex> guard(seen->mutex);
+  EXPECT_EQ("pkg.alpha", seen->artifact_id);
+  EXPECT_EQ("1.2.3", seen->version);
+  EXPECT_EQ(digest, seen->sha256);
+  EXPECT_EQ(4096u, seen->size_bytes);
+  EXPECT_EQ("ota-token", seen->lease_token);
+  (void)lease_server;
+  (void)action_server;
 }
 
 }  // namespace

@@ -213,15 +213,15 @@ Colcon builds the declared core, interface and asset dependencies first:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log-cpp build --base-paths src \
+colcon --log-base log build --base-paths src \
   --packages-up-to chaos_data \
-  --build-base build-cpp --install-base install-cpp \
+  --build-base build --install-base install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST ROS_DOMAIN_ID=198 \
   colcon test --base-paths src --packages-select chaos_data \
-  --build-base build-cpp --install-base install-cpp
-colcon test-result --test-result-base build-cpp --verbose
+  --build-base build --install-base install
+colcon test-result --test-result-base build --verbose
 ```
 
 ## The verification

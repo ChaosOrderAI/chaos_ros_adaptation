@@ -159,9 +159,11 @@ public:
 
   rclcpp::Node::SharedPtr node() const {return node_;}
   int lease_calls() const {return lease_calls_;}
+  int goals() const {return goals_.load();}
   void set_lease_success(bool success) {lease_success_ = success;}
   void set_reject(bool reject) {reject_ = reject;}
   void set_hold_acceptance(bool hold) {hold_acceptance_ = hold;}
+  void set_cancel_accept(bool accept) {cancel_accept_ = accept;}
 
   template<typename ActionT>
   std::shared_ptr<ControlledAction<ActionT>> install()
@@ -193,14 +195,16 @@ private:
     return rclcpp_action::create_server<ActionT>(
       node_, name,
       [this](const rclcpp_action::GoalUUID &, std::shared_ptr<const typename ActionT::Goal>) {
+        ++goals_;
         if (hold_acceptance_) {
           std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
         return reject_ ? rclcpp_action::GoalResponse::REJECT :
                rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
       },
-      [](const std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>>) {
-        return rclcpp_action::CancelResponse::ACCEPT;
+      [this](const std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>>) {
+        return cancel_accept_ ? rclcpp_action::CancelResponse::ACCEPT :
+               rclcpp_action::CancelResponse::REJECT;
       },
       [this](std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>> handle) {
         std::shared_ptr<ControlledAction<ActionT>> controlled;
@@ -240,9 +244,11 @@ private:
   rclcpp::executors::MultiThreadedExecutor executor_{rclcpp::ExecutorOptions(), 4};
   std::thread spin_;
   std::atomic<int> lease_calls_{0};
+  std::atomic<int> goals_{0};
   std::atomic<bool> lease_success_{true};
   std::atomic<bool> reject_{false};
   std::atomic<bool> hold_acceptance_{false};
+  std::atomic<bool> cancel_accept_{true};
 };
 
 }  // namespace test

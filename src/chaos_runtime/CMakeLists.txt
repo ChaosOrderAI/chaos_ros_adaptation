@@ -58,6 +58,7 @@ add_library(chaos_runtime_core
   src/asset_validation.cpp
   src/coordinator.cpp
   src/observation.cpp
+  src/ota.cpp
   src/adapters/mock_adapter.cpp)
 target_compile_features(chaos_runtime_core PUBLIC cxx_std_17)
 target_include_directories(chaos_runtime_core PUBLIC
@@ -220,6 +221,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_humanoid_validation_mock_cpp test/test_humanoid_validation_mock.cpp)
   target_link_libraries(test_humanoid_validation_mock_cpp chaos_humanoid_ros)
   # The domain test links the ROS-free domain library only.
+  ament_add_gtest(test_ota_cpp test/test_ota_cpp.cpp)
+  target_link_libraries(test_ota_cpp chaos_runtime_core)
   ament_add_gtest(test_coordinator_cpp test/test_coordinator_cpp.cpp)
   target_link_libraries(test_coordinator_cpp chaos_runtime_core)
   ament_add_gtest(test_coordinator_observation_cpp test/test_coordinator_observation_cpp.cpp TIMEOUT 90)

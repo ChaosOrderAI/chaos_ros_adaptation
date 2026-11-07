@@ -81,14 +81,14 @@
 source /opt/ros/jazzy/setup.bash
 
 # 全新构建目录；只加载本次安装空间，不叠加旧 overlay
-colcon --log-base log-cpp build --base-paths src \
-  --build-base build-cpp --install-base install-cpp \
+colcon --log-base log build --base-paths src \
+  --build-base build --install-base install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 
 colcon test --packages-select chaos_assets chaos_bringup \
-  --build-base build-cpp --install-base install-cpp
-colcon test-result --test-result-base build-cpp --verbose
+  --build-base build --install-base install
+colcon test-result --test-result-base build --verbose
 ```
 
 Golden 配置测试先将包内绝对路径规范化，再独立复算摘要，因此普通安装和不同路径的 checkout 均可比较；不要求 `--symlink-install`。
@@ -96,15 +96,15 @@ Golden 配置测试先将包内绝对路径规范化，再独立复算摘要，�
 ### Sanitizer 构建
 
 ```bash
-colcon --log-base log-cpp-asan build --packages-select chaos_assets \
-  --build-base build-cpp-asan --install-base install-cpp-asan \
+colcon --log-base log-asan build --packages-select chaos_assets \
+  --build-base build-asan --install-base install-asan \
   --symlink-install \
   --cmake-args -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
     -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
 
-cd build-cpp-asan/chaos_assets
+cd build-asan/chaos_assets
 ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
   ctest -E chaos_assets_python
 ```
@@ -124,7 +124,7 @@ python3 -m pytest src/chaos_assets/test/test_python_bindings.py -q
 `benchmarks/consumer` 只 `find_package` 公开的 C++ 包并链接其导出 target，然后运行产物：
 
 ```bash
-benchmarks/verify_consumer.sh install-cpp
+benchmarks/verify_consumer.sh install
 ```
 
 导出的 target 不再引用内部 imported target：基于 pkg-config 的依赖以普通链接标志链接，`ament_export_dependencies` 发布 `nlohmann_json`、`yaml-cpp`、`ament_index_cpp` 和 `OpenSSL`。

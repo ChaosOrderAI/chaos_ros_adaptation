@@ -47,10 +47,10 @@ Xacro 参数用字典传给独立解释进程，不拼接 shell 命令。Xacro �
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log-cpp build --base-paths src \
-  --build-base build-cpp --install-base install-cpp \
+colcon --log-base log build --base-paths src \
+  --build-base build --install-base install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 
 # 校验两个模型并显示启动计划；不启动 ROS 节点
 ros2 launch chaos_bringup system.launch.py \

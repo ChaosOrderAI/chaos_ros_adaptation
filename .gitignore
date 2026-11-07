@@ -16,9 +16,12 @@ __pycache__/
 *.egg-info/
 generated/
 
-build-cpp*/
-install-cpp*/
-log-cpp*/
+build-*/
+install-*/
+log-*/
+
+# MuJoCo writes this next to the process working directory.
+MUJOCO_LOG.TXT
 
 # Local multi-model execution records and task state.
 /.claude-flow/

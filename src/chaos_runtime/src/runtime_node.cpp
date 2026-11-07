@@ -6,16 +6,20 @@
 #include <chrono>
 #include <exception>
 #include <functional>
+#include <type_traits>
 #include <utility>
 
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+
+#include "chaos_interfaces/action/software_update.hpp"
 
 #include "chaos_core/clock.hpp"
 #include "chaos_runtime/ros_stamp.hpp"
 #include "chaos_runtime/asset_config.hpp"
 #include "chaos_runtime/driver_deadline.hpp"
 #include "chaos_runtime/observation.hpp"
+#include "chaos_runtime/ota.hpp"
 #include "chaos_runtime/ros_adapters.hpp"
 #include "chaos_runtime/trace.hpp"
 
@@ -24,6 +28,7 @@ namespace chaos::runtime {
 namespace {
 using NavigatePose = chaos_interfaces::action::NavigatePose;
 using Flight = chaos_interfaces::action::Flight;
+using SoftwareUpdate = chaos_interfaces::action::SoftwareUpdate;
 
 // Fills a ROS pose from the ROS-free adapter snapshot. The header stamp and
 // frame stay with the caller, so the state channel keeps its publication-stamp
@@ -92,6 +97,9 @@ void fillActionResult(typename ActionT::Result & result,
   result.success = outcome.success;
   result.code = outcome.code;
   result.message = outcome.message;
+  if constexpr (std::is_same_v<ActionT, SoftwareUpdate>) {
+    result.applied = outcome.applied;
+  }
 }
 
 // Delivers a typed terminal result by aborting the goal with it.
@@ -119,6 +127,17 @@ public:
     auto feedback = std::make_shared<typename ActionT::Feedback>();
     fillFeedback(*feedback, progress, snapshot);
     handle_->publish_feedback(feedback);
+  }
+  void publishOtaFeedback(std::string_view phase, double progress) override {
+    if constexpr (std::is_same_v<ActionT, SoftwareUpdate>) {
+      auto feedback = std::make_shared<typename ActionT::Feedback>();
+      feedback->phase = std::string(phase);
+      feedback->progress = static_cast<float>(progress);
+      handle_->publish_feedback(feedback);
+    } else {
+      (void)phase;
+      (void)progress;
+    }
   }
   void succeed(const OperationResult & outcome) override {
     auto message = std::make_shared<typename ActionT::Result>();
@@ -160,6 +179,14 @@ void TypedGoalContext<Flight>::fillFeedback(
   Flight::Feedback & feedback, double progress,
   const AdapterSnapshot & snapshot) {
   feedback.altitude_m = snapshot.position[2];
+  feedback.progress = static_cast<float>(progress);
+}
+
+template <>
+void TypedGoalContext<SoftwareUpdate>::fillFeedback(
+  SoftwareUpdate::Feedback & feedback, double progress,
+  const AdapterSnapshot &) {
+  feedback.phase = "verifying";
   feedback.progress = static_cast<float>(progress);
 }
 
@@ -260,8 +287,9 @@ RobotRuntimeNode::RobotRuntimeNode(const rclcpp::NodeOptions & options)
 
   auto adapter = createAdapter(asset_.plugin, *this, asset_);
   adapter->update(0.0);
-  coordinator_ = std::make_unique<ControlCoordinator>(asset_, std::move(adapter),
-                                                      clocks_, observations_);
+  coordinator_ = std::make_unique<ControlCoordinator>(
+    asset_, std::move(adapter), clocks_, observations_,
+    std::make_unique<SimulatedOtaExecutor>());
 
   // Endpoints must be stored: rclcpp::Node keeps only weak references, so a
   // temporary returned here would be destroyed immediately and the endpoint
@@ -297,6 +325,7 @@ RobotRuntimeNode::RobotRuntimeNode(const rclcpp::NodeOptions & options)
                                  endpoint("navigation/to_pose"));
   makeActionServer<Flight>(OperationKind::kTakeoff, endpoint("flight/takeoff"));
   makeActionServer<Flight>(OperationKind::kLand, endpoint("flight/land"));
+  makeActionServer<SoftwareUpdate>(OperationKind::kOta, endpoint("system/ota"));
 
   // Steady-clock watchdog: control expiry must run even when /clock is
   // paused or jumps backwards. create_wall_timer is driven by the system
@@ -521,6 +550,11 @@ void RobotRuntimeNode::makeActionServer(OperationKind kind,
                             goal->target.pose.orientation.y,
                             goal->target.pose.orientation.z,
                             goal->target.pose.orientation.w};
+      } else if constexpr (std::is_same_v<ActionT, SoftwareUpdate>) {
+        view.artifact_id = goal->artifact_id;
+        view.version = goal->version;
+        view.sha256 = goal->sha256;
+        view.size_bytes = goal->size_bytes;
       } else {
         view.altitude_m = goal->altitude_m;
       }

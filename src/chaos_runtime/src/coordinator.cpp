@@ -12,6 +12,7 @@
 #include "chaos_core/clock.hpp"
 #include "chaos_core/time.hpp"
 #include "chaos_runtime/driver_deadline.hpp"
+#include "chaos_runtime/ota.hpp"
 
 namespace chaos::runtime {
 
@@ -31,6 +32,8 @@ const char * capabilityName(OperationKind kind) {
       return "flight.takeoff";
     case OperationKind::kLand:
       return "flight.land";
+    case OperationKind::kOta:
+      return "system.ota";
   }
   return "UNKNOWN";
 }
@@ -67,10 +70,13 @@ bool validTraceCode(std::string_view value) {
 }  // namespace
 
 ControlCoordinator::ControlCoordinator(
-  AssetConfig asset, std::unique_ptr<Adapter> adapter, Clocks clocks,
-  std::shared_ptr<ObservationEndpoint> observations)
+    AssetConfig asset, std::unique_ptr<Adapter> adapter, Clocks clocks,
+    std::shared_ptr<ObservationEndpoint> observations,
+    std::unique_ptr<OtaExecutor> ota_executor)
     : asset_(std::move(asset)),
       adapter_(std::move(adapter)),
+      ota_(ota_executor ? std::move(ota_executor)
+                       : std::make_unique<SimulatedOtaExecutor>()),
       clocks_(std::move(clocks)),
       observations_(std::move(observations)),
       limits_(asset_.limits),
@@ -651,6 +657,13 @@ ControlCoordinator::GoalDecision ControlCoordinator::goal(
         rejected("OUT_OF_RANGE", "Takeoff altitude exceeds max_altitude_m");
       }
       reservation.target = {altitude, 0.0, 0.0, 0.0};
+    } else if (kind == OperationKind::kOta) {
+      // Reject a bad package identity before the motion halt, so an invalid
+      // update request does not stop a command that was already running.
+      reservation.ota = OtaRequest{
+        request.artifact_id, request.version, request.sha256,
+        request.size_bytes};
+      ota_->validate(reservation.ota);
     } else {
       if (!std::isfinite(request.altitude_m) || request.altitude_m != 0) {
         rejected("INVALID_ARGUMENT", "Landing altitude_m must be zero");
@@ -788,24 +801,39 @@ OperationResult ControlCoordinator::runOperation(
         requireCapability(kind);
         requireReadyLocked();
         mine->deadline->require(clocks_.wall_ns(), clocks_.mono_ns());
-        emitTrace(capabilityName(kind), "invalidated", "OPERATION_STARTING");
-        adapter_->startOperation(kind, mine->target);
+        // An update is not a motion label. ControlTrace only records motion
+        // commands, so the training export never sees system.ota.
+        if (mine->kind == OperationKind::kOta) {
+          ota_->start(mine->ota);
+        } else {
+          emitTrace(capabilityName(kind), "invalidated", "OPERATION_STARTING");
+          adapter_->startOperation(kind, mine->target);
+        }
       }
     }
     while (true) {
       bool has_feedback = false;
+      bool ota_feedback = false;
+      bool finished_now = false;
       double progress = 0.0;
+      std::string phase;
       AdapterSnapshot snapshot;
       {
         std::lock_guard<std::mutex> guard(mutex_);
         if (closing_) {
-          result = {false, "SHUTDOWN", "Runtime stopped"};
+          if (mine->kind == OperationKind::kOta) {
+            ota_->cancel();
+          }
+          result = {false, "SHUTDOWN", "Runtime stopped", false};
           break;
         }
         if (ctx.isCancelRequested()) {
+          if (mine->kind == OperationKind::kOta) {
+            ota_->cancel();
+          }
           halt("CANCELED", "Action canceled by client");
           terminal = "canceled";
-          result = {false, "CANCELED", "Action canceled by client"};
+          result = {false, "CANCELED", "Action canceled by client", false};
           break;
         }
         if (mine->interrupted.has_value()) {
@@ -813,6 +841,9 @@ OperationResult ControlCoordinator::runOperation(
           // Cancellation is accepted before ROS exposes CANCELING. Wait one
           // iteration for the accepted transition.
           if (code != "CANCELED") {
+            if (mine->kind == OperationKind::kOta) {
+              ota_->cancel();
+            }
             rejected(code, message);
           }
         } else {
@@ -821,39 +852,60 @@ OperationResult ControlCoordinator::runOperation(
           if (clocks_.steady_s() - mine->start_s > limits_.action_timeout_s) {
             rejected("TIMEOUT", "Action exceeded action_timeout_s");
           }
-          const PollResult poll = adapter_->pollOperation();
-          snapshot = adapter_->snapshot();
-          progress = poll.progress;
-          has_feedback = true;
-          if (poll.done) {
-            terminal = poll.success ? "succeeded" : "aborted";
-            result = {poll.success, poll.code, poll.message};
-            // Finalize under the same lock as pollOperation so a new
-            // cancellation cannot slip between completion and the terminal
-            // state transition. The transition itself is delivered after
-            // the lock is released.
-            finishOperation(*mine, ctx, result, terminal);
-            break;
+          if (mine->kind == OperationKind::kOta) {
+            const OtaStatus poll = ota_->poll();
+            progress = poll.progress;
+            phase = poll.phase;
+            has_feedback = true;
+            ota_feedback = true;
+            if (poll.done) {
+              terminal = poll.success ? "succeeded" : "aborted";
+              result = {poll.success, poll.code, poll.message, poll.applied};
+              finishOperation(*mine, ctx, result, terminal);
+              finished_now = true;
+            }
+          } else {
+            const PollResult poll = adapter_->pollOperation();
+            snapshot = adapter_->snapshot();
+            progress = poll.progress;
+            has_feedback = true;
+            if (poll.done) {
+              terminal = poll.success ? "succeeded" : "aborted";
+              result = {poll.success, poll.code, poll.message};
+              // Finalize under the same lock as pollOperation so a new
+              // cancellation cannot slip between completion and the terminal
+              // state transition. The transition itself is delivered after
+              // the lock is released.
+              finishOperation(*mine, ctx, result, terminal);
+              break;
+            }
           }
         }
       }
       if (has_feedback) {
         try {
-          ctx.publishFeedback(progress, snapshot);
+          if (ota_feedback) {
+            ctx.publishOtaFeedback(phase, progress);
+          } else {
+            ctx.publishFeedback(progress, snapshot);
+          }
         } catch (...) {
           // Feedback is observability; a failing channel must not abort
           // the device operation.
         }
       }
+      if (finished_now) {
+        break;
+      }
       std::unique_lock<std::mutex> wait(mutex_);
       cv_.wait_for(wait, std::chrono::duration<double>(kTickWait));
     }
   } catch (const chaos::Rejected & error) {
-    result = {false, error.code(), error.message()};
+    result = {false, error.code(), error.message(), false};
   } catch (const std::exception & error) {
-    result = {false, "DRIVER_ERROR", error.what()};
+    result = {false, "DRIVER_ERROR", error.what(), false};
   } catch (...) {
-    result = {false, "DRIVER_ERROR", "unknown operation failure"};
+    result = {false, "DRIVER_ERROR", "unknown operation failure", false};
   }
   // Also finish failures raised outside the polling loop (shutdown, expiry,
   // interrupts). Identity and active-state checks make repeated finalization

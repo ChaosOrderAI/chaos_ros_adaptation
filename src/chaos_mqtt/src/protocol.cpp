@@ -1,6 +1,10 @@
 #include "chaos_mqtt/protocol.hpp"
 
+#include "chaos_core/ota_wire.hpp"
+
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <regex>
 #include <vector>
 
@@ -179,6 +183,36 @@ Json vector(const Json & value, const std::vector<const char *> & axes,
   return result;
 }
 
+std::int64_t bounded_integer(
+  const Json & value, const char * field_name, std::int64_t minimum, std::int64_t maximum)
+{
+  if (value.is_boolean() || !value.is_number_integer()) {
+    throw CommandError(
+      "INVALID_ARGUMENT", std::string(field_name) + " must be an integer");
+  }
+  std::int64_t parsed = 0;
+  if (value.is_number_unsigned()) {
+    const auto unsigned_value = value.get<std::uint64_t>();
+    if (unsigned_value >
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+    {
+      throw CommandError(
+        "INVALID_ARGUMENT", std::string(field_name) + " is out of range");
+    }
+    parsed = static_cast<std::int64_t>(unsigned_value);
+  } else {
+    parsed = value.get<std::int64_t>();
+  }
+  if (parsed < minimum || parsed > maximum) {
+    throw CommandError(
+      "INVALID_ARGUMENT", std::string(field_name) + " is out of range");
+  }
+  return parsed;
+}
+
+using chaos::isOtaSha256;
+using chaos::isOtaToken;
+
 bool has_capability(const std::vector<std::string> & capabilities, const std::string & name)
 {
   for (const auto & capability : capabilities) {
@@ -227,6 +261,7 @@ const std::unordered_map<std::string, std::optional<std::string>> kCommandCapabi
   {"navigation.to_pose", "navigation.pose"},
   {"flight.takeoff", "flight.takeoff"},
   {"flight.land", "flight.land"},
+  {"system.ota", "system.ota"},
 };
 
 Json wire_value(const Json & value)
@@ -385,6 +420,33 @@ Command parse_command(
     static const Json kDefaultAltitude = 0.0;
     arguments["altitude_m"] = number(member_or(payload, "altitude_m", kDefaultAltitude),
         "altitude_m", 0, 10000);
+  } else if (name == "system.ota") {
+    allowed.push_back("artifact_id");
+    allowed.push_back("version");
+    allowed.push_back("sha256");
+    allowed.push_back("size_bytes");
+    const std::string artifact_id = nonempty(member(payload, "artifact_id"), "artifact_id");
+    const std::string version = nonempty(member(payload, "version"), "version");
+    const std::string sha256 = nonempty(member(payload, "sha256"), "sha256");
+    if (!isOtaToken(artifact_id)) {
+      throw CommandError(
+        "INVALID_ARGUMENT",
+        "artifact_id must be 1..128 letters, digits, '.', '_' or '-'");
+    }
+    if (!isOtaToken(version)) {
+      throw CommandError(
+        "INVALID_ARGUMENT",
+        "version must be 1..128 letters, digits, '.', '_' or '-'");
+    }
+    if (!isOtaSha256(sha256)) {
+      throw CommandError(
+        "INVALID_ARGUMENT", "sha256 must be 64 lowercase hex characters");
+    }
+    arguments["artifact_id"] = artifact_id;
+    arguments["version"] = version;
+    arguments["sha256"] = sha256;
+    arguments["size_bytes"] = bounded_integer(
+      member(payload, "size_bytes"), "size_bytes", 1, 2147483648LL);
   }
   fields(payload, allowed, "payload");
   return Command{request_id, name, deadline_ms, std::move(arguments)};

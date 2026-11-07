@@ -42,6 +42,7 @@
 #include "chaos_runtime/control.hpp"
 #include "chaos_runtime/observation.hpp"
 #include "chaos_runtime/observation_types.hpp"
+#include "chaos_runtime/ota.hpp"
 #include "chaos_runtime/trace.hpp"
 
 namespace chaos::runtime {
@@ -114,12 +115,20 @@ struct GoalRequestView {
   std::array<double, 4> orientation{0.0, 0.0, 0.0, 1.0};
   // flight.takeoff / flight.land
   double altitude_m = 0.0;
+  // system.ota
+  std::string artifact_id;
+  std::string version;
+  std::string sha256;
+  std::uint64_t size_bytes = 0;
 };
 
 struct OperationResult {
   bool success = false;
   std::string code = "INTERNAL_ERROR";
   std::string message;
+  // True only after an update executor commits bytes. The simulated
+  // executor never sets it.
+  bool applied = false;
 };
 
 // Implemented by the ROS facade for one accepted goal. The coordinator
@@ -132,6 +141,11 @@ public:
   virtual bool isActive() = 0;
   virtual void publishFeedback(double progress,
                                const AdapterSnapshot & snapshot) = 0;
+  // Phase samples of a software update. Motion goals do not call it.
+  virtual void publishOtaFeedback(std::string_view phase, double progress) {
+    (void)phase;
+    (void)progress;
+  }
   virtual void succeed(const OperationResult & result) = 0;
   virtual void canceled(const OperationResult & result) = 0;
   virtual void abort(const OperationResult & result) = 0;
@@ -153,9 +167,12 @@ public:
   // a startup failure and never a silently disabled observation channel.
   // A caller that wants no output registers an empty owned sink bundle
   // through the real service and keeps the endpoint it gets back.
+  // `ota` replaces the update executor. A null pointer installs the
+  // simulated executor, which validates the request and never writes bytes.
   ControlCoordinator(AssetConfig asset, std::unique_ptr<Adapter> adapter,
                      Clocks clocks,
-                     std::shared_ptr<ObservationEndpoint> observations);
+                     std::shared_ptr<ObservationEndpoint> observations,
+                     std::unique_ptr<OtaExecutor> ota = nullptr);
 
   // Non-copyable; the mutex and cv own the synchronization.
   ControlCoordinator(const ControlCoordinator &) = delete;
@@ -229,6 +246,7 @@ private:
     std::uint64_t id = 0;
     OperationKind kind;
     std::array<double, 4> target{0.0, 0.0, 0.0, 0.0};
+    OtaRequest ota;
     std::optional<std::pair<std::string, std::string>> interrupted;
     double start_s = 0.0;
     std::string lease_token;
@@ -325,6 +343,8 @@ private:
 
   AssetConfig asset_;
   std::unique_ptr<Adapter> adapter_;
+  // Only called while mutex_ is held, from the single action worker.
+  std::unique_ptr<OtaExecutor> ota_;
   Clocks clocks_;
   // The only observation handle of the coordinator. It owns no sink: the
   // service keeps the last reference to the registered publishers and

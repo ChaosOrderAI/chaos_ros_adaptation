@@ -22,7 +22,7 @@ Python 源码、ROS 接口定义与资产格式共用；生成的 ROS 消息扩�
 
 建议在目标设备或相同架构、相同系统的构建环境中构建。每种架构只安装与该机器相关的厂商驱动；mock 和另一类机器人的 SDK 不需要在实机启动时加载。具体厂商栈支持的硬件/系统还需要各自核对，使用 Jazzy 不代表现有 Humble 驱动或 PSDK 已经完成迁移。
 
-在目标机完成 ROS 2 Jazzy 及 README 中的构建依赖安装后，从 `chaos_ws` 执行。工作空间包含 **9 个生产 ROS 包和 1 个基准包**，业务运行时全部为原生 C++17；`src/chaos_mqtt` 通过 ament_cmake 与 ament_cmake_python 同时构建**原生 C++ 业务网关**和 `transport/` 下的 Rust 传输；构建机还需 Rust/Cargo、`build-essential`、CMake、`pkg-config` 和 `libclang-dev`：
+在目标机完成 ROS 2 Jazzy 及 README 中的构建依赖安装后，从 `chaos_ws` 执行。工作空间包含 **10 个生产 ROS 包和 1 个基准包**，业务运行时全部为原生 C++17；`src/chaos_mqtt` 通过 ament_cmake 与 ament_cmake_python 同时构建**原生 C++ 业务网关**和 `transport/` 下的 Rust 传输；构建机还需 Rust/Cargo、`build-essential`、CMake、`pkg-config` 和 `libclang-dev`：
 
 ```bash
 source /opt/ros/jazzy/setup.bash

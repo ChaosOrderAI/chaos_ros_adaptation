@@ -9,7 +9,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotState.msg" "msg/CommandResult.msg" "msg/VelocityCommand.msg" "msg/ControlTrace.msg"
   "msg/DriverVelocityCommand.msg"
   "srv/GetDescription.srv" "srv/ControlLease.srv" "srv/Stop.srv"
-  "action/NavigatePose.action" "action/Flight.action"
+  "action/NavigatePose.action" "action/Flight.action" "action/SoftwareUpdate.action"
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs)
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

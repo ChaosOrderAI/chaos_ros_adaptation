@@ -37,7 +37,10 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
+#include <type_traits>
+#include <utility>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -47,6 +50,13 @@
 
 namespace chaos_mqtt
 {
+
+template<typename T, typename = void>
+struct ResultHasApplied : std::false_type {};
+
+template<typename T>
+struct ResultHasApplied<T, std::void_t<decltype(std::declval<T &>().applied)>>
+: std::true_type {};
 
 /// Terminal information of one action goal, normalised from the ROS action
 /// protocol so the gateway stays independent of the concrete action type.
@@ -67,6 +77,9 @@ struct ActionOutcome
   std::string code;
   /// Application level result message (`result.message`).
   std::string message;
+  /// Set only when the action result has an `applied` field. Other actions
+  /// leave it empty so their terminal JSON stays unchanged.
+  std::optional<bool> applied;
   /// `action_msgs/GoalStatus` value of the terminal status.
   int ros_goal_status = 0;
   /// Hexadecimal UUID of the goal; empty while the goal is unacknowledged.
@@ -314,6 +327,11 @@ private:
       wrapped.code == rclcpp_action::ResultCode::SUCCEEDED && wrapped.result->success;
     outcome.code = outcome.known ? wrapped.result->code : std::string("UNKNOWN");
     outcome.message = outcome.known ? wrapped.result->message : std::string();
+    if (outcome.known) {
+      if constexpr (ResultHasApplied<typename ActionT::Result>::value) {
+        outcome.applied = wrapped.result->applied;
+      }
+    }
     // rclcpp_action::ResultCode mirrors the action_msgs/GoalStatus values.
     outcome.ros_goal_status = static_cast<int>(wrapped.code);
     outcome.goal_id_hex = goal_id_hex_;

@@ -233,6 +233,7 @@ struct Robot::Impl
 
   ActionSlotPool<chaos_interfaces::action::NavigatePose> navigation_slots{kActionSlotsPerName};
   ActionSlotPool<chaos_interfaces::action::Flight> flight_slots{kActionSlotsPerName};
+  ActionSlotPool<chaos_interfaces::action::SoftwareUpdate> ota_slots{kActionSlotsPerName};
 
   void apply_description(const chaos_interfaces::srv::GetDescription::Response & response)
   {
@@ -626,13 +627,15 @@ std::size_t Robot::max_pending() const
 std::size_t Robot::action_client_count() const
 {
   const std::lock_guard<std::mutex> guard(impl_->mutex);
-  return impl_->navigation_slots.live_clients() + impl_->flight_slots.live_clients();
+  return impl_->navigation_slots.live_clients() + impl_->flight_slots.live_clients() +
+         impl_->ota_slots.live_clients();
 }
 
 std::size_t Robot::action_slot_count() const
 {
   const std::lock_guard<std::mutex> guard(impl_->mutex);
-  return impl_->navigation_slots.size() + impl_->flight_slots.size();
+  return impl_->navigation_slots.size() + impl_->flight_slots.size() +
+         impl_->ota_slots.size();
 }
 
 std::shared_future<chaos_interfaces::srv::GetDescription::Response> Robot::describe()
@@ -861,6 +864,25 @@ std::shared_future<std::shared_ptr<Robot::FlightTask>> Robot::land(
     impl_->namespace_ + "/flight/land", goal, std::move(feedback_callback));
 }
 
+std::shared_future<std::shared_ptr<Robot::OtaTask>> Robot::ota(
+  const std::string & artifact_id,
+  const std::string & version,
+  const std::string & sha256,
+  std::uint64_t size_bytes,
+  std::function<void (SoftwareUpdate::Feedback)> feedback_callback,
+  std::optional<double> ttl_s)
+{
+  SoftwareUpdate::Goal goal;
+  goal.expires_at = deadline(ttl_s);
+  goal.lease_token = require_token();
+  goal.artifact_id = artifact_id;
+  goal.version = version;
+  goal.sha256 = sha256;
+  goal.size_bytes = size_bytes;
+  return send_goal<SoftwareUpdate>(
+    impl_->namespace_ + "/system/ota", goal, std::move(feedback_callback));
+}
+
 std::string Robot::lease_token() const
 {
   const std::lock_guard<std::mutex> guard(impl_->mutex);
@@ -1062,6 +1084,8 @@ std::shared_future<std::shared_ptr<ActionTask<ActionT>>> Robot::send_goal(
     }
     if constexpr (std::is_same_v<ActionT, chaos_interfaces::action::NavigatePose>) {
       pool = &impl_->navigation_slots;
+    } else if constexpr (std::is_same_v<ActionT, chaos_interfaces::action::SoftwareUpdate>) {
+      pool = &impl_->ota_slots;
     } else {
       pool = &impl_->flight_slots;
     }
@@ -1600,5 +1624,9 @@ template std::shared_future<std::shared_ptr<Robot::FlightTask>>
 Robot::send_goal<chaos_interfaces::action::Flight>(
   const std::string &, chaos_interfaces::action::Flight::Goal,
   std::function<void (chaos_interfaces::action::Flight::Feedback)>);
+template std::shared_future<std::shared_ptr<Robot::OtaTask>>
+Robot::send_goal<chaos_interfaces::action::SoftwareUpdate>(
+  const std::string &, chaos_interfaces::action::SoftwareUpdate::Goal,
+  std::function<void (chaos_interfaces::action::SoftwareUpdate::Feedback)>);
 
 }  // namespace chaos_sdk

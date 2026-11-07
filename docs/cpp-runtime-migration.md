@@ -92,14 +92,14 @@ SDK 是官方仓库，固定在提交 `d1abf001220d3e5f59e00a0c4aaa595e00089a4a`
 ```bash
 source /opt/ros/jazzy/setup.bash
 
-colcon --log-base log-cpp-sdk build --base-paths src \
-  --build-base build-cpp-sdk \
-  --install-base install-cpp-sdk \
+colcon --log-base log-sdk build --base-paths src \
+  --build-base build-sdk \
+  --install-base install-sdk \
   --symlink-install \
   --cmake-args -DCHAOS_GO2_WITH_UNITREE_SDK=ON \
                -DCMAKE_PREFIX_PATH="$UNITREE_SDK2_PREFIX"
 
-source install-cpp-sdk/local_setup.bash
+source install-sdk/local_setup.bash
 ```
 
 后端只通过 `find_package(unitree_sdk2 CONFIG REQUIRED)` 及其导出的 target 消费厂商库，不手写 include 或库路径。SDK-ON 的 `go2_driver` 含 `unitree::robot` 符号；SDK-OFF 的二进制不含，并报告 `{"unitree_sdk2":false}`。
@@ -122,14 +122,14 @@ export LD_LIBRARY_PATH="$UNITREE_SDK2_PREFIX/lib:/opt/ros/jazzy/lib/x86_64-linux
 source /opt/ros/jazzy/setup.bash
 
 # 全新构建目录；只加载本次安装空间，不叠加旧 overlay
-colcon --log-base log-cpp build --base-paths src \
-  --build-base build-cpp --install-base install-cpp \
+colcon --log-base log build --base-paths src \
+  --build-base build --install-base install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 
 colcon test --packages-select chaos_runtime chaos_sensors \
-  --build-base build-cpp --install-base install-cpp
-colcon test-result --test-result-base build-cpp --verbose
+  --build-base build --install-base install
+colcon test-result --test-result-base build --verbose
 ```
 
 覆盖范围：

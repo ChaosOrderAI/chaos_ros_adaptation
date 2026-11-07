@@ -83,6 +83,29 @@ TEST(AssetValidation, Go2RequiresEveryExplicitOption) {
     << error;
 }
 
+TEST(AssetValidation, MockMayClaimSimulatedOtaAndRealPluginsMayNot) {
+  std::string error;
+  EXPECT_TRUE(validateAssetJson(
+    assetJson("mock", "ugv", R"("state","system.ota")", R"("kind":"ugv")"),
+    error)) << error;
+  EXPECT_FALSE(validateAssetJson(
+    assetJson("unitree_go2", "quadruped", R"("state","system.ota")",
+              R"("odom_topic":"/a/odom","cmd_vel_topic":"/a/cmd",)"
+              R"("network_interface":"lo","dds_domain_id":0,)"
+              R"("sport_state_topic":"rt/sport","velocity_frame":"body")"),
+    error));
+  EXPECT_NE(error.find("system.ota"), std::string::npos) << error;
+  EXPECT_FALSE(validateAssetJson(
+    assetJson("humanoid", "humanoid", R"("state","system.ota")",
+              R"("backend":"booster_t2","network_interface":"lo","dds_domain_id":0,)"
+              R"("state_topic":"rt/odom","robot_state_topic":"rt/robot_states",)"
+              R"("cmd_vel_topic":"/t2/cmd_vel","odom_topic":"/t2/odom",)"
+              R"("velocity_frame":"body","source_odom_frame":"odom",)"
+              R"("source_base_frame":"base_link")"),
+    error));
+  EXPECT_NE(error.find("system.ota"), std::string::npos) << error;
+}
+
 TEST(AssetValidation, MalformedJsonIsRejectedWithAReason) {
   std::string error;
   EXPECT_FALSE(validateAssetJson("{not json", error));

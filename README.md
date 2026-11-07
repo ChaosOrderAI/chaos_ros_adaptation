@@ -7,6 +7,7 @@
 - [架构与当前能力边界](docs/architecture.md)
 - [配置、控制、遥测与训练数据流转](docs/data-flow.md)
 - [C++17 迁移后的最终设计与可移植构建命令](docs/cpp-migration.md)
+- [行为树节点：导航、起飞与降落](docs/behavior-tree.md)
 - [Kuavo 上游参考与采用范围](docs/upstream-reference.md)
 - [构建与验证记录](docs/validation.md)
 - [机载部署、架构构建与 systemd](docs/onboard-deployment.md)
@@ -23,7 +24,7 @@
 
 ## 开发环境构建与启动
 
-工作空间包含 **9 个生产 ROS 包、1 个可选仿真包和 1 个基准包**，业务运行时全部为原生 C++17 实现（Python 仅保留 launch 胶水、薄绑定、第三方 Xacro 桥接及工具/测试脚本）。
+工作空间包含 **10 个生产 ROS 包、1 个可选仿真包和 1 个基准包**，业务运行时全部为原生 C++17 实现（Python 仅保留 launch 胶水、薄绑定、第三方 Xacro 桥接及工具/测试脚本）。
 
 运行时依赖 ROS 2 Jazzy、colcon、ament_cmake/ament_cmake_python、rclcpp、geometry_msgs、std_msgs、sensor_msgs、nav_msgs、diagnostic_msgs、tf2_ros、action_msgs、rosidl_default_generators、rosbag2_cpp、rosbag2_storage、rosbag2_transport、rosidl_typesupport_introspection_cpp、nlohmann_json、yaml-cpp、Boost 头文件、OpenSSL。`chaos_mqtt` 内置的 Rust 传输还需 Rust/Cargo 与 `build-essential`、`cmake`、`pkg-config`、`libclang-dev`。模型导入使用 robot_state_publisher、urdfdom；Xacro 模型另需 xacro。现有厂商程序无需参与 mock 构建。
 
@@ -36,6 +37,7 @@ python3-venv python3-yaml python3-pytest
 ros-jazzy-rosbag2-cpp ros-jazzy-rosbag2-storage-mcap ros-jazzy-rosbag2-storage-sqlite3
 ros-jazzy-keyboard-handler ros-jazzy-rosidl-typesupport-introspection-cpp
 ros-jazzy-robot-state-publisher ros-jazzy-urdfdom ros-jazzy-xacro
+ros-jazzy-behaviortree-cpp
 ```
 
 NumPy **不是生产依赖**：原生导出用 C++ 写出 NPY 数组，运行期不加载 Python 科学栈。只有仓库自带的 smoke test 脚本用 Python 读取 NPY 并做断言，需要 `python3-numpy`。真实时间质量检查使用 chrony 的 `chronyc`。这些依赖需要在部署环境准备，代码不会自动安装或修改系统授时服务。
@@ -46,12 +48,12 @@ NumPy **不是生产依赖**：原生导出用 C++ 写出 NPY 数组，运行期
 source /opt/ros/jazzy/setup.bash
 
 # 全新构建目录：build-<tag> / install-<tag> / log-<tag>
-colcon --log-base log-cpp build --base-paths src \
-  --build-base build-cpp --install-base install-cpp \
+colcon --log-base log build --base-paths src \
+  --build-base build --install-base install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 # 只加载本次安装空间，不要再 source 旧的 install/setup.bash
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 
 # 先检查计划：不启动 ROS 节点、驱动或 MQTT 连接
 ros2 launch chaos_bringup system.launch.py dry_run:=true
@@ -66,7 +68,7 @@ ros2 launch chaos_bringup system.launch.py
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 export ROS_DOMAIN_ID=87
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ros2 service call /robots/vehicle_001/description chaos_interfaces/srv/GetDescription '{}'
@@ -87,6 +89,7 @@ src/
   chaos_bringup/      统一 launch 规划器与 launch 胶水
   chaos_runtime/      每资产运行时、后端适配契约与 Go2 驱动
   chaos_sdk/          原生 C++ 异步客户端（薄 Python 绑定）
+  chaos_bt/           BehaviorTree.CPP 节点：导航、起飞、降落的适配器
   chaos_mqtt/         一个 ROS 包，统一构建与安装原生 C++ 网关和 Rust 传输
     transport/        完整 Rust 传输源码及 Cargo 锁文件（导入的第三方实现，不在本轮修改范围）
   chaos_sensors/      模拟传感器、数据新鲜度诊断与传感器目录
@@ -145,11 +148,11 @@ ros2 launch chaos_bringup system.launch.py \
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log-cpp-sdk build --base-paths src \
-  --build-base build-cpp-sdk --install-base install-cpp-sdk --symlink-install \
+colcon --log-base log-sdk build --base-paths src \
+  --build-base build-sdk --install-base install-sdk --symlink-install \
   --cmake-args -DCHAOS_GO2_WITH_UNITREE_SDK=ON \
                -DCMAKE_PREFIX_PATH="$UNITREE_SDK2_PREFIX"
-source install-cpp-sdk/local_setup.bash
+source install-sdk/local_setup.bash
 ```
 
 运行时必须让厂商库的搜索路径**排在 ROS 库目录之前**，否则会解析到与厂商 `libddscxx` 不配套的 ROS `libddsc`，形成版本错配：
@@ -243,13 +246,13 @@ ros2 run chaos_data data_export /data/analysis/profile.yaml \
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source install-cpp/local_setup.bash
+source install/local_setup.bash
 
 # 单元测试：按包选择，避免把未参与本次构建的包算进来
 colcon test --packages-select chaos_core chaos_interfaces chaos_assets \
-  chaos_bringup chaos_runtime chaos_sensors chaos_sdk chaos_mqtt chaos_data \
-  --build-base build-cpp --install-base install-cpp
-colcon test-result --test-result-base build-cpp --verbose
+  chaos_bringup chaos_runtime chaos_sensors chaos_sdk chaos_bt chaos_mqtt chaos_data \
+  --build-base build --install-base install
+colcon test-result --test-result-base build --verbose
 
 # Python 侧 smoke test（需要 python3-numpy 读取导出的 NPY）
 python3 scripts/smoke_test.py

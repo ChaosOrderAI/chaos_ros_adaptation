@@ -11,13 +11,13 @@
   <buildtool_depend>ament_cmake_gtest</buildtool_depend>
 
   <depend>chaos_sdk</depend>
+  <depend>chaos_interfaces</depend>
   <depend>geometry_msgs</depend>
   <depend>behaviortree_cpp</depend>
 
   <test_depend>ament_cmake_test</test_depend>
   <test_depend>rclcpp</test_depend>
   <test_depend>rclcpp_action</test_depend>
-  <test_depend>chaos_interfaces</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

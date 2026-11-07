@@ -55,6 +55,29 @@ TEST(AdapterConfig, GeneratorIsPureScopedAndHasNoLegacyRoutes)
   EXPECT_EQ(config["action_timeout_ms"], 360000);
 }
 
+TEST(AdapterConfig, OtaRouteIsEmittedOnlyWhenTheAssetClaimsIt)
+{
+  const json profile{{"config", json::object()}};
+  json asset{
+    {"id", "vehicle_001"},
+    {"namespace", "/robots/vehicle_001"},
+    {"capabilities", json::array({"state", "system.ota"})},
+  };
+  const json config = build_adapter_config(asset, profile);
+  std::set<std::string> commands;
+  for (const auto & route : config["routes"]) {
+    commands.insert(route["command"].get<std::string>());
+  }
+  EXPECT_EQ(commands.count("system.ota"), 1u) << config["routes"].dump();
+  EXPECT_EQ(commands.count("system.describe"), 1u) << config["routes"].dump();
+  asset["capabilities"] = json::array({"state"});
+  commands.clear();
+  for (const auto & route : build_adapter_config(asset, profile)["routes"]) {
+    commands.insert(route["command"].get<std::string>());
+  }
+  EXPECT_EQ(commands.count("system.ota"), 0u);
+}
+
 TEST(AdapterConfig, GeneratorCannotExpireAcceptedActionsBeforeGatewayTimeout)
 {
   const json asset{{"id", "unit"}, {"namespace", "/robots/unit"}};

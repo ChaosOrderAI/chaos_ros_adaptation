@@ -33,21 +33,21 @@
 ```bash
 source /opt/ros/jazzy/setup.bash
 # 默认构建（不含厂商 SDK）：使用全新 build / install / log 目录
-colcon --log-base log-cpp-humanoid build --base-paths src \
-  --build-base build-cpp-humanoid --install-base install-cpp-humanoid \
+colcon --log-base log-humanoid build --base-paths src \
+  --build-base build-humanoid --install-base install-humanoid \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
-source install-cpp-humanoid/local_setup.bash
+source install-humanoid/local_setup.bash
 ```
 
 开启 SDK 时另开终端，只加载系统 ROS 环境，并使用另一套构建目录：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log-cpp-humanoid-sdk build --base-paths src \
-  --build-base build-cpp-humanoid-sdk --install-base install-cpp-humanoid-sdk \
+colcon --log-base log-humanoid-sdk build --base-paths src \
+  --build-base build-humanoid-sdk --install-base install-humanoid-sdk \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DCHAOS_HUMANOID_WITH_BOOSTER_SDK=ON \
   -DBOOSTER_SDK_ROOT=/absolute/sdk
-source install-cpp-humanoid-sdk/local_setup.bash
+source install-humanoid-sdk/local_setup.bash
 # 构建能力自证（不需要连接机器人）
 ros2 run chaos_runtime humanoid_driver --build-capabilities
 # 默认构建输出 {"booster_sdk":false}；SDK-ON 输出 {"booster_sdk":true}
@@ -103,10 +103,10 @@ ros2 launch chaos_bringup system.launch.py \
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source install-cpp-humanoid/local_setup.bash
+source install-humanoid/local_setup.bash
 colcon test --base-paths src --packages-select chaos_assets chaos_runtime chaos_bringup \
-  --build-base build-cpp-humanoid --install-base install-cpp-humanoid
-colcon test-result --test-result-base build-cpp-humanoid --verbose
+  --build-base build-humanoid --install-base install-humanoid
+colcon test-result --test-result-base build-humanoid --verbose
 python3 scripts/humanoid_smoke_test.py
 ```
 

@@ -22,6 +22,7 @@
   <depend>std_msgs</depend>
   <depend>builtin_interfaces</depend>
   <depend>geometry_msgs</depend>
+  <depend>chaos_core</depend>
   <depend>chaos_interfaces</depend>
   <depend>rcl</depend>
   <depend>rcl_action</depend>

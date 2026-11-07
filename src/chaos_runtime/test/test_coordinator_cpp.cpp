@@ -42,6 +42,7 @@
 
 #include "chaos_runtime/adapters/mock_adapter.hpp"
 #include "chaos_runtime/coordinator.hpp"
+#include "chaos_runtime/ota.hpp"
 #include "chaos_runtime/observation.hpp"
 #include "chaos_runtime/trace.hpp"
 
@@ -687,6 +688,11 @@ public:
   void publishFeedback(double, const AdapterSnapshot &) override {
     ++feedbacks;
   }
+  void publishOtaFeedback(std::string_view phase, double) override {
+    last_phase = std::string(phase);
+    ++feedbacks;
+  }
+  std::string last_phase;
   void succeed(const OperationResult & outcome) override {
     ++successes;
     last = outcome;
@@ -805,13 +811,17 @@ struct Harness {
 
   explicit Harness(bool uav = false,
                    std::unique_ptr<Adapter> adapter = nullptr,
-                   UserSinks sinks = UserSinks())
+                   UserSinks sinks = UserSinks(),
+                   bool enable_ota = false)
       : rig(sinks) {
     AssetConfig asset = mockAsset();
     if (uav) {
       asset.kind = "uav";
       asset.capabilities.insert("flight.takeoff");
       asset.capabilities.insert("flight.land");
+    }
+    if (enable_ota) {
+      asset.capabilities.insert("system.ota");
     }
     Clocks clocks;
     clocks.steady_s = [this] {
@@ -2122,6 +2132,125 @@ TEST(CoordinatorDeadline, PersistentDriverClockFailureDoesNotEscapeVelocity) {
   for (double value : capturing->snapshot().velocity) {
     EXPECT_DOUBLE_EQ(value, 0.0);
   }
+}
+
+GoalRequestView otaGoal(const std::string & token) {
+  GoalRequestView goal;
+  goal.lease_token = token;
+  goal.artifact_id = "pkg.alpha";
+  goal.version = "1.2.3";
+  goal.sha256 = std::string(64, 'a');
+  goal.size_bytes = 128;
+  return goal;
+}
+
+TEST(CoordinatorOta, SimulatedCompletionDoesNotApplyOrTrace) {
+  Harness harness(false, nullptr, {}, true);
+  const LeaseResponseView acquired =
+    harness.coordinator->lease(leaseRequest("acquire", "op-1"));
+  ASSERT_TRUE(acquired.success);
+  int token = 0;
+  ASSERT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
+                                      &token),
+            ControlCoordinator::GoalDecision::kAccept);
+  harness.coordinator->accepted(&token, &token);
+  FakeGoalContext ctx;
+  const OperationResult result =
+    runWithWatchdog(harness, OperationKind::kOta, &token, ctx);
+  EXPECT_TRUE(result.success);
+  EXPECT_EQ(result.code, "SIMULATED");
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(ctx.successes, 1);
+  EXPECT_EQ(ctx.last_phase, "staging");
+  harness.finish();
+  for (const TraceEvent & event : harness.rig.traces()->snapshot()) {
+    EXPECT_NE(event.command, "system.ota");
+  }
+}
+
+TEST(CoordinatorOta, MotionAndUpdateShareOneSlot) {
+  Harness harness(false, nullptr, {}, true);
+  const LeaseResponseView acquired =
+    harness.coordinator->lease(leaseRequest("acquire", "op-1"));
+  ASSERT_TRUE(acquired.success);
+  GoalRequestView navigation;
+  navigation.lease_token = acquired.token;
+  navigation.target_frame = "map";
+  navigation.position = {1.0, 0.0, 0.0};
+  int navigation_token = 0;
+  ASSERT_EQ(harness.coordinator->goal(OperationKind::kNavigatePose, navigation,
+                                      &navigation_token),
+            ControlCoordinator::GoalDecision::kAccept);
+  int update_token = 0;
+  EXPECT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
+                                      &update_token),
+            ControlCoordinator::GoalDecision::kReject);
+}
+
+TEST(CoordinatorOta, VelocityIsRejectedWhileAnUpdateIsReserved) {
+  Harness harness(false, nullptr, {}, true);
+  const LeaseResponseView acquired =
+    harness.coordinator->lease(leaseRequest("acquire", "op-1"));
+  ASSERT_TRUE(acquired.success);
+  int token = 0;
+  ASSERT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
+                                      &token),
+            ControlCoordinator::GoalDecision::kAccept);
+  harness.coordinator->velocity(
+    velocityRequest(acquired.token, 0.5, harness.clock->ros_ns.load()));
+  harness.expectTraceCode("motion.velocity", "BUSY");
+}
+
+TEST(CoordinatorOta, LeaseExpiryDoesNotApply) {
+  Harness harness(false, nullptr, {}, true);
+  LeaseRequestView lease = leaseRequest("acquire", "op-1");
+  lease.duration_s = 1.0;
+  const LeaseResponseView acquired = harness.coordinator->lease(lease);
+  ASSERT_TRUE(acquired.success);
+  int token = 0;
+  ASSERT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
+                                      &token),
+            ControlCoordinator::GoalDecision::kAccept);
+  harness.coordinator->accepted(&token, &token);
+  harness.clock->advance(1.5);
+  harness.coordinator->tick();
+  FakeGoalContext ctx;
+  const OperationResult result =
+    runWithWatchdog(harness, OperationKind::kOta, &token, ctx);
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(result.code, "LEASE_EXPIRED");
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(ctx.aborts, 1);
+}
+
+TEST(CoordinatorOta, InvalidRequestIsRejectedBeforeAdmission) {
+  Harness harness(false, nullptr, {}, true);
+  const LeaseResponseView acquired =
+    harness.coordinator->lease(leaseRequest("acquire", "op-1"));
+  ASSERT_TRUE(acquired.success);
+  GoalRequestView update = otaGoal(acquired.token);
+  update.sha256 = "NOT-A-DIGEST";
+  int token = 0;
+  EXPECT_EQ(harness.coordinator->goal(OperationKind::kOta, update, &token),
+            ControlCoordinator::GoalDecision::kReject);
+  GoalRequestView navigation;
+  navigation.lease_token = acquired.token;
+  navigation.target_frame = "map";
+  navigation.position = {0.2, 0.0, 0.0};
+  EXPECT_EQ(harness.coordinator->goal(OperationKind::kNavigatePose, navigation,
+                                      &token),
+            ControlCoordinator::GoalDecision::kAccept);
+}
+
+TEST(CoordinatorOta, CapabilityIsRequired) {
+  Harness harness;
+  const LeaseResponseView acquired =
+    harness.coordinator->lease(leaseRequest("acquire", "op-1"));
+  ASSERT_TRUE(acquired.success);
+  int token = 0;
+  EXPECT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
+                                      &token),
+            ControlCoordinator::GoalDecision::kReject);
 }
 
 }  // namespace

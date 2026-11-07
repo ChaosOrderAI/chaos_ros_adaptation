@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <mutex>
+#include <type_traits>
 #include <utility>
 
 #include <builtin_interfaces/msg/time.hpp>
@@ -150,7 +151,8 @@ GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
 : rclcpp::Node("mqtt_gateway", options),
   navigation_pool_(this, "navigation/to_pose", "navigation.to_pose", this, 48),
   takeoff_pool_(this, "flight/takeoff", "flight.takeoff", this, 48),
-  land_pool_(this, "flight/land", "flight.land", this, 48)
+  land_pool_(this, "flight/land", "flight.land", this, 48),
+  ota_pool_(this, "system/ota", "system.ota", this, 48)
 {
   declare_parameter<std::string>("asset_json", "{}");
   declare_parameter<std::int64_t>("maximum_clock_skew_ms", 5000);
@@ -198,6 +200,7 @@ GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
   navigation_pool_.set_capacity(static_cast<std::size_t>(slot_capacity));
   takeoff_pool_.set_capacity(static_cast<std::size_t>(slot_capacity));
   land_pool_.set_capacity(static_cast<std::size_t>(slot_capacity));
+  ota_pool_.set_capacity(static_cast<std::size_t>(slot_capacity));
 
   result_pub_ = create_publisher<std_msgs::msg::String>("mqtt/command/result", 32);
   event_pub_ = create_publisher<std_msgs::msg::String>("mqtt/task_events", 32);
@@ -257,6 +260,11 @@ GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
     [this](Flight::Impl::FeedbackMessage::SharedPtr message) {
       feedback_callback<Flight>("flight.land", message);
     });
+  ota_feedback_sub_ = create_subscription<SoftwareUpdate::Impl::FeedbackMessage>(
+    "system/ota/_action/feedback", 32,
+    [this](SoftwareUpdate::Impl::FeedbackMessage::SharedPtr message) {
+      feedback_callback<SoftwareUpdate>("system.ota", message);
+    });
   expire_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this]() { expire(); });
 }
 
@@ -289,6 +297,7 @@ GatewayNode::~GatewayNode()
   navigation_pool_.shutdown();
   takeoff_pool_.shutdown();
   land_pool_.shutdown();
+  ota_pool_.shutdown();
 }
 
 void GatewayNode::publish_json(
@@ -531,6 +540,8 @@ void GatewayNode::send_action(const Command & command)
     send_typed_action<Flight>(command, takeoff_pool_);
   } else if (name == "flight.land") {
     send_typed_action<Flight>(command, land_pool_);
+  } else if (name == "system.ota") {
+    send_typed_action<SoftwareUpdate>(command, ota_pool_);
   } else {
     service_error(command.request_id, "UNSUPPORTED", "unknown command");
   }
@@ -567,8 +578,15 @@ void GatewayNode::send_typed_action(const Command & command, ActionSlotPool<Acti
     goal.target.pose.orientation.y = target.at("orientation").at("y").get<double>();
     goal.target.pose.orientation.z = target.at("orientation").at("z").get<double>();
     goal.target.pose.orientation.w = target.at("orientation").at("w").get<double>();
-  } else {
+  } else if constexpr (std::is_same_v<ActionT, Flight>) {
     goal.altitude_m = command.arguments.at("altitude_m").get<double>();
+  } else if constexpr (std::is_same_v<ActionT, SoftwareUpdate>) {
+    goal.artifact_id = command.arguments.at("artifact_id").get<std::string>();
+    goal.version = command.arguments.at("version").get<std::string>();
+    goal.sha256 = command.arguments.at("sha256").get<std::string>();
+    goal.size_bytes = command.arguments.at("size_bytes").get<std::uint64_t>();
+  } else {
+    static_assert(sizeof(ActionT) == 0, "unsupported action");
   }
   goal.lease_token = command.arguments.at("lease_token").get<std::string>();
   goal.expires_at = deadline_time(command.deadline_ms);
@@ -631,6 +649,9 @@ void GatewayNode::on_action_result(const std::string & request_id, const ActionO
     {"ros_goal_status", outcome.ros_goal_status},
     {"execution_state", outcome.known ? "known" : "unknown"},
   };
+  if (outcome.applied.has_value()) {
+    data["applied"] = *outcome.applied;
+  }
   action_done(request_id, data);
 }
 
@@ -646,11 +667,18 @@ void GatewayNode::feedback_callback(
       {"current_pose", pose_stamped_json(message->feedback.current_pose)},
       {"progress", message->feedback.progress},
     };
-  } else {
+  } else if constexpr (std::is_same_v<ActionT, Flight>) {
     feedback = Json{
       {"altitude_m", message->feedback.altitude_m},
       {"progress", message->feedback.progress},
     };
+  } else if constexpr (std::is_same_v<ActionT, SoftwareUpdate>) {
+    feedback = Json{
+      {"phase", message->feedback.phase},
+      {"progress", message->feedback.progress},
+    };
+  } else {
+    static_assert(sizeof(ActionT) == 0, "unsupported action");
   }
   Json event_value;
   {
@@ -834,12 +862,14 @@ void GatewayNode::expire()
   navigation_pool_.flush_ready(tracked, dispatch_allowed);
   takeoff_pool_.flush_ready(tracked, dispatch_allowed);
   land_pool_.flush_ready(tracked, dispatch_allowed);
+  ota_pool_.flush_ready(tracked, dispatch_allowed);
   // Release the action observations that finished or whose correlation was
   // retired. This runs outside of every action client callback, so destroying
   // a dedicated client is safe here.
   navigation_pool_.release_inactive(tracked);
   takeoff_pool_.release_inactive(tracked);
   land_pool_.release_inactive(tracked);
+  ota_pool_.release_inactive(tracked);
 }
 
 template void GatewayNode::send_service<chaos_interfaces::srv::GetDescription>(
@@ -857,7 +887,12 @@ template void GatewayNode::send_typed_action<chaos_interfaces::action::Flight>(
   const Command &, ActionSlotPool<chaos_interfaces::action::Flight> &);
 template void GatewayNode::feedback_callback<chaos_interfaces::action::NavigatePose>(
   const std::string &, chaos_interfaces::action::NavigatePose::Impl::FeedbackMessage::SharedPtr);
+template void GatewayNode::send_typed_action<chaos_interfaces::action::SoftwareUpdate>(
+  const Command &, ActionSlotPool<chaos_interfaces::action::SoftwareUpdate> &);
 template void GatewayNode::feedback_callback<chaos_interfaces::action::Flight>(
   const std::string &, chaos_interfaces::action::Flight::Impl::FeedbackMessage::SharedPtr);
+template void GatewayNode::feedback_callback<chaos_interfaces::action::SoftwareUpdate>(
+  const std::string &,
+  chaos_interfaces::action::SoftwareUpdate::Impl::FeedbackMessage::SharedPtr);
 
 }  // namespace chaos_mqtt

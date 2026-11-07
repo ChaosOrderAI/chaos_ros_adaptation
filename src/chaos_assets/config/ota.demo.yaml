@@ -1,0 +1,10 @@
+# Opt-in mock that advertises system.ota. The default demo inventory does not.
+schema_version: 1
+hosts:
+  dev:
+    ros_domain_id: 87
+assets:
+  - id: vehicle_ota
+    model_file: ../models/demo_ota/v1/model.yaml
+    host: dev
+    mode: mock

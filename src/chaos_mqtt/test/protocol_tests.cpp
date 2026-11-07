@@ -636,7 +636,8 @@ TEST(Protocol, OnlyMotionStopMayUseTheEmergencyReserve)
   // Every other command - the lease acquisition included - respects the
   // ordinary budget only and can never occupy a reserve slot.
   for (const std::string & name : {"control.acquire", "control.renew", "control.release",
-      "motion.velocity", "navigation.to_pose", "flight.takeoff", "flight.land", "system.describe"})
+      "motion.velocity", "navigation.to_pose", "flight.takeoff", "flight.land",
+      "system.describe", "system.ota"})
   {
     EXPECT_EQ(rejection_code(records, request("request_0002", name)), "BUSY")
       << name << " must not use the emergency reserve";
@@ -681,6 +682,61 @@ TEST(Protocol, DuplicateIsDetectedBeforeTheCapacityCheck)
   records.start(request("request_0001", "motion.stop"), 100, 5);
   EXPECT_EQ(rejection_code(records, request("request_0001", "motion.stop")), "DUPLICATE");
   EXPECT_EQ(records.pending_size(), 1u);
+}
+
+Json otaFields()
+{
+  return Json{
+    {"lease_token", "lease_secret"},
+    {"artifact_id", "pkg.alpha"},
+    {"version", "1.2.3"},
+    {"sha256", std::string(64, 'a')},
+    {"size_bytes", 128},
+  };
+}
+
+TEST(Protocol, OtaCommandKeepsThePackageIdentity)
+{
+  const Command command = parse_command(
+    envelope("system.ota", 10000, otaFields()), {"system.ota"}, 10000);
+  EXPECT_EQ(command.name, "system.ota");
+  EXPECT_EQ(command.arguments.at("artifact_id").get<std::string>(), "pkg.alpha");
+  EXPECT_EQ(command.arguments.at("version").get<std::string>(), "1.2.3");
+  EXPECT_EQ(command.arguments.at("sha256").get<std::string>().size(), 64u);
+  EXPECT_EQ(command.arguments.at("size_bytes").get<std::int64_t>(), 128);
+  EXPECT_EQ(command.arguments.at("lease_token").get<std::string>(), "lease_secret");
+}
+
+TEST(Protocol, OtaRejectsABadPackageAndAMissingCapability)
+{
+  Json uppercase = otaFields();
+  uppercase["sha256"] = std::string(64, 'A');
+  Json huge = otaFields();
+  huge["size_bytes"] = 2147483649LL;
+  Json extra = otaFields();
+  extra["url"] = "https://example.invalid/pkg";
+  for (const Json & fields : {uppercase, huge, extra}) {
+    try {
+      parse_command(envelope("system.ota", 10000, fields), {"system.ota"}, 10000);
+      FAIL() << "expected INVALID_ARGUMENT for " << fields.dump();
+    } catch (const CommandError & error) {
+      EXPECT_EQ(error.code(), "INVALID_ARGUMENT") << error.what();
+    }
+  }
+  try {
+    parse_command(envelope("system.ota", 10000, otaFields()), {"state"}, 10000);
+    FAIL() << "expected UNSUPPORTED";
+  } catch (const CommandError & error) {
+    EXPECT_EQ(error.code(), "UNSUPPORTED");
+  }
+  const Command accepted = parse_command(
+    envelope("system.ota", 10000, [&] {
+      Json fields = otaFields();
+      fields["size_bytes"] = 2147483648LL;
+      return fields;
+    }()),
+    {"system.ota"}, 10000);
+  EXPECT_EQ(accepted.arguments.at("size_bytes").get<std::int64_t>(), 2147483648LL);
 }
 
 TEST(Protocol, EmergencyReserveAdmissionSurvivesAnExhaustedOrdinaryBudget)

@@ -5,7 +5,7 @@
 先按仓库 README 在全新的前缀完成 Release 构建，再在干净终端 source ROS 和该前缀的 `local_setup.bash`。下列命令从工作空间根目录执行；`INSTALL` 应替换为实际安装前缀。
 
 ```bash
-INSTALL="$PWD/install-cpp"
+INSTALL="$PWD/install"
 RESULTS="$(mktemp -d /tmp/chaos-benchmark-XXXXXX)"
 python3 benchmarks/extract_python_baseline.py \
   --ref 172b78c --output "$RESULTS/python-baseline"

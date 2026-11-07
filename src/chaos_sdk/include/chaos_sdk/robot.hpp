@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <future>
 #include <memory>
@@ -17,6 +18,7 @@
 
 #include "chaos_interfaces/action/flight.hpp"
 #include "chaos_interfaces/action/navigate_pose.hpp"
+#include "chaos_interfaces/action/software_update.hpp"
 #include "chaos_interfaces/msg/robot_state.hpp"
 #include "chaos_interfaces/msg/velocity_command.hpp"
 #include "chaos_interfaces/srv/control_lease.hpp"
@@ -71,8 +73,10 @@ class Robot
 public:
   using Flight = chaos_interfaces::action::Flight;
   using NavigatePose = chaos_interfaces::action::NavigatePose;
+  using SoftwareUpdate = chaos_interfaces::action::SoftwareUpdate;
   using NavigationTask = ActionTask<NavigatePose>;
   using FlightTask = ActionTask<Flight>;
+  using OtaTask = ActionTask<SoftwareUpdate>;
 
   /// Client bound to a node owned by the application. The application must
   /// spin that node; the client never spins it.
@@ -192,6 +196,16 @@ public:
   /// navigate().
   std::shared_future<std::shared_ptr<FlightTask>> land(
     std::function<void (Flight::Feedback)> feedback_callback = nullptr,
+    std::optional<double> ttl_s = std::nullopt);
+  /// Send a software-update goal. The feedback callback behaves like the one
+  /// of navigate(). The runtime decides whether any bytes are committed;
+  /// `result.applied` is the only signal of a commit.
+  std::shared_future<std::shared_ptr<OtaTask>> ota(
+    const std::string & artifact_id,
+    const std::string & version,
+    const std::string & sha256,
+    std::uint64_t size_bytes,
+    std::function<void (SoftwareUpdate::Feedback)> feedback_callback = nullptr,
     std::optional<double> ttl_s = std::nullopt);
 
   std::string lease_token() const;

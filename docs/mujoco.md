@@ -12,11 +12,11 @@ Go2 使用官方 home 关键帧，T2 使用官方 qpos0。T2 尚未接入平衡�
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log-cpp-sim build --base-paths src --packages-select chaos_sim \
-  --build-base build-cpp-sim --install-base install-cpp-sim \
+colcon --log-base log-sim build --base-paths src --packages-select chaos_sim \
+  --build-base build-sim --install-base install-sim \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
                -DCHAOS_SIM_ENABLE_MUJOCO=ON -DMUJOCO_ROOT="$HOME/mujoco"
-source install-cpp-sim/local_setup.bash
+source install-sim/local_setup.bash
 ```
 
 本机验证使用 MuJoCo 3.15.0，SDK 为 `/home/yunze/mujoco`。C++ 核心直接链接已有 SDK，不依赖 GLFW 开发头文件，也不安装 Python 学习框架。
@@ -118,7 +118,7 @@ ros2 run chaos_sim scene_import ROBOT_XML SCENE.ply OUTPUT.xml \
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source install-cpp-sim/local_setup.bash
+source install-sim/local_setup.bash
 VIEWER_PYTHON=/path/to/venv/bin/python
 "$VIEWER_PYTHON" src/chaos_sim/tools/viewer.py --robot go2 \
   --model-root "$HOME/.cache/chaos/mujoco"
@@ -144,11 +144,11 @@ PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH" \
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source install-cpp-sim/local_setup.bash
+source install-sim/local_setup.bash
 python3 scripts/mujoco_smoke_test.py --model-root /path/to/models
-colcon --log-base log-cpp-sim-test test --build-base build-cpp-sim \
-  --install-base install-cpp-sim --packages-select chaos_sim --return-code-on-test-failure
-colcon test-result --test-result-base build-cpp-sim --verbose
+colcon --log-base log-sim-test test --build-base build-sim \
+  --install-base install-sim --packages-select chaos_sim --return-code-on-test-failure
+colcon test-result --test-result-base build-sim --verbose
 ```
 
 smoke 固定 localhost 发现范围，默认独立 ROS domain 197，只启动仿真进程。它加载两台 Go2 和一台 T2，检查多实例物理时间增长、ROS joint/odom、同型号话题与控制隔离、独立重置、实际关节位移与力矩、目标拒绝、steady 超时、不经过 reset 的暂停/恢复及 SIGINT 正常退出；预热后连续采样线程数与 RSS，并输出实际采样区间。资源检查采用有界增长阈值，不据此声明实时性。

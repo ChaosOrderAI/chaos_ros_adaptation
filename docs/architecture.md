@@ -58,11 +58,12 @@ flowchart TB
 | `chaos_interfaces` | 定义机器人状态、能力和控制的 ROS 消息、服务等契约 |
 | `chaos_runtime` | 每资产的公共运行时、适配器契约和独立 Go2 ROS 驱动 |
 | `chaos_sdk` | 面向业务程序封装统一接口的原生异步客户端 |
+| `chaos_bt` | 把 SDK 的导航、起飞、降落包装成 BehaviorTree.CPP 节点，由调用方进程驱动行为树 |
 | `chaos_mqtt` | 内置 Rust MQTT / ROS 2 传输与原生 C++ 业务网关，将外部命令、请求编号、结果映射到统一 ROS 接口 |
 | `chaos_sensors` | 模拟传感器、标准流健康诊断、可发现的传感器目录 |
 | `chaos_data` | 原生 rosbag2_cpp 录制、chrony 时间质量准入、异常分段、磁盘保护、离线审计及任务级训练数据导出 |
 
-九个包的构建产物中，除 `chaos_mqtt/transport/`（导入的 Rust 实现）与 `chaos_bringup` 的 launch 胶水外，业务逻辑均为 C++17 实现。`src/chaos_benchmarks` 是领域微基准包，不是生产入口，也不参与运行。
+十个包的构建产物中，除 `chaos_mqtt/transport/`（导入的 Rust 实现）与 `chaos_bringup` 的 launch 胶水外，业务逻辑均为 C++17 实现。`src/chaos_benchmarks` 是领域微基准包，不是生产入口，也不参与运行。
 
 设备协议、消息转换和 SDK 调用入口各有一个归属。对现有驱动的补丁应围绕适配所需接口进行，避免将资产管理和远程平台业务塞入硬件 SDK。
 
@@ -178,6 +179,9 @@ flowchart TB
 | `motion/stop` | `Stop` Service | 请求受控停止 |
 | `navigation/to_pose` | `NavigatePose` Action | 首版 mock 中的目标位姿任务 |
 | `flight/takeoff`、`flight/land` | `Flight` Action | 首版 mock 无人机的起飞、降落任务 |
+| `system/ota` | `SoftwareUpdate` Action | 软件更新。需要 `system.ota`。默认执行器只校验请求并回报模拟结果 |
+
+`system.ota` 与导航、起飞、降落和速度共用同一个长时间动作槽。请求带 `artifact_id`、`version`、64 位小写 `sha256` 和 `size_bytes`（1 到 2147483648），并使用与导航相同的租约和开始期限。反馈阶段是 `verifying` 和 `staging`。默认执行器正常结束时 `success=true`、`code=SIMULATED`、`applied=false`：没有读包、没有写盘、没有重启，安装版本不变。`success=true` 只表示这次模拟流程结束。取消、租约失效和关机都保持 `applied=false`。只有 mock 插件可以声明该能力；`unitree_go2`、`humanoid`、`lingao_ros2` 和 `dji_psdk_legacy` 一旦声明，预检失败。示例清单是 [ota.demo.yaml](../src/chaos_assets/config/ota.demo.yaml)。真实执行器以后可以替换，字段不变，并且在真正提交字节之前必须保持 `applied=false`。更新不写入 `ControlTrace`。
 
 统一行为的边界如下：
 
@@ -292,7 +296,7 @@ MQTT 功能全部归属于 `src/chaos_mqtt` 这一个 ROS 包：`transport/` 保
 
 launch 默认通过 `chaos_mqtt` 的 ament 包索引定位 `mqtt_transport`，不依赖源码、兄弟目录或 `PATH` 中的同名程序；旧配置中的裸名称 `mqtt_ros2_adapter` 也解析到这个入口，显式可执行文件路径仍可覆盖。设备部署使用同一安装空间和 `chaos-edge.service` 管理整个本机框架。开发用 symlink 安装和生产普通安装共用包入口，x86_64 / ARM64 分别在匹配的环境构建。由原来的两个 ROS 包升级时，使用新的构建和安装前缀，避免加载旧包索引；操作见 [部署说明](onboard-deployment.md)。
 
-统一资产配置生成 Rust 适配器的 `route_profile: custom`，并按当前后端能力生成命令路由。旧程序默认的 `legacy_drone` 保留原有无人机路由；`custom` 只采用显式配置的路由，未知 profile 会被拒绝。首版命令包括 `system.describe`、`control.acquire/renew/release`、`motion.velocity/stop`、`navigation.to_pose`、`flight.takeoff/land`；某资产不支持的能力不会因为加入 MQTT 而获得实现。
+统一资产配置生成 Rust 适配器的 `route_profile: custom`，并按当前后端能力生成命令路由。旧程序默认的 `legacy_drone` 保留原有无人机路由；`custom` 只采用显式配置的路由，未知 profile 会被拒绝。命令包括 `system.describe`、`system.ota`、`control.acquire/renew/release`、`motion.velocity/stop`、`navigation.to_pose`、`flight.takeoff/land`。`system.ota` 只在资产声明 `system.ota` 时生成路由。某资产不支持的能力不会因为加入 MQTT 而获得实现。
 
 默认每资产的外部主题如下，命令和响应主题可以通过通信配置覆盖：
 

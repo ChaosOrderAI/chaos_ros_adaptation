@@ -12,6 +12,7 @@ find_package(rclcpp_action REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(chaos_core REQUIRED)
 find_package(chaos_interfaces REQUIRED)
 
 option(CHAOS_MQTT_SANITIZE "Build unit tests with ASan+UBSan" OFF)
@@ -114,7 +115,7 @@ add_library(chaos_mqtt_core STATIC
 target_include_directories(chaos_mqtt_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(chaos_mqtt_core PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(chaos_mqtt_core PUBLIC chaos_core::chaos_core nlohmann_json::nlohmann_json)
 # The pybind module links this static library into a shared object.
 set_target_properties(chaos_mqtt_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
