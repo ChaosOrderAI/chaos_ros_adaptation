@@ -715,6 +715,13 @@ ControlCoordinator::CancelDecision ControlCoordinator::cancel(
   if (operation_->handle_token && operation_->handle_token != handle_token) {
     return CancelDecision::kReject;
   }
+  if (operation_->completed) {
+    // The operation reached its terminal state. The reservation is still
+    // held so that no second goal can start, but the terminal result is
+    // already on its way to the client: a cancel must not turn a finished
+    // operation into a cancellation.
+    return CancelDecision::kReject;
+  }
   halt("CANCELED", "Action canceled by client");
   return CancelDecision::kAccept;
 }
@@ -738,6 +745,40 @@ void ControlCoordinator::finishOperation(Operation & operation,
   // control lock is released: an action server that blocks or throws must
   // never stall the watchdog or the stop retry loop.
   (void)ctx;
+}
+
+// Caller must hold mutex_.
+bool ControlCoordinator::harvestOtaAfterCancel(const Operation & operation,
+                                                OperationResult & result,
+                                                std::string & terminal) {
+  if (operation.kind != OperationKind::kOta) {
+    return false;
+  }
+  // The executor contract says that a cancel takes effect on the next
+  // poll, so the poll after the cancel is what reveals the real outcome.
+  OtaStatus status;
+  try {
+    ota_->cancel();
+    status = ota_->poll();
+  } catch (const std::exception &) {
+    // The executor failed while it was harvested. The interrupt stays the
+    // reported outcome and nothing is known about the package: the client is
+    // told that no commit was seen.
+    return false;
+  }
+  if (!status.done || !status.applied) {
+    // Nothing was committed. The caller keeps the interrupt code and the
+    // `applied` flag stays false: the client is told that no bytes were
+    // written.
+    return false;
+  }
+  // The executor committed the package. Its own status is the truth about
+  // the operation, whatever the interrupt was: reporting "canceled" here
+  // would tell the client that nothing was written while the device already
+  // runs the new version.
+  result = {status.success, status.code, status.message, true};
+  terminal = status.success ? "succeeded" : "aborted";
+  return true;
 }
 
 void ControlCoordinator::deliverTerminal(GoalContext & ctx,
@@ -767,6 +808,13 @@ OperationResult ControlCoordinator::runOperation(
   OperationResult result;
   std::string terminal = "aborted";
   std::shared_ptr<Operation> mine;
+  bool ota_started = false;
+  bool ota_harvested = false;
+  // Caller must hold mutex_.
+  const auto harvest = [&] {
+    ota_harvested = true;
+    return harvestOtaAfterCancel(*mine, result, terminal);
+  };
   // The operation is counted so that close() can wait for it: the adapter
   // must not be closed while a worker is still inside it.
   struct OperationGuard {
@@ -804,6 +852,7 @@ OperationResult ControlCoordinator::runOperation(
         // An update is not a motion label. ControlTrace only records motion
         // commands, so the training export never sees system.ota.
         if (mine->kind == OperationKind::kOta) {
+          ota_started = true;
           ota_->start(mine->ota);
         } else {
           emitTrace(capabilityName(kind), "invalidated", "OPERATION_STARTING");
@@ -821,17 +870,23 @@ OperationResult ControlCoordinator::runOperation(
       {
         std::lock_guard<std::mutex> guard(mutex_);
         if (closing_) {
-          if (mine->kind == OperationKind::kOta) {
-            ota_->cancel();
+          // The executor may have committed the package before the runtime
+          // stopped. The harvest tells the client whether bytes were written.
+          if (harvest()) {
+            break;
           }
           result = {false, "SHUTDOWN", "Runtime stopped", false};
           break;
         }
         if (ctx.isCancelRequested()) {
-          if (mine->kind == OperationKind::kOta) {
-            ota_->cancel();
-          }
           halt("CANCELED", "Action canceled by client");
+          // A cancel that arrives after the executor committed the package
+          // does not unwrite it. The executor's own status wins over the
+          // cancellation, otherwise the client would be told that nothing was
+          // written while the device already runs the new version.
+          if (harvest()) {
+            break;
+          }
           terminal = "canceled";
           result = {false, "CANCELED", "Action canceled by client", false};
           break;
@@ -841,8 +896,8 @@ OperationResult ControlCoordinator::runOperation(
           // Cancellation is accepted before ROS exposes CANCELING. Wait one
           // iteration for the accepted transition.
           if (code != "CANCELED") {
-            if (mine->kind == OperationKind::kOta) {
-              ota_->cancel();
+            if (harvest()) {
+              break;
             }
             rejected(code, message);
           }
@@ -850,6 +905,11 @@ OperationResult ControlCoordinator::runOperation(
           guard_.require(mine->lease_token);
           requireReadyLocked();
           if (clocks_.steady_s() - mine->start_s > limits_.action_timeout_s) {
+            // The timeout must reach the executor: an update that rolls back
+            // in cancel() never learns that it has to roll back.
+            if (harvest()) {
+              break;
+            }
             rejected("TIMEOUT", "Action exceeded action_timeout_s");
           }
           if (mine->kind == OperationKind::kOta) {
@@ -861,7 +921,12 @@ OperationResult ControlCoordinator::runOperation(
             if (poll.done) {
               terminal = poll.success ? "succeeded" : "aborted";
               result = {poll.success, poll.code, poll.message, poll.applied};
-              finishOperation(*mine, ctx, result, terminal);
+              // The reservation is kept until the terminal result is on its
+              // way to the client: a cancel that arrives while the final
+              // feedback is published must be refused, and a second goal must
+              // not start before the first one is reported. The motion branch
+              // finalizes under the same lock for the same reason.
+              mine->completed = true;
               finished_now = true;
             }
           } else {
@@ -912,6 +977,12 @@ OperationResult ControlCoordinator::runOperation(
   // harmless.
   {
     std::lock_guard<std::mutex> guard(mutex_);
+    // A failure raised by a lease, readiness or executor check never passed
+    // through an interrupt branch: the executor still runs, and it may have
+    // committed the package already.
+    if (ota_started && !ota_harvested && !mine->completed) {
+      harvest();
+    }
     finishOperation(*mine, ctx, result, terminal);
   }
   deliverTerminal(ctx, terminal, result);
@@ -1054,6 +1125,14 @@ void ControlCoordinator::finalize() {
     adapter_->close();
   } catch (const std::exception & error) {
     log("error", {"Adapter close failed: ", error.what()});
+  }
+  // The update executor owns resources of its own: a file, a socket or a
+  // vendor SDK. They are released here, next to the adapter, and never
+  // while an operation may still be inside the executor.
+  try {
+    ota_->close();
+  } catch (const std::exception & error) {
+    log("error", {"Update executor close failed: ", error.what()});
   }
 }
 

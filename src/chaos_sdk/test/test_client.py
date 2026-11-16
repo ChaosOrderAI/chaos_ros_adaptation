@@ -139,6 +139,32 @@ def test_a_ros_pose_stamped_reaches_the_server(mock_asset):
         client.close()
 
 
+def test_every_goal_type_reports_the_same_result_keys(mock_asset):
+    """Only the software update says whether bytes were applied.
+
+    The three goal types share one result layout, so a client can read the
+    outcome the same way. The update adds the one field the other types do
+    not have.
+    """
+    client = Robot(ASSET, response_timeout_s=10.0)
+    try:
+        client.acquire('python-smoke', 5.0).result()
+        navigation = client.navigate({'frame_id': 'map'}).result().result()
+        flight = client.takeoff(1.5).result().result()
+        update = client.ota(
+            'artifact-1', '1.0.0', 'a' * 64, 1024).result().result()
+
+        common = {'ok', 'code', 'message', 'ros_goal_status', 'state'}
+        assert set(navigation) == common
+        assert set(flight) == common
+        assert set(update) == common | {'applied'}
+        # The mock writes no bytes, so it never claims that it applied a
+        # package.
+        assert update['applied'] is False
+    finally:
+        client.close()
+
+
 def test_native_client_cancel_reports_the_server_answer(mock_asset):
     client = Robot(ASSET, response_timeout_s=10.0)
     try:

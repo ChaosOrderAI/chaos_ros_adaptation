@@ -13,6 +13,7 @@ find_package(std_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(chaos_interfaces REQUIRED)
+find_package(chaos_core REQUIRED)
 find_package(pybind11_vendor REQUIRED)
 find_package(pybind11 REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
@@ -46,7 +47,8 @@ target_link_libraries(chaos_sdk PUBLIC
   ${builtin_interfaces_TARGETS}
   ${geometry_msgs_TARGETS}
   chaos_interfaces::chaos_interfaces__rosidl_generator_cpp
-  chaos_interfaces::chaos_interfaces__rosidl_typesupport_cpp)
+  chaos_interfaces::chaos_interfaces__rosidl_typesupport_cpp
+  chaos_core::chaos_core)
 # The dispatcher is internal: it is linked privately, so the internal include
 # directory and the internal target stay out of the exported interface.
 target_link_libraries(chaos_sdk PRIVATE chaos_sdk_feedback_dispatcher)
@@ -78,7 +80,7 @@ install(DIRECTORY include/ DESTINATION include)
 
 ament_export_targets(export_chaos_sdk HAS_LIBRARY_TARGET)
 ament_export_dependencies(rclcpp rclcpp_action std_msgs builtin_interfaces
-  geometry_msgs chaos_interfaces)
+  geometry_msgs chaos_interfaces chaos_core)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)

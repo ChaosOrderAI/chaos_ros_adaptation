@@ -1,10 +1,11 @@
-// Mock asset for the native SDK: description, control lease and a navigation
-// action server. It is used by the Python integration test and by the
-// example client, so the native client can be exercised against a real ROS
-// peer in a separate process.
+// Mock asset for the native SDK: description, control lease and the action
+// servers of the goal types the SDK can send. It is used by the Python
+// integration test and by the example client, so the native client can be
+// exercised against a real ROS peer in a separate process.
 //
 // Usage: chaos_sdk_mock_asset [asset_id] [--namespace /robots/<id>]
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -14,7 +15,9 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
+#include "chaos_interfaces/action/flight.hpp"
 #include "chaos_interfaces/action/navigate_pose.hpp"
+#include "chaos_interfaces/action/software_update.hpp"
 #include "chaos_interfaces/srv/control_lease.hpp"
 #include "chaos_interfaces/srv/get_description.hpp"
 #include "chaos_interfaces/srv/stop.hpp"
@@ -38,6 +41,37 @@ std::string describe_target(const geometry_msgs::msg::PoseStamped & target)
       << " qz=" << target.pose.orientation.z
       << " qw=" << target.pose.orientation.w;
   return out.str();
+}
+
+/// Serve a goal type that succeeds without doing anything.
+///
+/// The mock answers every goal with the same terminal state, so a client test
+/// can check the shape of the result without a simulation. The callback
+/// returns the message of the result and may publish feedback first.
+template<typename ActionT>
+typename rclcpp_action::Server<ActionT>::SharedPtr serve_ok(
+  const rclcpp::Node::SharedPtr & node,
+  const std::string & name,
+  const rclcpp::CallbackGroup::SharedPtr & group,
+  std::function<std::string (std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>>)> describe)
+{
+  return rclcpp_action::create_server<ActionT>(
+    node, name,
+    [](const rclcpp_action::GoalUUID &,
+      std::shared_ptr<const typename ActionT::Goal>) {
+      return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    },
+    [](const std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>>) {
+      return rclcpp_action::CancelResponse::ACCEPT;
+    },
+    [describe](std::shared_ptr<rclcpp_action::ServerGoalHandle<ActionT>> handle) {
+      auto result = std::make_shared<typename ActionT::Result>();
+      result->success = true;
+      result->code = "OK";
+      result->message = describe(handle);
+      handle->succeed(result);
+    },
+    rcl_action_server_get_default_options(), group);
 }
 
 }  // namespace
@@ -81,7 +115,8 @@ int main(int argc, char ** argv)
       response->map_frame = asset_id + "/map";
       response->command_timeout_s = 0.5;
       response->lease_max_s = 30.0;
-      response->capabilities = {"motion.velocity", "navigation.to_pose"};
+      response->capabilities = {"motion.velocity", "navigation.to_pose", "flight.takeoff",
+        "flight.land", "system.ota"};
     },
     rclcpp::ServicesQoS(), group);
 
@@ -113,29 +148,48 @@ int main(int argc, char ** argv)
     },
     rclcpp::ServicesQoS(), group);
 
-  auto action = rclcpp_action::create_server<chaos_interfaces::action::NavigatePose>(
-    node, namespace_ + "/navigation/to_pose",
-    [](
-      const rclcpp_action::GoalUUID &,
-      std::shared_ptr<const chaos_interfaces::action::NavigatePose::Goal>) {
-      return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-    },
-    [](const std::shared_ptr<rclcpp_action::ServerGoalHandle<
-      chaos_interfaces::action::NavigatePose>>) {
-      return rclcpp_action::CancelResponse::ACCEPT;
-    },
+  auto navigation = serve_ok<chaos_interfaces::action::NavigatePose>(
+    node, namespace_ + "/navigation/to_pose", group,
     [](std::shared_ptr<rclcpp_action::ServerGoalHandle<chaos_interfaces::action::NavigatePose>>
     handle) {
       auto feedback = std::make_shared<chaos_interfaces::action::NavigatePose::Feedback>();
       feedback->progress = 1.0f;
       handle->publish_feedback(feedback);
-      auto result = std::make_shared<chaos_interfaces::action::NavigatePose::Result>();
-      result->success = true;
-      result->code = "OK";
-      result->message = describe_target(handle->get_goal()->target);
-      handle->succeed(result);
-    },
-    rcl_action_server_get_default_options(), group);
+      return describe_target(handle->get_goal()->target);
+    });
+
+  auto takeoff = serve_ok<chaos_interfaces::action::Flight>(
+    node, namespace_ + "/flight/takeoff", group,
+    [](std::shared_ptr<rclcpp_action::ServerGoalHandle<chaos_interfaces::action::Flight>> handle) {
+      auto feedback = std::make_shared<chaos_interfaces::action::Flight::Feedback>();
+      feedback->altitude_m = handle->get_goal()->altitude_m;
+      feedback->progress = 1.0f;
+      handle->publish_feedback(feedback);
+      return "mock takeoff";
+    });
+
+  auto land = serve_ok<chaos_interfaces::action::Flight>(
+    node, namespace_ + "/flight/land", group,
+    [](std::shared_ptr<rclcpp_action::ServerGoalHandle<chaos_interfaces::action::Flight>> handle) {
+      auto feedback = std::make_shared<chaos_interfaces::action::Flight::Feedback>();
+      feedback->altitude_m = 0.0;
+      feedback->progress = 1.0f;
+      handle->publish_feedback(feedback);
+      return "mock landing";
+    });
+
+  auto ota = serve_ok<chaos_interfaces::action::SoftwareUpdate>(
+    node, namespace_ + "/system/ota", group,
+    [](std::shared_ptr<rclcpp_action::ServerGoalHandle<
+      chaos_interfaces::action::SoftwareUpdate>> handle) {
+      auto feedback = std::make_shared<chaos_interfaces::action::SoftwareUpdate::Feedback>();
+      feedback->phase = "staging";
+      feedback->progress = 1.0f;
+      handle->publish_feedback(feedback);
+      // The mock writes no bytes, so it never claims that it applied a
+      // package.
+      return "mock update";
+    });
 
   RCLCPP_INFO(node->get_logger(), "mock asset '%s' serving %s", asset_id.c_str(), namespace_.c_str());
   rclcpp::spin(node);

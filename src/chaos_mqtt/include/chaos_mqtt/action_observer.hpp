@@ -48,15 +48,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
+#include "chaos_core/action_result.hpp"
+
 namespace chaos_mqtt
 {
 
-template<typename T, typename = void>
-struct ResultHasApplied : std::false_type {};
-
-template<typename T>
-struct ResultHasApplied<T, std::void_t<decltype(std::declval<T &>().applied)>>
-: std::true_type {};
+using chaos::ResultHasApplied;
 
 /// Terminal information of one action goal, normalised from the ROS action
 /// protocol so the gateway stays independent of the concrete action type.

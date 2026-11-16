@@ -78,6 +78,8 @@ def resolve_scene_options(node, args, instance_name):
 
 
 def load_model(args, options):
+    if args.model_path is not None:
+        return mujoco.MjModel.from_xml_path(str(args.model_path.expanduser().resolve()))
     robot_model = args.model_root.expanduser() / MODELS[args.robot]
     if args.scene is None:
         return mujoco.MjModel.from_xml_path(str(robot_model))
@@ -103,7 +105,9 @@ def main():
     parser.add_argument('--name', help='simulator instance name; default: value of --robot')
     parser.add_argument('--model-root', type=Path, default=Path('~/.cache/chaos/mujoco'))
     parser.add_argument('--namespace', help='default: /sim/<name>')
-    parser.add_argument('--scene', type=Path, help='PLY/PCD point cloud or 3D Gaussian PLY scene')
+    model_source = parser.add_mutually_exclusive_group()
+    model_source.add_argument('--model-path', type=Path, help='Explicit composed MuJoCo XML model')
+    model_source.add_argument('--scene', type=Path, help='PLY/PCD point cloud or 3D Gaussian PLY scene')
     parser.add_argument('--scene-voxel-size', type=float,
                         help='default: running simulator, else 0.1')
     parser.add_argument('--scene-point-radius', type=float,
@@ -112,7 +116,16 @@ def main():
                         help='default: running simulator, else 20000')
     parser.add_argument('--scene-collision', action=argparse.BooleanOptionalAction, default=None,
                         help='default: running simulator, else true')
+    parser.add_argument('--camera-distance', type=float, help='Initial camera distance from the robot in metres')
+    parser.add_argument('--camera-azimuth', type=float, help='Initial camera azimuth in degrees')
+    parser.add_argument('--camera-elevation', type=float, help='Initial camera elevation in degrees')
     args, ros_args = parser.parse_known_args()
+    if args.camera_distance is not None and (not math.isfinite(args.camera_distance) or args.camera_distance <= 0):
+        parser.error('--camera-distance must be positive and finite')
+    for option in ('camera_azimuth', 'camera_elevation'):
+        value = getattr(args, option)
+        if value is not None and not math.isfinite(value):
+            parser.error('--' + option.replace('_', '-') + ' must be finite')
     instance_name = args.name or args.robot
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', instance_name):
         parser.error('--name must be a valid ROS name')
@@ -177,6 +190,15 @@ def main():
         previous_threads = set(threading.enumerate())
         with mujoco.viewer.launch_passive(model, data) as viewer:
             viewer_threads = [thread for thread in threading.enumerate() if thread not in previous_threads]
+            with viewer.lock():
+                position = latest['odom'].pose.pose.position
+                viewer.cam.lookat[:] = (position.x, position.y, position.z)
+                if args.camera_distance is not None:
+                    viewer.cam.distance = args.camera_distance
+                if args.camera_azimuth is not None:
+                    viewer.cam.azimuth = args.camera_azimuth
+                if args.camera_elevation is not None:
+                    viewer.cam.elevation = args.camera_elevation
             while rclpy.ok() and viewer.is_running():
                 # Callbacks and qpos updates run on this one Python thread.
                 rclpy.spin_once(node, timeout_sec=0.01)

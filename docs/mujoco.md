@@ -1,5 +1,7 @@
 # MuJoCo 仿真
 
+本机大型点云导入实例：[0.pcd 庭院与 Go2 仿真](pcd-go2-scene.md)，包含场景准备、一键启动和关节动作验证。
+
 `chaos_sim` 是可选 C++17 ROS 2 包。一个 `SingleThreadedExecutor` 进程可运行 1–32 个 Go2、T2 独立物理世界，支持同型号多实例和混合编队，包含真实重力、碰撞、关节 PD、标准 ROS 观测。默认剔除纯视觉资源，保留碰撞与惯量；Python 查看器单独加载完整视觉模型。可选导入 PLY/PCD 点云或 3D Gaussian PLY，作为每个世界的静态几何代理，不是原生 Gaussian Splatting 渲染。不同实例不共享 `mjData`，因此没有机间碰撞或接触。
 
 Go2 使用官方 home 关键帧，T2 使用官方 qpos0。T2 尚未接入平衡策略，PD 驱动后会倒地；浮动根保持真实动力学。首轮控制入口是命名关节目标，尚未接入统一 `chaos_sdk::Robot`、控制租约或 `motion.velocity` 行走接口，也未实现仿真相机与真机 SDK 适配。现有 mock/real 资产启动方式继续独立使用。

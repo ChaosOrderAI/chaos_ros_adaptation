@@ -128,7 +128,9 @@ std::size_t utf8_code_point_count(const std::string & value)
 }
 
 // Python measured len(str) in code points; keep the same 256 limit.
-std::string nonempty(const Json & value, const char * field_name)
+// The reference points into the parsed payload, so the callers copy the
+// value only once, into the command arguments.
+const std::string & nonempty(const Json & value, const char * field_name)
 {
   if (!value.is_string()) {
     throw CommandError(
@@ -183,14 +185,14 @@ Json vector(const Json & value, const std::vector<const char *> & axes,
   return result;
 }
 
-std::int64_t bounded_integer(
-  const Json & value, const char * field_name, std::int64_t minimum, std::int64_t maximum)
+// JSON integer field. The type check is a JSON concern; the accepted range
+// belongs to the protocol rules.
+std::int64_t integer(const Json & value, const char * field_name)
 {
   if (value.is_boolean() || !value.is_number_integer()) {
     throw CommandError(
       "INVALID_ARGUMENT", std::string(field_name) + " must be an integer");
   }
-  std::int64_t parsed = 0;
   if (value.is_number_unsigned()) {
     const auto unsigned_value = value.get<std::uint64_t>();
     if (unsigned_value >
@@ -199,19 +201,12 @@ std::int64_t bounded_integer(
       throw CommandError(
         "INVALID_ARGUMENT", std::string(field_name) + " is out of range");
     }
-    parsed = static_cast<std::int64_t>(unsigned_value);
-  } else {
-    parsed = value.get<std::int64_t>();
+    return static_cast<std::int64_t>(unsigned_value);
   }
-  if (parsed < minimum || parsed > maximum) {
-    throw CommandError(
-      "INVALID_ARGUMENT", std::string(field_name) + " is out of range");
-  }
-  return parsed;
+  return value.get<std::int64_t>();
 }
 
-using chaos::isOtaSha256;
-using chaos::isOtaToken;
+using chaos::ota_request_error;
 
 bool has_capability(const std::vector<std::string> & capabilities, const std::string & name)
 {
@@ -425,28 +420,26 @@ Command parse_command(
     allowed.push_back("version");
     allowed.push_back("sha256");
     allowed.push_back("size_bytes");
-    const std::string artifact_id = nonempty(member(payload, "artifact_id"), "artifact_id");
-    const std::string version = nonempty(member(payload, "version"), "version");
-    const std::string sha256 = nonempty(member(payload, "sha256"), "sha256");
-    if (!isOtaToken(artifact_id)) {
+    const std::string & artifact_id = nonempty(member(payload, "artifact_id"), "artifact_id");
+    const std::string & version = nonempty(member(payload, "version"), "version");
+    const std::string & sha256 = nonempty(member(payload, "sha256"), "sha256");
+    // The type of the size is a JSON concern, the accepted range is a
+    // protocol rule that the runtime shares. A negative size describes no
+    // package and is rejected with the reason of the shared rule.
+    const std::int64_t size_bytes = integer(member(payload, "size_bytes"), "size_bytes");
+    if (size_bytes < 0) {
       throw CommandError(
-        "INVALID_ARGUMENT",
-        "artifact_id must be 1..128 letters, digits, '.', '_' or '-'");
+        "INVALID_ARGUMENT", "size_bytes must be in 1..2147483648");
     }
-    if (!isOtaToken(version)) {
-      throw CommandError(
-        "INVALID_ARGUMENT",
-        "version must be 1..128 letters, digits, '.', '_' or '-'");
-    }
-    if (!isOtaSha256(sha256)) {
-      throw CommandError(
-        "INVALID_ARGUMENT", "sha256 must be 64 lowercase hex characters");
+    const std::string error = ota_request_error(
+      artifact_id, version, sha256, static_cast<std::uint64_t>(size_bytes));
+    if (!error.empty()) {
+      throw CommandError("INVALID_ARGUMENT", error);
     }
     arguments["artifact_id"] = artifact_id;
     arguments["version"] = version;
     arguments["sha256"] = sha256;
-    arguments["size_bytes"] = bounded_integer(
-      member(payload, "size_bytes"), "size_bytes", 1, 2147483648LL);
+    arguments["size_bytes"] = size_bytes;
   }
   fields(payload, allowed, "payload");
   return Command{request_id, name, deadline_ms, std::move(arguments)};

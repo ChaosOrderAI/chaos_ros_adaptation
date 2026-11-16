@@ -124,9 +124,18 @@ public:
   bool isActive() override { return handle_->is_active(); }
   void publishFeedback(double progress,
                        const AdapterSnapshot & snapshot) override {
-    auto feedback = std::make_shared<typename ActionT::Feedback>();
-    fillFeedback(*feedback, progress, snapshot);
-    handle_->publish_feedback(feedback);
+    if constexpr (std::is_same_v<ActionT, SoftwareUpdate>) {
+      // An update reports the phase of the package, not the pose of the
+      // robot: publishOtaFeedback() carries it. The motion feedback has no
+      // meaning for an update.
+      (void)progress;
+      (void)snapshot;
+      return;
+    } else {
+      auto feedback = std::make_shared<typename ActionT::Feedback>();
+      fillFeedback(*feedback, progress, snapshot);
+      handle_->publish_feedback(feedback);
+    }
   }
   void publishOtaFeedback(std::string_view phase, double progress) override {
     if constexpr (std::is_same_v<ActionT, SoftwareUpdate>) {
@@ -179,14 +188,6 @@ void TypedGoalContext<Flight>::fillFeedback(
   Flight::Feedback & feedback, double progress,
   const AdapterSnapshot & snapshot) {
   feedback.altitude_m = snapshot.position[2];
-  feedback.progress = static_cast<float>(progress);
-}
-
-template <>
-void TypedGoalContext<SoftwareUpdate>::fillFeedback(
-  SoftwareUpdate::Feedback & feedback, double progress,
-  const AdapterSnapshot &) {
-  feedback.phase = "verifying";
   feedback.progress = static_cast<float>(progress);
 }
 

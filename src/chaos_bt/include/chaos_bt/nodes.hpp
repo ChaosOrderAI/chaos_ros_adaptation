@@ -2,6 +2,7 @@
 
 #include <future>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 #include <behaviortree_cpp/action_node.h>
@@ -30,6 +31,10 @@ void register_nodes(
 /// of the same name in that case, so a tree that omits the port still keeps the
 /// result. A remap that setOutput rejects for any other reason is a broken tree
 /// and is reported as an error instead of being published somewhere else.
+///
+/// The class carries the lifecycle that the three action nodes share: when a
+/// new goal may start, how a running goal is observed, and how a halt cancels
+/// it. The nodes themselves only read their ports and send their goal.
 class ActionNode : public BT::StatefulActionNode
 {
 public:
@@ -106,6 +111,67 @@ private:
   /// still running, is not.
   template<typename Task>
   static bool goal_finished(const std::shared_future<std::shared_ptr<Task>> & acceptance);
+
+  /// Whether the goal of the previous activation is still running.
+  ///
+  /// A node that is activated again while its old goal has not reached a
+  /// terminal state must not send a second goal for the same asset: the two
+  /// would race, and the runtime may refuse the second one as BUSY. Once the
+  /// old goal is over, the node may send a new one.
+  template<typename Task>
+  static bool goal_pending(const std::shared_future<std::shared_ptr<Task>> & acceptance)
+  {
+    return acceptance.valid() && !goal_finished(acceptance);
+  }
+
+  /// Starts one goal and observes it.
+  ///
+  /// `send` performs the dispatch and returns the acceptance future. It may
+  /// throw: an invalid_argument is a configuration error of the tree and is
+  /// re-thrown, because the goal never left the process. Every other
+  /// exception is a remote failure and ends the node.
+  ///
+  /// `neutral` publishes the outputs of a goal that has not produced a
+  /// feedback sample yet. It runs before the dispatch and outside the
+  /// exception handling: a broken output remap is a configuration error and
+  /// must reach the tree instead of being reported as a remote failure.
+  template<typename State, typename Send, typename Neutral>
+  BT::NodeStatus start_goal(State & state, Send && send, Neutral && neutral)
+  {
+    state.session = std::make_shared<typename State::Session>();
+    clear_outputs(*this);
+    neutral();
+    try {
+      state.acceptance = send(state.session);
+    } catch (const std::invalid_argument & error) {
+      state.session.reset();
+      throw BT::RuntimeError(error.what());
+    } catch (const std::exception & error) {
+      state.session.reset();
+      return failure_of(*this, error);
+    }
+    return observe_goal(state);
+  }
+
+  /// Observes the goal of the current activation without waiting.
+  template<typename State>
+  BT::NodeStatus observe_goal(State & state)
+  {
+    return poll_action(*this, state.session, state.acceptance);
+  }
+
+  /// Cancels the goal of the current activation.
+  ///
+  /// A halt never starts a replacement goal. The node keeps observing the
+  /// goal it already sent until it reaches a terminal state; a later
+  /// activation may send a new goal once that one is over.
+  template<typename State>
+  void cancel_goal(State & state)
+  {
+    if (state.session) {
+      safe_halt(*this, state.session, state.acceptance);
+    }
+  }
 
   friend class Navigate;
   friend class Takeoff;

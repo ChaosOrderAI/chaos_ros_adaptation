@@ -19,6 +19,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "chaos_core/action_result.hpp"
 #include "chaos_sdk/robot.hpp"
 
 namespace py = pybind11;
@@ -27,6 +28,7 @@ namespace
 {
 
 using chaos_sdk::Robot;
+using chaos::ResultHasApplied;
 
 /// Read-only view of a native response.
 ///
@@ -202,13 +204,6 @@ py::object feedback_view(const chaos_interfaces::action::NavigatePose::Feedback 
 py::object feedback_view(const chaos_interfaces::action::Flight::Feedback & feedback);
 py::object feedback_view(const chaos_interfaces::action::SoftwareUpdate::Feedback & feedback);
 
-template<typename T, typename = void>
-struct ResultHasApplied : std::false_type {};
-
-template<typename T>
-struct ResultHasApplied<T, std::void_t<decltype(std::declval<T &>().applied)>>
-: std::true_type {};
-
 /// One stamped pose as the nested view the rest of the binding uses.
 py::object pose_view(const geometry_msgs::msg::PoseStamped & pose)
 {
@@ -321,49 +316,57 @@ PyFuture make_future(std::shared_future<T> future, Converter convert)
 }
 
 /// Task wrapper around the native typed action task.
+///
+/// The three action types share one template and only the type of the result
+/// differs. The wrapper erases that type once, when the task is built, so
+/// every operation below is written once instead of once per action.
 class PyTask
 {
 public:
-  explicit PyTask(std::shared_ptr<Robot::NavigationTask> task)
-  : navigation_(std::move(task)) {}
-
-  explicit PyTask(std::shared_ptr<Robot::FlightTask> task)
-  : flight_(std::move(task)) {}
-
-  explicit PyTask(std::shared_ptr<Robot::OtaTask> task)
-  : ota_(std::move(task)) {}
+  /// Build a task from any of the typed action tasks.
+  ///
+  /// A task that was never created - the server rejected the goal - keeps
+  /// the empty wrapper: it reports that nothing was accepted.
+  template<typename TaskT>
+  static PyTask make(std::shared_ptr<TaskT> task)
+  {
+    PyTask out;
+    if (!task) {
+      return out;
+    }
+    out.accepted_ = [task]() {return task->accepted();};
+    out.goal_id_ = [task]() {return task->goal_id();};
+    out.state_ = [task]() {
+      return std::string(chaos_sdk::task_state_name(task->state()));
+    };
+    out.result_ = [task]() {return convert(task->result());};
+    out.get_result_async_ = [task]() {
+      return py::cast(make_future(
+        task->result(),
+        [](const auto & wrapped) {return convert_result(wrapped);}));
+    };
+    out.cancel_ = [task]() {return cancel_outcome(task->cancel());};
+    out.cancel_goal_async_ = [task]() {
+      return py::cast(make_future(
+        task->cancel(),
+        [](const chaos_sdk::CancelOutcome & outcome) {return cancel_outcome_value(outcome);}));
+    };
+    return out;
+  }
 
   bool accepted() const
   {
-    if (navigation_) {
-      return navigation_->accepted();
-    }
-    if (flight_) {
-      return flight_->accepted();
-    }
-    return ota_ && ota_->accepted();
+    return accepted_ ? accepted_() : false;
   }
 
   std::string goal_id() const
   {
-    if (navigation_) {
-      return navigation_->goal_id();
-    }
-    if (flight_) {
-      return flight_->goal_id();
-    }
-    return ota_ ? ota_->goal_id() : std::string();
+    return goal_id_ ? goal_id_() : std::string();
   }
 
   std::string state() const
   {
-    if (navigation_) {
-      return chaos_sdk::task_state_name(navigation_->state());
-    }
-    if (flight_) {
-      return chaos_sdk::task_state_name(flight_->state());
-    }
-    return ota_ ? chaos_sdk::task_state_name(ota_->state()) : "unknown";
+    return state_ ? state_() : std::string("unknown");
   }
 
   /// Terminal result of the action.
@@ -372,16 +375,7 @@ public:
   /// client must be able to run while Python waits for the result.
   py::object result() const
   {
-    if (navigation_) {
-      return convert(navigation_->result());
-    }
-    if (flight_) {
-      return convert(flight_->result());
-    }
-    if (!ota_) {
-      return py::none();
-    }
-    return convert(ota_->result());
+    return result_ ? result_() : py::none();
   }
 
   /// Compatibility alias of result() for call sites that used the rclpy
@@ -391,38 +385,15 @@ public:
   /// blocking. The rclpy client is not exposed.
   py::object get_result_async() const
   {
-    if (navigation_) {
-      return py::cast(make_future(
-        navigation_->result(),
-        [](const auto & wrapped) {return convert_result(wrapped);}));
-    }
-    if (flight_) {
-      return py::cast(make_future(
-        flight_->result(),
-        [](const auto & wrapped) {return convert_result(wrapped);}));
-    }
-    if (!ota_) {
-      return py::none();
-    }
-    return py::cast(make_future(
-      ota_->result(),
-      [](const auto & wrapped) {return convert_result(wrapped);}));
+    return get_result_async_ ? get_result_async_() : py::none();
   }
 
   /// Request cancellation through the owning action client.
   py::object cancel() const
   {
-    if (navigation_) {
-      return cancel_outcome(navigation_->cancel());
-    }
-    if (flight_) {
-      return cancel_outcome(flight_->cancel());
-    }
-    if (!ota_) {
-      return py::none();
-    }
-    return cancel_outcome(ota_->cancel());
+    return cancel_ ? cancel_() : py::none();
   }
+
   /// Compatibility alias of cancel() for call sites that used the rclpy
   /// naming.
   ///
@@ -430,22 +401,7 @@ public:
   /// rclpy client is not exposed.
   py::object cancel_goal_async() const
   {
-    if (navigation_) {
-      return py::cast(make_future(
-        navigation_->cancel(),
-        [](const chaos_sdk::CancelOutcome & outcome) {return cancel_outcome_value(outcome);}));
-    }
-    if (flight_) {
-      return py::cast(make_future(
-        flight_->cancel(),
-        [](const chaos_sdk::CancelOutcome & outcome) {return cancel_outcome_value(outcome);}));
-    }
-    if (!ota_) {
-      return py::none();
-    }
-    return py::cast(make_future(
-      ota_->cancel(),
-      [](const chaos_sdk::CancelOutcome & outcome) {return cancel_outcome_value(outcome);}));
+    return cancel_goal_async_ ? cancel_goal_async_() : py::none();
   }
 
 private:
@@ -507,9 +463,13 @@ private:
     return out;
   }
 
-  std::shared_ptr<Robot::NavigationTask> navigation_;
-  std::shared_ptr<Robot::FlightTask> flight_;
-  std::shared_ptr<Robot::OtaTask> ota_;
+  std::function<bool ()> accepted_;
+  std::function<std::string ()> goal_id_;
+  std::function<std::string ()> state_;
+  std::function<py::object ()> result_;
+  std::function<py::object ()> get_result_async_;
+  std::function<py::object ()> cancel_;
+  std::function<py::object ()> cancel_goal_async_;
 };
 
 py::object describe_dict(const chaos_interfaces::srv::GetDescription::Response & response)
@@ -732,7 +692,7 @@ PYBIND11_MODULE(_chaos_sdk, module)
         self.navigate(pose, feedback_of<chaos_interfaces::action::NavigatePose>(feedback_callback),
           ttl_s),
         [](const std::shared_ptr<Robot::NavigationTask> & task) {
-          return py::cast(PyTask(task));
+          return py::cast(PyTask::make(task));
         });
     },
     py::arg("target"), py::arg("feedback_callback") = py::none(), py::kw_only(),
@@ -747,7 +707,7 @@ PYBIND11_MODULE(_chaos_sdk, module)
         self.takeoff(altitude_m,
           feedback_of<chaos_interfaces::action::Flight>(feedback_callback), ttl_s),
         [](const std::shared_ptr<Robot::FlightTask> & task) {
-          return py::cast(PyTask(task));
+          return py::cast(PyTask::make(task));
         });
     },
     py::arg("altitude_m"), py::arg("feedback_callback") = py::none(), py::kw_only(),
@@ -758,7 +718,7 @@ PYBIND11_MODULE(_chaos_sdk, module)
       return make_future(
         self.land(feedback_of<chaos_interfaces::action::Flight>(feedback_callback), ttl_s),
         [](const std::shared_ptr<Robot::FlightTask> & task) {
-          return py::cast(PyTask(task));
+          return py::cast(PyTask::make(task));
         });
     },
     py::arg("feedback_callback") = py::none(), py::kw_only(),
@@ -771,7 +731,7 @@ PYBIND11_MODULE(_chaos_sdk, module)
         self.ota(artifact_id, version, sha256, size_bytes,
           feedback_of<chaos_interfaces::action::SoftwareUpdate>(feedback_callback), ttl_s),
         [](const std::shared_ptr<Robot::OtaTask> & task) {
-          return py::cast(PyTask(task));
+          return py::cast(PyTask::make(task));
         });
     },
     py::arg("artifact_id"), py::arg("version"), py::arg("sha256"), py::arg("size_bytes"),

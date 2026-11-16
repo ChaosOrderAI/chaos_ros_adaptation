@@ -10,9 +10,7 @@ constexpr const char * kSimulatedMessage =
   "simulated update did not read a package, write files, or restart; "
   "installed version is unchanged";
 
-using chaos::isOtaSha256;
-using chaos::isOtaToken;
-using chaos::kOtaMaxPackageBytes;
+using chaos::ota_request_error;
 
 OtaStatus canceledStatus() {
   OtaStatus status;
@@ -28,23 +26,12 @@ OtaStatus canceledStatus() {
 }  // namespace
 
 void validateOtaRequest(const OtaRequest & request) {
-  if (!isOtaToken(request.artifact_id)) {
-    throw chaos::Rejected(
-      "INVALID_ARGUMENT",
-      "artifact_id must be 1..128 letters, digits, '.', '_' or '-'");
-  }
-  if (!isOtaToken(request.version)) {
-    throw chaos::Rejected(
-      "INVALID_ARGUMENT",
-      "version must be 1..128 letters, digits, '.', '_' or '-'");
-  }
-  if (!isOtaSha256(request.sha256)) {
-    throw chaos::Rejected(
-      "INVALID_ARGUMENT", "sha256 must be 64 lowercase hex characters");
-  }
-  if (request.size_bytes < 1 || request.size_bytes > kOtaMaxPackageBytes) {
-    throw chaos::Rejected(
-      "INVALID_ARGUMENT", "size_bytes must be in 1..2147483648");
+  // The rules are shared with the MQTT command parser, so a request that
+  // reaches the runtime was already checked the same way.
+  const std::string error = ota_request_error(
+    request.artifact_id, request.version, request.sha256, request.size_bytes);
+  if (!error.empty()) {
+    throw chaos::Rejected("INVALID_ARGUMENT", error);
   }
 }
 

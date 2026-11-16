@@ -194,7 +194,7 @@ install(DIRECTORY transport/examples transport/scripts transport/deploy
 
 ament_export_targets(export_chaos_mqtt HAS_LIBRARY_TARGET)
 ament_export_dependencies(nlohmann_json rclcpp rclcpp_action std_msgs
-  builtin_interfaces geometry_msgs chaos_interfaces)
+  builtin_interfaces geometry_msgs chaos_interfaces chaos_core)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)

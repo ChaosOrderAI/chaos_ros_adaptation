@@ -707,6 +707,91 @@ public:
   }
 };
 
+// An update executor that records what the coordinator asked of it and
+// reports the terminal state the test chooses once the cancel took effect.
+//
+// It stands in for an executor that already committed the package when the
+// interrupt arrived: the cancel takes effect on the next poll, and that poll
+// is the one that reveals the real outcome.
+class RecordingOtaExecutor : public OtaExecutor {
+public:
+  void validate(const OtaRequest &) override { ++validates; }
+  void start(const OtaRequest & request) override {
+    ++starts;
+    started_request = request;
+    canceled = false;
+  }
+  OtaStatus poll() override {
+    ++polls;
+    if (canceled) {
+      return terminal;
+    }
+    if (on_poll) {
+      on_poll();
+    }
+    OtaStatus status;
+    status.phase = "verifying";
+    status.progress = 0.5;
+    status.code = "VERIFYING";
+    status.message = "checking the update request";
+    return status;
+  }
+  void cancel() override {
+    ++cancels;
+    canceled = true;
+  }
+  void close() override { ++closes; }
+
+  // The state the executor reports once the cancel took effect.
+  OtaStatus terminal;
+  // Runs inside every poll that is not canceled, under the control lock.
+  std::function<void()> on_poll;
+  int validates = 0;
+  int starts = 0;
+  int polls = 0;
+  int cancels = 0;
+  int closes = 0;
+  bool canceled = false;
+  OtaRequest started_request;
+};
+
+// A goal context that parks the final feedback of an update. The park
+// happens outside the control lock, so the test can observe the window
+// between the completion of the operation and the delivery of its terminal
+// result.
+class BlockingGoalContext : public FakeGoalContext {
+public:
+  void publishOtaFeedback(std::string_view phase, double progress) override {
+    FakeGoalContext::publishOtaFeedback(phase, progress);
+    if (phase != "staging") {
+      return;
+    }
+    std::unique_lock<std::mutex> lock(mutex);
+    parked = true;
+    condition.notify_all();
+    condition.wait(lock, [this] { return released; });
+  }
+
+  // Waits until the operation parked in its final feedback.
+  bool wait_parked(milliseconds bound) {
+    std::unique_lock<std::mutex> lock(mutex);
+    return condition.wait_for(lock, bound, [this] { return parked; });
+  }
+
+  void release() {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      released = true;
+    }
+    condition.notify_all();
+  }
+
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool parked = false;
+  bool released = false;
+};
+
 // Records velocity samples issued to the adapter and can fail controlled
 // stop output, without changing the mock telemetry semantics.
 class RecordingAdapter : public MockAdapter {
@@ -812,7 +897,9 @@ struct Harness {
   explicit Harness(bool uav = false,
                    std::unique_ptr<Adapter> adapter = nullptr,
                    UserSinks sinks = UserSinks(),
-                   bool enable_ota = false)
+                   bool enable_ota = false,
+                   std::unique_ptr<OtaExecutor> ota = nullptr,
+                   double action_timeout_s = 120.0)
       : rig(sinks) {
     AssetConfig asset = mockAsset();
     if (uav) {
@@ -823,6 +910,7 @@ struct Harness {
     if (enable_ota) {
       asset.capabilities.insert("system.ota");
     }
+    asset.limits.action_timeout_s = action_timeout_s;
     Clocks clocks;
     clocks.steady_s = [this] {
       if (steady_override) {
@@ -856,7 +944,7 @@ struct Harness {
       adapter = std::make_unique<MockAdapter>(asset);
     }
     coordinator = std::make_unique<ControlCoordinator>(
-      asset, std::move(adapter), clocks, rig.endpoint());
+      asset, std::move(adapter), clocks, rig.endpoint(), std::move(ota));
   }
 
   ~Harness() { finish(); }
@@ -2251,6 +2339,192 @@ TEST(CoordinatorOta, CapabilityIsRequired) {
   EXPECT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
                                       &token),
             ControlCoordinator::GoalDecision::kReject);
+}
+
+TEST(CoordinatorOta, TheCompletionWindowRefusesACancelAndASecondGoal) {
+  Harness harness(false, nullptr, {}, true);
+  const LeaseResponseView acquired =
+    harness.coordinator->lease(leaseRequest("acquire", "op-1"));
+  ASSERT_TRUE(acquired.success);
+  int token = 0;
+  ASSERT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
+                                      &token),
+            ControlCoordinator::GoalDecision::kAccept);
+  harness.coordinator->accepted(&token, &token);
+
+  BlockingGoalContext ctx;
+  std::atomic<bool> done{false};
+  OperationResult result;
+  std::thread worker([&] {
+    result = harness.coordinator->runOperation(OperationKind::kOta, &token, &token, ctx);
+    done = true;
+  });
+  // The operation parks in its final feedback. The terminal result has not
+  // reached the client yet.
+  ASSERT_TRUE(ctx.wait_parked(std::chrono::seconds(10)));
+
+  // The operation is over. A cancel must not turn it into a cancellation,
+  // and a second goal must not start next to it.
+  EXPECT_EQ(harness.coordinator->cancel(&token, &token),
+            ControlCoordinator::CancelDecision::kReject);
+  int second = 0;
+  EXPECT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
+                                      &second),
+            ControlCoordinator::GoalDecision::kReject);
+
+  ctx.release();
+  worker.join();
+  EXPECT_TRUE(done.load());
+  EXPECT_TRUE(result.success);
+  EXPECT_EQ(result.code, "SIMULATED");
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(ctx.successes, 1);
+  EXPECT_EQ(ctx.cancellations, 0);
+  EXPECT_EQ(ctx.last_phase, "staging");
+  harness.finish();
+}
+
+TEST(CoordinatorOta, ACancelReportsTheTerminalStateOfTheExecutor) {
+  auto executor = std::make_unique<RecordingOtaExecutor>();
+  RecordingOtaExecutor * recorder = executor.get();
+  // The executor committed the package before the cancel arrived.
+  recorder->terminal.done = true;
+  recorder->terminal.success = true;
+  recorder->terminal.applied = true;
+  recorder->terminal.code = "APPLIED";
+  recorder->terminal.message = "the package was written";
+  Harness harness(false, nullptr, {}, true, std::move(executor));
+
+  const LeaseResponseView acquired =
+    harness.coordinator->lease(leaseRequest("acquire", "op-1"));
+  ASSERT_TRUE(acquired.success);
+  int token = 0;
+  ASSERT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
+                                      &token),
+            ControlCoordinator::GoalDecision::kAccept);
+  harness.coordinator->accepted(&token, &token);
+
+  FakeGoalContext ctx;
+  ctx.cancel_requested = true;
+  const OperationResult result =
+    runWithWatchdog(harness, OperationKind::kOta, &token, ctx);
+  // The bytes are on the device: the cancel does not unwrite them, so the
+  // client is told the truth about the update.
+  EXPECT_TRUE(result.success);
+  EXPECT_EQ(result.code, "APPLIED");
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(ctx.successes, 1);
+  EXPECT_EQ(ctx.cancellations, 0);
+  EXPECT_EQ(recorder->cancels, 1);
+  harness.finish();
+}
+
+TEST(CoordinatorOta, TheTimeoutReachesTheExecutor) {
+  auto executor = std::make_unique<RecordingOtaExecutor>();
+  RecordingOtaExecutor * recorder = executor.get();
+  // The executor did not commit anything, so the interrupt stays the
+  // reported outcome.
+  recorder->terminal.done = true;
+  recorder->terminal.success = false;
+  recorder->terminal.applied = false;
+  recorder->terminal.code = "CANCELED";
+  recorder->terminal.message = "the update was canceled";
+  Harness harness(false, nullptr, {}, true, std::move(executor), 5.0);
+
+  LeaseRequestView lease = leaseRequest("acquire", "op-1");
+  lease.duration_s = 30.0;
+  const LeaseResponseView acquired = harness.coordinator->lease(lease);
+  ASSERT_TRUE(acquired.success);
+  int token = 0;
+  ASSERT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
+                                      &token),
+            ControlCoordinator::GoalDecision::kAccept);
+  harness.coordinator->accepted(&token, &token);
+  // The action timeout is five seconds, the lease lasts longer.
+  harness.clock->advance(6.0);
+
+  FakeGoalContext ctx;
+  const OperationResult result =
+    runWithWatchdog(harness, OperationKind::kOta, &token, ctx);
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(result.code, "TIMEOUT");
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(ctx.aborts, 1);
+  // The executor learned about the interrupt: an update that rolls back in
+  // cancel() never learns that it has to roll back.
+  EXPECT_EQ(recorder->cancels, 1);
+  harness.finish();
+}
+
+// The lease runs out between two ticks, so the operation itself is the first
+// to see it: the lease check throws inside the polling loop and no interrupt
+// branch runs.
+OperationResult runUpdateUntilTheLeaseCheckFails(
+  Harness & harness, RecordingOtaExecutor & recorder, FakeGoalContext & ctx) {
+  LeaseRequestView lease = leaseRequest("acquire", "op-1");
+  lease.duration_s = 1.0;
+  const LeaseResponseView acquired = harness.coordinator->lease(lease);
+  EXPECT_TRUE(acquired.success);
+  static int token = 0;
+  EXPECT_EQ(harness.coordinator->goal(OperationKind::kOta, otaGoal(acquired.token),
+                                      &token),
+            ControlCoordinator::GoalDecision::kAccept);
+  harness.coordinator->accepted(&token, &token);
+  recorder.on_poll = [&harness] { harness.clock->advance(1.5); };
+  // No tick runs, so the watchdog never turns the expiry into an interrupt.
+  return harness.coordinator->runOperation(OperationKind::kOta, &token, &token, ctx);
+}
+
+TEST(CoordinatorOta, AFailedLeaseCheckCancelsTheExecutor) {
+  auto executor = std::make_unique<RecordingOtaExecutor>();
+  RecordingOtaExecutor * recorder = executor.get();
+  recorder->terminal.done = true;
+  recorder->terminal.success = false;
+  recorder->terminal.applied = false;
+  recorder->terminal.code = "CANCELED";
+  recorder->terminal.message = "the update was canceled";
+  Harness harness(false, nullptr, {}, true, std::move(executor));
+
+  FakeGoalContext ctx;
+  const OperationResult result =
+    runUpdateUntilTheLeaseCheckFails(harness, *recorder, ctx);
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(result.code, "NO_CONTROL");
+  EXPECT_FALSE(result.applied);
+  EXPECT_EQ(ctx.aborts, 1);
+  EXPECT_EQ(recorder->starts, 1);
+  EXPECT_EQ(recorder->cancels, 1);
+  harness.finish();
+}
+
+TEST(CoordinatorOta, AFailedLeaseCheckReportsACommittedUpdate) {
+  auto executor = std::make_unique<RecordingOtaExecutor>();
+  RecordingOtaExecutor * recorder = executor.get();
+  recorder->terminal.done = true;
+  recorder->terminal.success = true;
+  recorder->terminal.applied = true;
+  recorder->terminal.code = "APPLIED";
+  recorder->terminal.message = "the package was written";
+  Harness harness(false, nullptr, {}, true, std::move(executor));
+
+  FakeGoalContext ctx;
+  const OperationResult result =
+    runUpdateUntilTheLeaseCheckFails(harness, *recorder, ctx);
+  EXPECT_TRUE(result.success);
+  EXPECT_EQ(result.code, "APPLIED");
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(ctx.successes, 1);
+  EXPECT_EQ(recorder->cancels, 1);
+  harness.finish();
+}
+
+TEST(CoordinatorOta, TheExecutorIsClosedWithTheRuntime) {
+  auto executor = std::make_unique<RecordingOtaExecutor>();
+  RecordingOtaExecutor * recorder = executor.get();
+  Harness harness(false, nullptr, {}, true, std::move(executor));
+  EXPECT_EQ(recorder->closes, 0);
+  harness.finish();
+  EXPECT_EQ(recorder->closes, 1);
 }
 
 }  // namespace

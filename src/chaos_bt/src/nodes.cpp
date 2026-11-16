@@ -199,19 +199,34 @@ void ActionNode::write_common(Node & node, const std::string & state, const std:
 template<typename Node, typename Session>
 void ActionNode::publish_feedback(Node & node, const std::shared_ptr<Session> & session)
 {
-  FeedbackSnapshot snapshot;
+  bool has_progress = false;
+  float progress = 0.0f;
+  bool has_pose = false;
+  geometry_msgs::msg::PoseStamped pose;
+  bool has_altitude = false;
+  double altitude_m = 0.0;
   {
     const std::lock_guard<std::mutex> guard(session->feedback_mutex);
-    snapshot = session->feedback;
+    // Only the fields that the node may publish are copied. A flight node
+    // never fills the pose, and copying the whole snapshot would copy it on
+    // every tick anyway.
+    has_progress = session->feedback.has_progress;
+    progress = session->feedback.progress;
+    has_altitude = session->feedback.has_altitude;
+    altitude_m = session->feedback.altitude_m;
+    if (session->feedback.has_pose) {
+      has_pose = true;
+      pose = session->feedback.pose;
+    }
   }
-  if (snapshot.has_progress) {
-    node.write_port("progress", static_cast<double>(snapshot.progress));
+  if (has_progress) {
+    node.write_port("progress", static_cast<double>(progress));
   }
-  if (snapshot.has_pose) {
-    node.write_port("current_pose", snapshot.pose);
+  if (has_pose) {
+    node.write_port("current_pose", pose);
   }
-  if (snapshot.has_altitude) {
-    node.write_port("current_altitude_m", snapshot.altitude_m);
+  if (has_altitude) {
+    node.write_port("current_altitude_m", altitude_m);
   }
 }
 
@@ -445,15 +460,42 @@ bool ActionNode::goal_finished(const std::shared_future<std::shared_ptr<Task>> &
   return task->result().wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 }
 
-struct Navigate::Impl
+namespace
 {
-  explicit Impl(std::shared_ptr<chaos_sdk::Robot> robot_in)
+
+/// The state that every action node keeps for the goal it observes.
+///
+/// The three nodes differ in the ports they read and in the goal they send;
+/// everything else is the same. The state is held in one place so that the
+/// lifecycle helpers of ActionNode can work on all of them.
+template<typename TaskT>
+struct ActionState
+{
+  using Session = ActionSession;
+
+  explicit ActionState(std::shared_ptr<chaos_sdk::Robot> robot_in)
   : robot(std::move(robot_in)) {}
 
+  /// The session dies with the node: the feedback callback and the deferred
+  /// cancellation waiter hold it, and they must not write into a node that no
+  /// longer exists.
+  ~ActionState()
+  {
+    if (session) {
+      session->halted.store(true);
+    }
+  }
+
   std::shared_ptr<chaos_sdk::Robot> robot;
-  std::shared_ptr<ActionSession> session;
-  std::shared_future<std::shared_ptr<chaos_sdk::Robot::NavigationTask>> acceptance;
-  bool halted = false;
+  std::shared_ptr<Session> session;
+  std::shared_future<std::shared_ptr<TaskT>> acceptance;
+};
+
+}  // namespace
+
+struct Navigate::Impl : ActionState<chaos_sdk::Robot::NavigationTask>
+{
+  using ActionState::ActionState;
 };
 
 Navigate::Navigate(
@@ -462,12 +504,7 @@ Navigate::Navigate(
 {
 }
 
-Navigate::~Navigate()
-{
-  if (impl_->session) {
-    impl_->session->halted.store(true);
-  }
-}
+Navigate::~Navigate() = default;
 
 BT::PortsList Navigate::providedPorts()
 {
@@ -484,13 +521,10 @@ BT::PortsList Navigate::providedPorts()
 
 BT::NodeStatus Navigate::onStart()
 {
-  if (impl_->acceptance.valid() &&
-    (impl_->halted || !goal_finished(impl_->acceptance)))
-  {
-    // A goal of this node is still running, or the tree halted the node. A
-    // second goal for the same asset would race with it, and a halt must not
-    // start a replacement action: the node keeps observing the goal that was
-    // already sent until it reaches a terminal state.
+  if (goal_pending(impl_->acceptance)) {
+    // The goal of the previous activation has not reached a terminal state
+    // yet. A second goal for the same asset would race with it, so the node
+    // keeps observing the goal it already sent.
     return onRunning();
   }
 
@@ -508,46 +542,28 @@ BT::NodeStatus Navigate::onStart()
   target.pose.orientation.w = std::cos(yaw / 2.0);
   const auto ttl = read_ttl(*this);
 
-  impl_->session = std::make_shared<ActionSession>();
-  clear_outputs(*this);
-  write_port("current_pose", neutral_pose());
-  try {
-    impl_->acceptance = impl_->robot->navigate(
-      target, feedback_callback<NavigatePose::Feedback>(impl_->session), ttl);
-  } catch (const std::invalid_argument & error) {
-    // A missing lease or an unusable TTL is a configuration error: the goal
-    // never left the process.
-    impl_->session.reset();
-    throw BT::RuntimeError(error.what());
-  } catch (const std::exception & error) {
-    impl_->session.reset();
-    return failure_of(*this, error);
-  }
-  return onRunning();
+  return start_goal(
+    *impl_,
+    [&](const std::shared_ptr<ActionSession> & session) {
+      return impl_->robot->navigate(
+        target, feedback_callback<NavigatePose::Feedback>(session), ttl);
+    },
+    [&]() {write_port("current_pose", neutral_pose());});
 }
 
 BT::NodeStatus Navigate::onRunning()
 {
-  return poll_action(*this, impl_->session, impl_->acceptance);
+  return observe_goal(*impl_);
 }
 
 void Navigate::onHalted()
 {
-  impl_->halted = true;
-  if (impl_->session) {
-    safe_halt(*this, impl_->session, impl_->acceptance);
-  }
+  cancel_goal(*impl_);
 }
 
-struct Takeoff::Impl
+struct Takeoff::Impl : ActionState<chaos_sdk::Robot::FlightTask>
 {
-  explicit Impl(std::shared_ptr<chaos_sdk::Robot> robot_in)
-  : robot(std::move(robot_in)) {}
-
-  std::shared_ptr<chaos_sdk::Robot> robot;
-  std::shared_ptr<ActionSession> session;
-  std::shared_future<std::shared_ptr<chaos_sdk::Robot::FlightTask>> acceptance;
-  bool halted = false;
+  using ActionState::ActionState;
 };
 
 Takeoff::Takeoff(
@@ -556,12 +572,7 @@ Takeoff::Takeoff(
 {
 }
 
-Takeoff::~Takeoff()
-{
-  if (impl_->session) {
-    impl_->session->halted.store(true);
-  }
-}
+Takeoff::~Takeoff() = default;
 
 BT::PortsList Takeoff::providedPorts()
 {
@@ -574,53 +585,38 @@ BT::PortsList Takeoff::providedPorts()
 
 BT::NodeStatus Takeoff::onStart()
 {
-  if (impl_->acceptance.valid() &&
-    (impl_->halted || !goal_finished(impl_->acceptance)))
-  {
+  if (goal_pending(impl_->acceptance)) {
+    // The goal of the previous activation has not reached a terminal state
+    // yet. A second goal for the same asset would race with it, so the node
+    // keeps observing the goal it already sent.
     return onRunning();
   }
 
   const double altitude = read_finite(*this, "altitude_m");
   const auto ttl = read_ttl(*this);
 
-  impl_->session = std::make_shared<ActionSession>();
-  clear_outputs(*this);
-  write_port("current_altitude_m", 0.0);
-  try {
-    impl_->acceptance = impl_->robot->takeoff(
-      altitude, feedback_callback<Flight::Feedback>(impl_->session), ttl);
-  } catch (const std::invalid_argument & error) {
-    impl_->session.reset();
-    throw BT::RuntimeError(error.what());
-  } catch (const std::exception & error) {
-    impl_->session.reset();
-    return failure_of(*this, error);
-  }
-  return onRunning();
+  return start_goal(
+    *impl_,
+    [&](const std::shared_ptr<ActionSession> & session) {
+      return impl_->robot->takeoff(
+        altitude, feedback_callback<Flight::Feedback>(session), ttl);
+    },
+    [&]() {write_port("current_altitude_m", 0.0);});
 }
 
 BT::NodeStatus Takeoff::onRunning()
 {
-  return poll_action(*this, impl_->session, impl_->acceptance);
+  return observe_goal(*impl_);
 }
 
 void Takeoff::onHalted()
 {
-  impl_->halted = true;
-  if (impl_->session) {
-    safe_halt(*this, impl_->session, impl_->acceptance);
-  }
+  cancel_goal(*impl_);
 }
 
-struct Land::Impl
+struct Land::Impl : ActionState<chaos_sdk::Robot::FlightTask>
 {
-  explicit Impl(std::shared_ptr<chaos_sdk::Robot> robot_in)
-  : robot(std::move(robot_in)) {}
-
-  std::shared_ptr<chaos_sdk::Robot> robot;
-  std::shared_ptr<ActionSession> session;
-  std::shared_future<std::shared_ptr<chaos_sdk::Robot::FlightTask>> acceptance;
-  bool halted = false;
+  using ActionState::ActionState;
 };
 
 Land::Land(
@@ -629,12 +625,7 @@ Land::Land(
 {
 }
 
-Land::~Land()
-{
-  if (impl_->session) {
-    impl_->session->halted.store(true);
-  }
-}
+Land::~Land() = default;
 
 BT::PortsList Land::providedPorts()
 {
@@ -646,41 +637,32 @@ BT::PortsList Land::providedPorts()
 
 BT::NodeStatus Land::onStart()
 {
-  if (impl_->acceptance.valid() &&
-    (impl_->halted || !goal_finished(impl_->acceptance)))
-  {
+  if (goal_pending(impl_->acceptance)) {
+    // The goal of the previous activation has not reached a terminal state
+    // yet. A second goal for the same asset would race with it, so the node
+    // keeps observing the goal it already sent.
     return onRunning();
   }
 
   const auto ttl = read_ttl(*this);
 
-  impl_->session = std::make_shared<ActionSession>();
-  clear_outputs(*this);
-  write_port("current_altitude_m", 0.0);
-  try {
-    impl_->acceptance = impl_->robot->land(
-      feedback_callback<Flight::Feedback>(impl_->session), ttl);
-  } catch (const std::invalid_argument & error) {
-    impl_->session.reset();
-    throw BT::RuntimeError(error.what());
-  } catch (const std::exception & error) {
-    impl_->session.reset();
-    return failure_of(*this, error);
-  }
-  return onRunning();
+  return start_goal(
+    *impl_,
+    [&](const std::shared_ptr<ActionSession> & session) {
+      return impl_->robot->land(
+        feedback_callback<Flight::Feedback>(session), ttl);
+    },
+    [&]() {write_port("current_altitude_m", 0.0);});
 }
 
 BT::NodeStatus Land::onRunning()
 {
-  return poll_action(*this, impl_->session, impl_->acceptance);
+  return observe_goal(*impl_);
 }
 
 void Land::onHalted()
 {
-  impl_->halted = true;
-  if (impl_->session) {
-    safe_halt(*this, impl_->session, impl_->acceptance);
-  }
+  cancel_goal(*impl_);
 }
 
 }  // namespace chaos_bt

@@ -181,7 +181,7 @@ flowchart TB
 | `flight/takeoff`、`flight/land` | `Flight` Action | 首版 mock 无人机的起飞、降落任务 |
 | `system/ota` | `SoftwareUpdate` Action | 软件更新。需要 `system.ota`。默认执行器只校验请求并回报模拟结果 |
 
-`system.ota` 与导航、起飞、降落和速度共用同一个长时间动作槽。请求带 `artifact_id`、`version`、64 位小写 `sha256` 和 `size_bytes`（1 到 2147483648），并使用与导航相同的租约和开始期限。反馈阶段是 `verifying` 和 `staging`。默认执行器正常结束时 `success=true`、`code=SIMULATED`、`applied=false`：没有读包、没有写盘、没有重启，安装版本不变。`success=true` 只表示这次模拟流程结束。取消、租约失效和关机都保持 `applied=false`。只有 mock 插件可以声明该能力；`unitree_go2`、`humanoid`、`lingao_ros2` 和 `dji_psdk_legacy` 一旦声明，预检失败。示例清单是 [ota.demo.yaml](../src/chaos_assets/config/ota.demo.yaml)。真实执行器以后可以替换，字段不变，并且在真正提交字节之前必须保持 `applied=false`。更新不写入 `ControlTrace`。
+`system.ota` 与导航、起飞、降落和速度共用同一个长时间动作槽。请求带 `artifact_id`、`version`、64 位小写 `sha256` 和 `size_bytes`（1 到 2147483648），并使用与导航相同的租约和开始期限。反馈阶段是 `verifying` 和 `staging`。默认执行器正常结束时 `success=true`、`code=SIMULATED`、`applied=false`：没有读包、没有写盘、没有重启，安装版本不变。`success=true` 只表示这次模拟流程结束。取消、租约失效、关机和动作超时会先取消执行器再报告中断码（`CANCELED`、`LEASE_EXPIRED`、`SHUTDOWN`、`TIMEOUT`）；`applied` 始终来自执行器的终态——只有真正提交了字节才为真，默认模拟执行器从不提交，所以仍然是 `false`。执行器在取消之前已经提交时，报告的是执行器的终态，而不是中断码：已经写下去的字节不会因为一次取消而消失。只有 mock 插件可以声明该能力；`unitree_go2`、`humanoid`、`lingao_ros2` 和 `dji_psdk_legacy` 一旦声明，预检失败。示例清单是 [ota.demo.yaml](../src/chaos_assets/config/ota.demo.yaml)。真实执行器以后可以替换，字段不变，并且在真正提交字节之前必须保持 `applied=false`。更新不写入 `ControlTrace`。
 
 统一行为的边界如下：
 

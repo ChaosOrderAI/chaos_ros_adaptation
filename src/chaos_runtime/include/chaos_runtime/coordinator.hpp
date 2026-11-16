@@ -253,6 +253,11 @@ private:
     const void * goal_token = nullptr;
     const void * handle_token = nullptr;
     std::optional<control::CommandDeadline> deadline;
+    // True once the operation reached its own terminal state. The
+    // reservation is still held while the terminal result travels to the
+    // client, so a cancel that arrives in that window must be refused: the
+    // operation is over and the client is about to learn that.
+    bool completed = false;
     // Delivers a typed terminal result when the reservation is dropped
     // without execution. Never invoked while the control lock is held.
     std::function<void(const OperationResult &)> terminal;
@@ -321,6 +326,16 @@ private:
   // block the watchdog.
   void finishOperation(Operation & operation, GoalContext & ctx,
                        OperationResult & result, std::string & terminal);
+  // Cancels a software update and harvests the terminal state of the
+  // executor. Returns true when the executor reports a committed update:
+  // the bytes are on the device, and the executor's own status is the truth
+  // about the operation. Returns false when the update was not committed, so
+  // the caller keeps the interrupt code and the `applied` flag stays false.
+  //
+  // The executor contract says that a cancel takes effect on the next poll,
+  // so the poll after the cancel is what reveals the real outcome.
+  bool harvestOtaAfterCancel(const Operation & operation,
+                              OperationResult & result, std::string & terminal);
   // Delivers the terminal transition to the action server. Runs outside the
   // control lock; failures are isolated from control decisions.
   void deliverTerminal(GoalContext & ctx, const std::string & terminal,

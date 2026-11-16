@@ -732,8 +732,13 @@ Json GatewayNode::build_action_reply(const Pending & pending, const Json & termi
   // Task events remain compatible, while the correlated response path also
   // receives completion. The Rust bridge can replace ACCEPTED in its replay
   // cache even if the task_events subscriber was offline.
+  //
+  // `applied` is part of the reply: a consumer of the result topic has to be
+  // able to tell a simulated update from a committed one, exactly like a
+  // consumer of the event topic. It is absent when the runtime never
+  // reported it, for example when the goal timed out before it was accepted.
   Json extra = Json::object();
-  for (const char * key : {"goal_id", "ros_goal_status", "execution_state"}) {
+  for (const char * key : {"goal_id", "ros_goal_status", "execution_state", "applied"}) {
     if (terminal_event.contains(key)) {
       extra[key] = terminal_event.at(key);
     }

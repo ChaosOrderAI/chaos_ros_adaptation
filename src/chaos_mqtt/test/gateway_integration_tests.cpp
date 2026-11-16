@@ -134,6 +134,7 @@ public:
     }
     takeoff_server_ = make_flight_server("flight/takeoff");
     land_server_ = make_flight_server("flight/land");
+    ota_server_ = make_ota_server("system/ota");
   }
 
   /// Advertise the navigation action server.
@@ -253,6 +254,34 @@ public:
 
 private:
   using Flight = chaos_interfaces::action::Flight;
+  using SoftwareUpdate = chaos_interfaces::action::SoftwareUpdate;
+
+  /// The update server of the mock runtime.
+  ///
+  /// It accepts the goal and reports a committed package, so the gateway has
+  /// to carry the `applied` flag into its terminal reply.
+  rclcpp_action::Server<SoftwareUpdate>::SharedPtr make_ota_server(const std::string & name)
+  {
+    return rclcpp_action::create_server<SoftwareUpdate>(
+      this, name,
+      [](const rclcpp_action::GoalUUID &, std::shared_ptr<const SoftwareUpdate::Goal>) {
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+      },
+      [](const std::shared_ptr<rclcpp_action::ServerGoalHandle<SoftwareUpdate>>) {
+        return rclcpp_action::CancelResponse::ACCEPT;
+      },
+      [](const std::shared_ptr<rclcpp_action::ServerGoalHandle<SoftwareUpdate>> handle) {
+        auto feedback = std::make_shared<SoftwareUpdate::Feedback>();
+        feedback->phase = "staging";
+        handle->publish_feedback(feedback);
+        auto result = std::make_shared<SoftwareUpdate::Result>();
+        result->success = true;
+        result->code = "APPLIED";
+        result->message = "the package was written";
+        result->applied = true;
+        handle->succeed(result);
+      });
+  }
 
   rclcpp_action::Server<Flight>::SharedPtr make_flight_server(const std::string & name)
   {
@@ -285,6 +314,7 @@ private:
   rclcpp_action::Server<chaos_interfaces::action::NavigatePose>::SharedPtr navigation_server_;
   rclcpp_action::Server<Flight>::SharedPtr takeoff_server_;
   rclcpp_action::Server<Flight>::SharedPtr land_server_;
+  rclcpp_action::Server<SoftwareUpdate>::SharedPtr ota_server_;
   std::mutex mutex_;
   std::condition_variable feedback_cv_;
   bool feedback_released_ = false;
@@ -381,7 +411,7 @@ protected:
     rclcpp::NodeOptions options;
     options.append_parameter_override("asset_json", std::string(
         R"({"id":"drone_001","capabilities":["state","motion.stop","motion.velocity",)"
-        R"("navigation.pose","flight.takeoff","flight.land"],)"
+        R"("navigation.pose","flight.takeoff","flight.land","system.ota"],)"
         R"("frames":{"base":"drone_001/base_link"},"limits":{"command_timeout_s":0.5}})"));
     for (const auto & parameter : parameters) {
       options.append_parameter_override(parameter.name, parameter.value);
@@ -670,6 +700,42 @@ TEST_F(GatewayIntegration, ActionLifecycleAcceptFeedbackTerminalAndReplay)
   }));
   const std::lock_guard<std::mutex> guard(mutex_);
   EXPECT_EQ(events_.back(), terminal_event);
+}
+
+TEST_F(GatewayIntegration, AnOtaReplyCarriesTheAppliedFlag)
+{
+  const std::string acquire_id = "acquire_ota";
+  command("control.acquire", acquire_id, {{"owner", "cpp_smoke"}, {"duration_s", 30.0}});
+  ASSERT_TRUE(wait_for([&]() { return !replies_for(acquire_id).empty(); }));
+  const std::string token = replies_for(acquire_id).back()["response"]["data"]["token"];
+
+  const std::string update_id = "ota_0001";
+  command("system.ota", update_id,
+    {{"lease_token", token},
+      {"artifact_id", "pkg.alpha"},
+      {"version", "1.2.3"},
+      {"sha256", std::string(64, 'a')},
+      {"size_bytes", 128}});
+  ASSERT_TRUE(wait_for([&]() { return has_terminal_reply(update_id); }));
+  const json completed = replies_for(update_id).back();
+  EXPECT_EQ(completed["response"]["phase"], "result");
+  EXPECT_TRUE(completed["response"]["terminal"].get<bool>());
+  EXPECT_TRUE(completed["response"]["ok"].get<bool>());
+  // A consumer of the result topic has to be able to tell a committed
+  // update from a simulated one.
+  ASSERT_TRUE(completed["response"].contains("applied"));
+  EXPECT_TRUE(completed["response"]["applied"].get<bool>());
+
+  json terminal_event;
+  {
+    const std::lock_guard<std::mutex> guard(mutex_);
+    const auto it = std::find_if(events_.begin(), events_.end(), [&](const json & event) {
+      return event["request_id"] == update_id && event["terminal"].get<bool>();
+    });
+    ASSERT_NE(it, events_.end());
+    terminal_event = *it;
+  }
+  EXPECT_TRUE(terminal_event["applied"].get<bool>());
 }
 
 TEST_F(GatewayIntegration, SilentServiceTimesOutWithUnknownExecutionState)

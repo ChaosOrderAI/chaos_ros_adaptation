@@ -37,7 +37,7 @@ auto tree = factory.createTreeFromText(xml);
 - 只有后续 tick 观察到服务端的 `CANCELED` 终态，`task_state` 才是 `canceled`。
 - 本地观察超时输出 `timed_out`，客户端关闭或取消发不出去输出 `unknown`。这两种情况都不表示远端已经停止，节点也不会自动再发一次目标。
 
-被 `halt` 的节点不会再发新目标：BehaviorTree.CPP 在 `halt` 之后会把节点复位，下一次 tick 仍然观察同一个目标，直到它到达终态。
+被 `halt` 的节点会先复位：旧目标还没到终态时，下一次 tick 仍然观察同一个目标，不会发第二个目标——两个目标会互相竞争，runtime 也可能以 `BUSY` 拒绝后来的那个。旧目标到达终态之后，节点才会发新目标。所以 `RetryUntilSuccessful` 之类的重试不会一直消耗同一个已经结束的目标。
 
 旧动作还没到终态时，runtime 可能以 `BUSY` 拒绝同一个资产上的新动作。租约由调用方持有，`halt` 不释放租约。
 

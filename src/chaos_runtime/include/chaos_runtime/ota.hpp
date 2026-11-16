@@ -42,6 +42,12 @@ public:
   virtual void start(const OtaRequest & request) = 0;
   virtual OtaStatus poll() = 0;
   virtual void cancel() = 0;
+  // Releases the resources of the executor when the runtime shuts down.
+  //
+  // The default does nothing: an executor that only validates a request
+  // holds nothing. An executor that opened a file, a socket or a vendor SDK
+  // releases it here, next to the adapter close of the coordinator.
+  virtual void close() {}
 };
 
 // Two polls: `verifying` at 0.5, then `staging` at 1.0 with code SIMULATED

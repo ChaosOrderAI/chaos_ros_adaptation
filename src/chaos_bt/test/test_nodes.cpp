@@ -207,7 +207,7 @@ TEST_F(NodeTest, SequentialActionsReuseTheLease)
   EXPECT_EQ(1, server_->lease_calls());
 }
 
-TEST_F(NodeTest, AHaltedNodeKeepsItsGoalAndReportsTheTerminalState)
+TEST_F(NodeTest, AHaltedNodeObservesItsGoalUntilItIsTerminal)
 {
   auto goal = server_->install<chaos_interfaces::action::NavigatePose>();
   auto tree = make(
@@ -228,6 +228,71 @@ TEST_F(NodeTest, AHaltedNodeKeepsItsGoalAndReportsTheTerminalState)
   EXPECT_EQ(1, server_->goals());
   EXPECT_EQ(BT::NodeStatus::FAILURE, status);
   EXPECT_EQ("canceled", tree.rootBlackboard()->get<std::string>("task_state"));
+}
+
+TEST_F(NodeTest, AHaltedNodeSendsANewGoalAfterTheOldOneFinished)
+{
+  auto goal = server_->install<chaos_interfaces::action::NavigatePose>();
+  auto tree = make(
+    R"(<root BTCPP_format="4"><BehaviorTree ID="Main"><Navigate frame_id="map" )"
+    R"(x="0" y="0" z="0" yaw="0"/></BehaviorTree></root>)");
+  ASSERT_EQ(BT::NodeStatus::RUNNING, tree.tickOnce());
+  ASSERT_TRUE(goal->wait_accepted(5s));
+  tree.haltTree();
+  ASSERT_TRUE(goal->wait_canceling(5s));
+
+  // The old goal is not terminal yet: the node keeps observing it and does
+  // not send a second goal for the same asset.
+  ASSERT_EQ(BT::NodeStatus::RUNNING, tree.tickOnce());
+  EXPECT_EQ(1, server_->goals());
+
+  goal->finish(false, "CANCELED", "canceled by the tree");
+  BT::NodeStatus status = BT::NodeStatus::RUNNING;
+  for (int i = 0; i < 50 && status == BT::NodeStatus::RUNNING; ++i) {
+    status = tree.tickOnce();
+    std::this_thread::sleep_for(20ms);
+  }
+  ASSERT_EQ(BT::NodeStatus::FAILURE, status);
+  EXPECT_EQ("canceled", tree.rootBlackboard()->get<std::string>("task_state"));
+  EXPECT_EQ(1, server_->goals());
+
+  // The node is activated again while the old goal is terminal. It sends a
+  // new goal instead of consuming the finished one a second time.
+  tree.haltTree();
+  tree.tickOnce();
+  // The goal travels to the server asynchronously.
+  for (int i = 0; i < 100 && server_->goals() < 2; ++i) {
+    std::this_thread::sleep_for(20ms);
+  }
+  EXPECT_EQ(2, server_->goals());
+}
+
+TEST_F(NodeTest, ARetrySendsANewGoalAfterAHalt)
+{
+  auto goal = server_->install<chaos_interfaces::action::NavigatePose>();
+  auto tree = make(
+    R"(<root BTCPP_format="4"><BehaviorTree ID="Main">)"
+    R"(<RetryUntilSuccessful num_attempts="3">)"
+    R"(<Parallel success_count="2" failure_count="2">)"
+    R"(<Navigate frame_id="map" x="0" y="0" z="0" yaw="0"/><AlwaysFailure/>)"
+    R"(</Parallel></RetryUntilSuccessful></BehaviorTree></root>)");
+  tree.tickOnce();
+  // The failing sibling halts the navigation that is still running, so the
+  // cancellation is on its way.
+  ASSERT_TRUE(goal->wait_canceling(5s));
+  ASSERT_EQ(1, server_->goals());
+
+  goal->finish(false, "CANCELED", "canceled by the tree");
+  // The retry must not consume the old goal again: once the old goal is
+  // terminal, the next attempt starts a new one. The client needs a moment
+  // to observe the terminal result, so the tree is halted and ticked again
+  // until the new goal is on its way.
+  for (int i = 0; i < 20 && server_->goals() < 2; ++i) {
+    tree.haltTree();
+    tree.tickOnce();
+    std::this_thread::sleep_for(50ms);
+  }
+  EXPECT_EQ(2, server_->goals());
 }
 
 TEST_F(NodeTest, ARefusedCancellationIsReported)
