@@ -29,13 +29,27 @@ struct World::Impl {
   std::unique_ptr<mjData, decltype(&mj_deleteData)> data{nullptr, mj_deleteData};
   double kp, kd;
   SceneStats scene_stats;
+  struct Robot {
+    std::string name;
+    int base_body = -1;
+    int free_joint = -1;
+    std::vector<int> actuators;
+    std::vector<std::string> joint_names;
+  };
+
   int base_body = -1;
   int home_key = -1;
+  std::vector<Robot> robots;
   std::vector<std::string> names;
   std::unordered_map<std::string, std::size_t> indices;
   std::vector<int> joints, qpos_indices, dof_indices;
   std::vector<double> targets, candidate;
   std::vector<std::uint8_t> seen;
+
+  const Robot& robot(std::size_t index) const {
+    if (index >= robots.size()) throw std::out_of_range("robot index");
+    return robots[index];
+  }
 
   explicit Impl(const WorldConfig& config) : kp(config.kp), kd(config.kd) {
     require(!config.model_path.empty(), "model_path must not be empty");
@@ -53,19 +67,37 @@ struct World::Impl {
     require(std::isfinite(m->opt.timestep) && m->opt.timestep > 0,
             "Model timestep must be finite and positive");
     require(m->nu > 0 && m->na == 0, "Model must have torque motors without activation dynamics");
-    int free_count = 0;
+    std::vector<int> body_root(m->nbody, 0);
+    for (int body = 1; body < m->nbody; ++body) {
+      const int parent = m->body_parentid[body];
+      body_root[body] = parent == 0 ? body : body_root[parent];
+    }
+    std::unordered_map<int, std::size_t> robot_of_body;
     for (int j = 0; j < m->njnt; ++j) {
       if (m->jnt_type[j] == mjJNT_FREE) {
-        ++free_count;
-        base_body = m->jnt_bodyid[j];
-        require(m->body_parentid[base_body] == 0 && m->body_jntnum[base_body] == 1,
+        const int body = m->jnt_bodyid[j];
+        require(m->body_parentid[body] == 0 && m->body_jntnum[body] == 1,
                 "Free joint must belong to a root body");
+        const char* body_name = mj_id2name(m, mjOBJ_BODY, body);
+        require(robot_of_body.emplace(body, robots.size()).second,
+                "Floating root body is duplicated");
+        Robot robot;
+        robot.name = body_name ? body_name : "";
+        robot.base_body = body;
+        robot.free_joint = j;
+        robots.push_back(std::move(robot));
       } else {
         require(m->jnt_type[j] == mjJNT_HINGE || m->jnt_type[j] == mjJNT_SLIDE,
                 "Only free-root and hinge/slide joints are supported");
       }
     }
-    require(free_count == 1, "Model must have exactly one floating root");
+    require(!robots.empty() && robots.size() <= 8, "Model must have 1 to 8 floating roots");
+    if (robots.size() > 1) {
+      for (const auto& robot : robots) {
+        require(!robot.name.empty(), "Each floating root must be named");
+      }
+    }
+    base_body = robots.front().base_body;
     require(!(m->opt.disableflags & mjDSBL_ACTUATION) && m->opt.disableactuator == 0,
             "Model must enable all actuators");
     names.reserve(m->nu);
@@ -105,6 +137,13 @@ struct World::Impl {
       joints.push_back(joint);
       qpos_indices.push_back(m->jnt_qposadr[joint]);
       dof_indices.push_back(m->jnt_dofadr[joint]);
+      const auto owner = robot_of_body.find(body_root[m->jnt_bodyid[joint]]);
+      require(owner != robot_of_body.end(), "Actuated joint must belong to a floating root");
+      robots[owner->second].actuators.push_back(a);
+      robots[owner->second].joint_names.emplace_back(name);
+    }
+    for (const auto& robot : robots) {
+      require(!robot.actuators.empty(), "Each floating root needs an actuator");
     }
     targets.resize(m->nu);
     candidate.resize(m->nu);
@@ -128,6 +167,11 @@ struct World::Impl {
 World::World(const WorldConfig& config) : impl_(std::make_unique<Impl>(config)) { reset(); }
 World::~World() = default;
 const std::vector<std::string>& World::jointNames() const { return impl_->names; }
+std::size_t World::robotCount() const { return impl_->robots.size(); }
+const std::string& World::robotName(std::size_t index) const { return impl_->robot(index).name; }
+const std::vector<std::string>& World::robotJointNames(std::size_t index) const {
+  return impl_->robot(index).joint_names;
+}
 double World::timestep() const { return impl_->model->opt.timestep; }
 std::size_t World::modelBytes() const { return impl_->model->nbuffer; }
 std::size_t World::arenaBytes() const { return impl_->data->narena; }
@@ -169,6 +213,15 @@ void World::hold() {
   for (std::size_t a = 0; a < w.targets.size(); ++a) w.targets[a] = w.data->qpos[w.qpos_indices[a]];
 }
 
+void World::holdRobot(std::size_t index) {
+  auto& w = *impl_;
+  const auto& robot = w.robot(index);
+  w.checkFinite();
+  for (const int actuator : robot.actuators) {
+    w.targets[actuator] = w.data->qpos[w.qpos_indices[actuator]];
+  }
+}
+
 void World::reset() {
   auto& w = *impl_;
   if (w.home_key >= 0) mj_resetDataKeyframe(w.model.get(), w.data.get(), w.home_key);
@@ -181,6 +234,36 @@ void World::reset() {
   mju_zero(w.data->ctrl, w.model->nu);
   mj_forward(w.model.get(), w.data.get());
   hold();
+}
+
+void World::resetRobot(std::size_t index) {
+  auto& w = *impl_;
+  const auto& robot = w.robot(index);
+  if (w.robots.size() == 1 || w.home_key < 0) {
+    reset();
+    return;
+  }
+  const auto* m = w.model.get();
+  auto* d = w.data.get();
+  const mjtNum* key = m->key_qpos + static_cast<std::size_t>(w.home_key) * m->nq;
+  const int free_position = m->jnt_qposadr[robot.free_joint];
+  const int free_velocity = m->jnt_dofadr[robot.free_joint];
+  mju_copy(d->qpos + free_position, key + free_position, 7);
+  mju_zero(d->qvel + free_velocity, 6);
+  mju_zero(d->qfrc_applied + free_velocity, 6);
+  mju_zero(d->xfrc_applied + 6 * robot.base_body, 6);
+  for (const int actuator : robot.actuators) {
+    const int position = w.qpos_indices[actuator];
+    const int dof = w.dof_indices[actuator];
+    d->qpos[position] = key[position];
+    d->qvel[dof] = 0;
+    d->qacc[dof] = 0;
+    d->qfrc_applied[dof] = 0;
+    d->ctrl[actuator] = 0;
+    w.targets[actuator] = d->qpos[position];
+  }
+  mj_forward(m, d);
+  w.checkFinite();
 }
 
 void World::step() {
@@ -225,6 +308,34 @@ void World::readState(State& state) {
   state.base_orientation = {quat[1], quat[2], quat[3], quat[0]};
   mjtNum velocity[6]{};
   mj_objectVelocity(w.model.get(), w.data.get(), mjOBJ_XBODY, w.base_body, velocity, 1);
+  for (int i = 0; i < 3; ++i) {
+    state.base_twist[i] = velocity[i + 3];
+    state.base_twist[i + 3] = velocity[i];
+  }
+  state.simulation_time = w.data->time;
+}
+
+void World::readRobot(std::size_t index, State& state) {
+  auto& w = *impl_;
+  const auto& robot = w.robot(index);
+  w.checkFinite();
+  mj_forward(w.model.get(), w.data.get());
+  w.checkFinite();
+  const auto count = robot.actuators.size();
+  state.position.resize(count);
+  state.velocity.resize(count);
+  state.effort.resize(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    const int actuator = robot.actuators[i];
+    state.position[i] = w.data->qpos[w.qpos_indices[actuator]];
+    state.velocity[i] = w.data->qvel[w.dof_indices[actuator]];
+    state.effort[i] = w.data->qfrc_actuator[w.dof_indices[actuator]];
+  }
+  std::copy_n(w.data->xpos + 3 * robot.base_body, 3, state.base_position.begin());
+  const auto* quat = w.data->xquat + 4 * robot.base_body;
+  state.base_orientation = {quat[1], quat[2], quat[3], quat[0]};
+  mjtNum velocity[6]{};
+  mj_objectVelocity(w.model.get(), w.data.get(), mjOBJ_XBODY, robot.base_body, velocity, 1);
   for (int i = 0; i < 3; ++i) {
     state.base_twist[i] = velocity[i + 3];
     state.base_twist[i + 3] = velocity[i];

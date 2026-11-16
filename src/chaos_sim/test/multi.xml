@@ -1,0 +1,42 @@
+<mujoco model="two floating robots">
+  <!-- Bodies are named to look like a composed Go2 fleet: alpha is the entry
+       name, alpha_2 would extend its namespace. -->
+  <compiler angle="radian"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <worldbody>
+    <geom type="plane" size="5 5 .1"/>
+    <body name="alpha" pos="0 0 2">
+      <freejoint/>
+      <geom type="sphere" size=".1" mass="1"/>
+      <body pos=".2 0 0">
+        <joint name="alpha/hinge" axis="0 1 0" range="-1 1" damping=".1"/>
+        <geom type="capsule" fromto="0 0 0 .2 0 0" size=".04" mass=".1"/>
+      </body>
+      <body pos="-.2 0 0">
+        <joint name="alpha/slide" type="slide" axis="1 0 0" range="-.1 .1" damping=".1"/>
+        <geom type="sphere" size=".04" mass=".1"/>
+      </body>
+    </body>
+    <body name="beta" pos="1 0 2">
+      <freejoint/>
+      <geom type="sphere" size=".1" mass="1"/>
+      <body pos=".2 0 0">
+        <joint name="beta/hinge" axis="0 1 0" range="-1 1" damping=".1"/>
+        <geom type="capsule" fromto="0 0 0 .2 0 0" size=".04" mass=".1"/>
+      </body>
+      <body pos="-.2 0 0">
+        <joint name="beta/slide" type="slide" axis="1 0 0" range="-.1 .1" damping=".1"/>
+        <geom type="sphere" size=".04" mass=".1"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor joint="alpha/hinge" ctrlrange="-2 2"/>
+    <motor joint="alpha/slide" ctrlrange="-2 2"/>
+    <motor joint="beta/hinge" ctrlrange="-2 2"/>
+    <motor joint="beta/slide" ctrlrange="-2 2"/>
+  </actuator>
+  <keyframe>
+    <key name="home" qpos="0 0 2 1 0 0 0 .2 .03 1 0 2 1 0 0 0 .2 .03" ctrl=".2 .03 .2 .03"/>
+  </keyframe>
+</mujoco>

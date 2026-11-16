@@ -61,6 +61,8 @@ int main(int argc, char** argv) {
 
     World world(config), reference(config);
     check(world.jointNames() == std::vector<std::string>({"hinge", "slide"}), "wrong joint order");
+    check(world.robotCount() == 1 && world.robotName(0) == "base", "tiny is not one named root");
+    throws([&] { world.robotName(1); }, "robot index accepted");
     check(world.modelBytes() > 0 && world.arenaBytes() > 0, "missing memory metrics");
     State initial, state, other;
     world.readState(initial);
@@ -136,6 +138,50 @@ int main(int argc, char** argv) {
     check(overflowing.setTargets({"slide"}, {-.1}, error), "slide target rejected");
     // Hinge error -1.2 exceeds unity, forcing overflow with DBL_MAX.
     throws([&] { overflowing.step(); }, "non-finite PD torque was hidden");
+
+    World multi({dir + "/multi.xml"});
+    check(multi.robotCount() == 2, "two roots");
+    check(multi.robotName(0) == "alpha" && multi.robotName(1) == "beta", "robot names");
+    check(multi.robotJointNames(0) == std::vector<std::string>({"alpha/hinge", "alpha/slide"}),
+          "alpha joints");
+    check(multi.robotJointNames(1) == std::vector<std::string>({"beta/hinge", "beta/slide"}),
+          "beta joints");
+    throws([&] { multi.resetRobot(2); }, "reset index accepted");
+    State alpha, beta;
+    multi.readRobot(1, beta);
+    close(beta.base_position[0], 1, "beta spawn");
+    close(beta.position[0], .2, "beta home hinge");
+    close(beta.position[1], .03, "beta home slide");
+    close(beta.base_orientation[3], 1, "beta quaternion is not xyzw");
+    check(multi.setTargets({"alpha/hinge"}, {.7}, error), "alpha target rejected");
+    for (int i = 0; i < 40; ++i) multi.step();
+    multi.readRobot(0, alpha);
+    multi.readRobot(1, beta);
+    check(alpha.position[0] > .25, "alpha did not move");
+    check(std::abs(beta.position[0] - .2) < 1e-3, "beta moved with alpha");
+    check(std::abs(beta.position[1] - .03) < 1e-3, "beta slide moved with alpha");
+    const double beta_hinge = beta.position[0];
+    const double beta_x = beta.base_position[0];
+    const double beta_time = beta.simulation_time;
+    multi.resetRobot(0);
+    multi.readRobot(0, alpha);
+    multi.readRobot(1, beta);
+    close(alpha.position[0], .2, "alpha reset missed home");
+    close(alpha.base_position[2], 2, "alpha reset missed height");
+    close(beta.position[0], beta_hinge, "beta joint changed on alpha reset");
+    close(beta.base_position[0], beta_x, "beta base changed on alpha reset");
+    close(beta.simulation_time, beta_time, "partial reset cleared time");
+    check(multi.setTargets({"beta/hinge"}, {-.5}, error), "beta target rejected");
+    for (int i = 0; i < 20; ++i) multi.step();
+    multi.readRobot(1, beta);
+    const State held = beta;
+    multi.holdRobot(1);
+    multi.step();
+    multi.readRobot(1, beta);
+    close(beta.effort[0], std::fmax(-2, std::fmin(2, -2 * held.velocity[0])),
+          "holdRobot did not capture beta");
+    multi.readRobot(0, alpha);
+    check(std::abs(alpha.position[0] - .2) < 1e-3, "holdRobot moved alpha");
 
     for (int i = 2; i < argc; ++i) {
       World compact({argv[i]});

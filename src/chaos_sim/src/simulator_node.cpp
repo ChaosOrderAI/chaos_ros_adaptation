@@ -29,9 +29,17 @@ using Nanoseconds = std::chrono::nanoseconds;
 using JointState = sensor_msgs::msg::JointState;
 using DiagnosticArray = diagnostic_msgs::msg::DiagnosticArray;
 
-struct Instance {
-  std::string name, ns;
+struct Simulation {
   std::unique_ptr<chaos::sim::World> world;
+  int divisor = 1;
+  int phase = 0;
+};
+
+struct Instance {
+  Simulation* simulation = nullptr;
+  int robot = -1;  // -1 reads the whole single-root world.
+  std::string name, ns, prefix;
+  std::vector<std::string> prefixed;
   chaos::sim::State state;
   JointState joints;
   nav_msgs::msg::Odometry odom;
@@ -44,7 +52,6 @@ struct Instance {
   Clock::time_point last_command{};
   bool command_active = false;
   uint64_t accepted = 0, rejected = 0, timed_out = 0;
-  int divisor = 1, phase = 0;
 };
 
 template <typename T>
@@ -86,17 +93,21 @@ class SimulatorNode final : public rclcpp::Node {
     const auto entries = nlohmann::json::parse(json);
     if (!entries.is_array() || entries.empty() || entries.size() > 32)
       throw std::invalid_argument("worlds_json requires 1..32 worlds");
-    std::set<std::string> names, namespaces;
+    std::set<std::string> config_names, config_namespaces;
     const std::regex name_pattern("[A-Za-z_][A-Za-z0-9_]*");
     const std::regex ns_pattern("(/[A-Za-z_][A-Za-z0-9_]*)+");
-    instances_.reserve(entries.size());
+    struct Loaded {
+      std::unique_ptr<Simulation> simulation;
+      std::string name, ns;
+    };
+    std::vector<Loaded> loaded;
+    loaded.reserve(entries.size());
     int minimum_us = 2000;
     for (const auto &entry : entries) {
-      auto instance = std::make_unique<Instance>();
-      instance->name = entry.at("name").get<std::string>();
-      instance->ns = entry.at("namespace").get<std::string>();
-      if (!std::regex_match(instance->name, name_pattern) || !std::regex_match(instance->ns, ns_pattern) ||
-          !names.insert(instance->name).second || !namespaces.insert(instance->ns).second)
+      const auto name = entry.at("name").get<std::string>();
+      const auto ns = entry.at("namespace").get<std::string>();
+      if (!std::regex_match(name, name_pattern) || !std::regex_match(ns, ns_pattern) ||
+          !config_names.insert(name).second || !config_namespaces.insert(ns).second)
         throw std::invalid_argument("world names and absolute namespaces must be valid and unique");
       chaos::sim::WorldConfig config;
       config.model_path = entry.at("model_path").get<std::string>();
@@ -122,26 +133,48 @@ class SimulatorNode final : public rclcpp::Node {
       }
       config.scene.collision = entry.value("scene_collision", true);
       if (config.model_path.empty()) throw std::invalid_argument("model_path must not be empty");
-      instance->world = std::make_unique<chaos::sim::World>(config);
-      const double timestep_us = instance->world->timestep() * 1e6;
+      auto simulation = std::make_unique<Simulation>();
+      simulation->world = std::make_unique<chaos::sim::World>(config);
+      const double timestep_us = simulation->world->timestep() * 1e6;
       if (std::abs(timestep_us - 1000.0) > 1e-6 && std::abs(timestep_us - 2000.0) > 1e-6)
         throw std::invalid_argument("only model timesteps of 1ms or 2ms are supported");
       minimum_us = std::min(minimum_us, static_cast<int>(std::llround(timestep_us)));
-      initialize(*instance);
-      instances_.push_back(std::move(instance));
+      loaded.push_back(Loaded{std::move(simulation), name, ns});
     }
     tick_period_ = std::chrono::microseconds(minimum_us);
-    for (auto &instance : instances_)
-      instance->divisor = static_cast<int>(std::llround(instance->world->timestep() * 1e6)) / minimum_us;
+    std::set<std::string> names, namespaces;
+    for (auto &entry : loaded) {
+      auto &simulation = *entry.simulation;
+      simulation.divisor =
+          static_cast<int>(std::llround(simulation.world->timestep() * 1e6)) / minimum_us;
+      const auto robots = simulation.world->robotCount();
+      if (robots == 1) {
+        addInstance(simulation, -1, entry.name, entry.ns, names, namespaces, name_pattern, ns_pattern);
+      } else {
+        for (std::size_t robot = 0; robot < robots; ++robot) {
+          const auto &body = simulation.world->robotName(robot);
+          // Keep the configured root and append the body segment: /sim/go2 +
+          // go2_2 -> /sim/go2/go2_2. A robot named exactly like the entry keeps
+          // the configured namespace, so existing multi-robot layouts are
+          // unchanged.
+          const std::string ns = body == entry.name ? entry.ns : entry.ns + "/" + body;
+          addInstance(simulation, static_cast<int>(robot), body, ns, names, namespaces,
+                      name_pattern, ns_pattern);
+        }
+      }
+      simulations_.push_back(std::move(entry.simulation));
+    }
+    if (instances_.empty() || instances_.size() > 32)
+      throw std::invalid_argument("expanded worlds require 1..32 robots");
     pause_ = create_service<std_srvs::srv::SetBool>("/chaos_sim/pause",
       [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
              std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
         paused_ = request->data;
-        for (auto &instance : instances_) {
-          instance->world->hold();
-          instance->command_active = false;
-          instance->phase = 0;
+        for (auto &simulation : simulations_) {
+          simulation->world->hold();
+          simulation->phase = 0;
         }
+        for (auto &instance : instances_) instance->command_active = false;
         next_tick_ = Clock::now() + tick_period_;
         response->success = true;
         response->message = paused_ ? "paused; targets cleared" : "running; holding current positions";
@@ -152,9 +185,37 @@ class SimulatorNode final : public rclcpp::Node {
   }
 
  private:
+  void addInstance(Simulation &simulation, int robot, const std::string &name, const std::string &ns,
+                   std::set<std::string> &names, std::set<std::string> &namespaces,
+                   const std::regex &name_pattern, const std::regex &ns_pattern) {
+    if (!std::regex_match(name, name_pattern) || !std::regex_match(ns, ns_pattern) ||
+        !names.insert(name).second || !namespaces.insert(ns).second)
+      throw std::invalid_argument("robot names and absolute namespaces must be valid and unique");
+    auto instance = std::make_unique<Instance>();
+    instance->simulation = &simulation;
+    instance->robot = robot;
+    instance->name = name;
+    instance->ns = ns;
+    if (robot >= 0) instance->prefix = name + "/";
+    instances_.push_back(std::move(instance));
+    initialize(*instances_.back());
+  }
+
+  chaos::sim::World &worldOf(Instance &instance) const { return *instance.simulation->world; }
+
   void initialize(Instance &instance) {
-    instance.world->readState(instance.state);
-    instance.joints.name = instance.world->jointNames();
+    auto &world = worldOf(instance);
+    if (instance.robot < 0) world.readState(instance.state);
+    else world.readRobot(static_cast<std::size_t>(instance.robot), instance.state);
+    const auto &full = instance.robot < 0 ? world.jointNames()
+                                          : world.robotJointNames(static_cast<std::size_t>(instance.robot));
+    instance.joints.name.reserve(full.size());
+    for (const auto &joint : full) {
+      if (instance.prefix.empty()) instance.joints.name.push_back(joint);
+      else if (joint.rfind(instance.prefix, 0) == 0)
+        instance.joints.name.push_back(joint.substr(instance.prefix.size()));
+      else throw std::invalid_argument("actuated joint is outside its floating root: " + joint);
+    }
     const auto count = instance.joints.name.size();
     instance.joints.position.resize(count);
     instance.joints.velocity.resize(count);
@@ -184,7 +245,7 @@ class SimulatorNode final : public rclcpp::Node {
         if (paused_) error = "simulation paused";
         else if (!message->velocity.empty() || !message->effort.empty())
           error = "joint_targets accepts only name and position";
-        else if (instance.world->setTargets(message->name, message->position, error)) {
+        else if (acceptTargets(instance, *message, error)) {
           instance.last_command = Clock::now();
           instance.command_active = true;
           ++instance.accepted;
@@ -195,17 +256,27 @@ class SimulatorNode final : public rclcpp::Node {
                              instance.name.c_str(), error.c_str());
       });
     instance.reset = create_service<std_srvs::srv::Trigger>(instance.ns + "/reset",
-      [&instance](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
-                  std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
-        instance.world->reset();
+      [this, &instance](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        if (instance.robot < 0) worldOf(instance).reset();
+        else worldOf(instance).resetRobot(static_cast<std::size_t>(instance.robot));
         instance.command_active = false;
-        instance.phase = 0;
+        instance.simulation->phase = 0;
         response->success = true;
         response->message = "reset to model initial state; targets cleared";
       });
     RCLCPP_INFO(get_logger(), "%s loaded: %zu joints, dt=%g, model=%zu bytes, arena=%zu bytes, scene=%zu/%zu points/geoms",
-      instance.name.c_str(), count, instance.world->timestep(), instance.world->modelBytes(),
-      instance.world->arenaBytes(), instance.world->scenePoints(), instance.world->sceneGeoms());
+      instance.name.c_str(), count, world.timestep(), world.modelBytes(),
+      world.arenaBytes(), world.scenePoints(), world.sceneGeoms());
+  }
+
+  bool acceptTargets(Instance &instance, const JointState &message, std::string &error) {
+    auto &world = worldOf(instance);
+    if (instance.prefix.empty()) return world.setTargets(message.name, message.position, error);
+    instance.prefixed.resize(message.name.size());
+    for (std::size_t i = 0; i < message.name.size(); ++i)
+      instance.prefixed[i] = instance.prefix + message.name[i];
+    return world.setTargets(instance.prefixed, message.position, error);
   }
 
   void tick() {
@@ -213,7 +284,8 @@ class SimulatorNode final : public rclcpp::Node {
     if (!paused_) {
       for (auto &instance : instances_) {
         if (instance->command_active && steady_now - instance->last_command >= command_timeout_) {
-          instance->world->hold();
+          if (instance->robot < 0) worldOf(*instance).hold();
+          else worldOf(*instance).holdRobot(static_cast<std::size_t>(instance->robot));
           instance->command_active = false;
           ++instance->timed_out;
         }
@@ -226,10 +298,10 @@ class SimulatorNode final : public rclcpp::Node {
           next_tick_ = steady_now + tick_period_;
         } else next_tick_ += due * tick_period_;
         for (int64_t tick = 0; tick < steps; ++tick) {
-          for (auto &instance : instances_) {
-            if (++instance->phase == instance->divisor) {
-              instance->world->step();
-              instance->phase = 0;
+          for (auto &simulation : simulations_) {
+            if (++simulation->phase == simulation->divisor) {
+              simulation->world->step();
+              simulation->phase = 0;
             }
           }
         }
@@ -243,7 +315,8 @@ class SimulatorNode final : public rclcpp::Node {
   }
 
   void publish(Instance &instance, const rclcpp::Time &stamp) {
-    instance.world->readState(instance.state);
+    if (instance.robot < 0) worldOf(instance).readState(instance.state);
+    else worldOf(instance).readRobot(static_cast<std::size_t>(instance.robot), instance.state);
     const auto &state = instance.state;
     instance.joints.header.stamp = stamp;
     std::copy(state.position.begin(), state.position.end(), instance.joints.position.begin());
@@ -273,17 +346,18 @@ class SimulatorNode final : public rclcpp::Node {
     number(values[2].value, instance.accepted);
     number(values[3].value, instance.rejected);
     number(values[4].value, instance.timed_out);
-    number(values[5].value, instance.world->modelBytes());
-    number(values[6].value, instance.world->arenaBytes());
+    number(values[5].value, worldOf(instance).modelBytes());
+    number(values[6].value, worldOf(instance).arenaBytes());
     number(values[7].value, dropped_ticks_);
-    number(values[8].value, instance.world->scenePoints());
-    number(values[9].value, instance.world->sceneGeoms());
+    number(values[8].value, worldOf(instance).scenePoints());
+    number(values[9].value, worldOf(instance).sceneGeoms());
     instance.joint_pub->publish(instance.joints);
     instance.odom_pub->publish(instance.odom);
     instance.diagnostic_pub->publish(instance.diagnostics);
   }
 
   rclcpp::Clock steady_clock_{RCL_STEADY_TIME};
+  std::vector<std::unique_ptr<Simulation>> simulations_;
   std::vector<std::unique_ptr<Instance>> instances_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr pause_;
