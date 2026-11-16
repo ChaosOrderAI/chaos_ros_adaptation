@@ -14,6 +14,8 @@
 - [Unitree Go2 机器狗配置、驱动与部署](docs/unitree-go2.md)
 - [原生人形机器人后端与 Booster T2](docs/humanoid.md)
 - [Go2 / T2 MuJoCo 物理仿真、关节控制与查看器](docs/mujoco.md)
+- [庭院点云 Go2 场景](docs/pcd-go2-scene.md) / [绍兴全图](docs/shaoxing-go2-scene.md) / [绍兴 LAS](docs/shaoxing-las-go2-scene.md)
+- [Ubuntu 22.04 / Humble 旧车端验收](docs/humble.md)
 - [传感器配置、标准接口与诊断](docs/sensors.md)
 - [奥比中光 Gemini 335 官方驱动](docs/orbbec-driver.md)
 - [URDF / Xacro 导入、TF 归属与 RViz](docs/robot-description.md)

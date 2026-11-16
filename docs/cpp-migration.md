@@ -2,7 +2,7 @@
 
 本文档描述 Python 业务实现迁移到原生 C++17 之后的**最终状态**，以及在任意干净机器上复现构建与检查的命令。它不重复迁移过程的历史记录。
 
-相关文档：[架构与包边界](architecture.md)、[验证记录](validation.md)、[Go2 原生 SDK2](unitree-go2.md)、[机载部署](onboard-deployment.md)。
+相关文档：[架构与包边界](architecture.md)、[验证记录](validation.md)、[Go2 原生 SDK2](unitree-go2.md)、[机载部署](onboard-deployment.md)。各包的实现边界见 [资产与启动规划](cpp-assets-migration.md)、[运行时与传感器](cpp-runtime-migration.md)、[数据采集](cpp-data-migration.md)、[MQTT 传输](cpp-mqtt-migration.md) 和 [网关与 SDK](cpp-mqtt-sdk-migration.md)。
 
 ## 1. 迁移边界
 
@@ -24,7 +24,7 @@
 
 ## 2. 最终分层
 
-九个生产 ROS 包按职责分层，另有一个独立的性能基准包：
+十个生产 ROS 包按职责分层，另有一个可选仿真包和一个独立的性能基准包：
 
 ```text
 chaos_core            无 ROS：Rejected 错误类型、单调/系统时钟、诊断格式化（头文件库）
@@ -37,6 +37,8 @@ chaos_sdk             原生异步客户端（chaos_sdk 共享库 + _chaos_sdk �
 chaos_mqtt            chaos_mqtt_core / chaos_mqtt_gateway（原生 C++）+ transport/（Rust）+ _chaos_mqtt_core 薄绑定
 chaos_data            timing / session / file_io / supervisor / controller / ros_message / audit / export（原生 C++）
 chaos_bringup         chaos_bringup_core + chaos_bringup_plan + launch 胶水
+chaos_bt              BehaviorTree.CPP 节点：导航、起飞、降落；只依赖 Jazzy 的 4.x
+chaos_sim             可选 MuJoCo 仿真；模拟器默认关闭，需 CHAOS_SIM_ENABLE_MUJOCO=ON
 chaos_benchmarks      领域微基准，非生产入口
 ```
 

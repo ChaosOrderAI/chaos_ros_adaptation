@@ -27,5 +27,9 @@ MUJOCO_LOG.TXT
 /.claude-flow/
 /work/multi-model-team/
 
-# Accidental root-level copy of a vendored C source (kept untracked, not deleted).
+# Editor state. Previously tracked files pointed at another workspace.
+.idea/
+.vscode/
+
+# Accidental root-level copy of a vendored C source.
 /gh.c

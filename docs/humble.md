@@ -1,6 +1,6 @@
 # Ubuntu 22.04 / ROS 2 Humble
 
-默认部署环境为普通 Ubuntu 22.04 PC、ROS 2 Humble 和系统 Python 3.10。x86_64 与 ARM64 使用同一份源码，在对应架构上分别构建。模拟运行不需要底盘、无人机 SDK、相机或外部 MQTT broker。
+这是无人车旧部署的兼容路径，不是当前默认环境。当前开发与机载默认是 Ubuntu 24.04 / ROS 2 Jazzy。Humble 验收在 Ubuntu 22.04 上单独构建，x86_64 与 ARM64 使用同一份源码；`chaos_bt` 依赖的 BehaviorTree.CPP 4.x 不在 Humble 范围内。模拟运行不需要底盘、无人机 SDK、相机或外部 MQTT broker。
 
 ## 准备依赖
 
