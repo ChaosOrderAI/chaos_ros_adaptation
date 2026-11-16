@@ -26,3 +26,6 @@ MUJOCO_LOG.TXT
 # Local multi-model execution records and task state.
 /.claude-flow/
 /work/multi-model-team/
+
+# Accidental root-level copy of a vendored C source (kept untracked, not deleted).
+/gh.c

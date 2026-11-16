@@ -76,6 +76,10 @@ endif()
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(chaos_sim_launch_test test/test_simulator_launch.py)
+  ament_add_pytest_test(chaos_sim_multi_root_test test/test_multi_root.py)
+  set_tests_properties(chaos_sim_multi_root_test PROPERTIES
+    ENVIRONMENT "ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST;CHAOS_SIM_BINARY=$<TARGET_FILE:chaos_sim_node>"
+    TIMEOUT 60)
 endif()
 
 ament_package()

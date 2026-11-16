@@ -29,7 +29,9 @@ bash scripts/run_shaoxing_las_go2.sh
 默认 ROS domain 为 **200**，场景目录为 `generated/shaoxing_las_go2/`。
 操作方式、控制策略和速度限制与 [通用说明](pcd-go2-scene.md) 相同。
 `bash scripts/run_shaoxing_las_go2.sh --robots 3` 把多台 Go2 放进同一份碰撞场景；
-这张图的物理本来就慢于实时，机器人变多后会更重。
+这张图的物理本来就慢于实时，机器人变多后会更重。可选 `--layout`、
+`--spacing`、`--base-name`、`--namespaces` 和 `--policy`，见
+[通用说明](pcd-go2-scene.md#多机)。
 
 ## 坐标
 

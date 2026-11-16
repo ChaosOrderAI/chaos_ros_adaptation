@@ -24,6 +24,8 @@ bash scripts/run_pcd_go2.sh
 松开按键停止，**空格** 停止，**R** 复位到出生点。窗口失焦也发送停止指令。
 速度指令上限为前进 0.45 m/s、后退 0.30 m/s、横移 0.20 m/s、转向 0.60 rad/s。
 
+## 多机
+
 多机共用同一份碰撞场景，而不是每台机器人各加载一份地图：
 
 ```bash
@@ -35,6 +37,45 @@ bash scripts/run_pcd_go2.sh --robots 3
 每台有自己的 `cmd_vel` 和行走控制器。默认按键只控制第一台；
 按 **1–9** 只控制对应的一台，按 **0** 恢复全部。**R** 只复位当前选择。
 物理仍然是一个 MuJoCo 模型，机器人之间会互相碰撞。
+
+```text
+                 ┌────────────────────────┐
+                 │  chaos_sim simulator   │  1 个进程，1 个 MuJoCo 模型（场景+多台 Go2）
+                 │  /sim/go2/...          │  每台机器人一组 joint_states / odom / diagnostics / cmd_vel / reset
+                 └────┬───────────┬───────┘
+                      │           │
+        ┌─────────────┘           └─────────────┐
+        ▼                                       ▼
+  ┌─────────────┐                       ┌─────────────┐
+  │ locomotion  │  …每个机器人一份…      │ locomotion  │   各跑一份 ONNX 策略，
+  │ go2         │                       │ go2_2       │   把 cmd_vel 变成 joint_targets
+  └──────┬──────┘                       └──────┬──────┘
+         │                                     │
+         └──────────────┬──────────────────────┘
+                        ▼
+               ┌──────────────────┐
+               │ pcd_gpu_viewer   │  1 个进程，订阅全部命名空间，
+               │ (GPU 点云 + 键盘) │  默认只控制 go2，1-9/0 切换选择
+               └──────────────────┘
+```
+
+可选参数：
+
+- `--layout line|ring|grid`：`line` 沿 -X 单列（默认，适合窄道），`ring` 绕出生点一圈，`grid` 三列横排。
+- `--spacing 米`：相邻机器人距离，默认 1.0，范围 0.5–5。
+- `--base-name 名字`：第一台名字，其他自动加 `_2`、`_3`（默认 `go2`）。
+- `--namespaces nested|flat`：`nested` 是 `/sim/go2` + `/sim/go2/go2_2`（默认），`flat` 是 `/sim/go2` + `/sim/go2_2`。
+- `--policy 路径` 或 `--policy 名字=路径`：给全部或指定机器人换 ONNX 策略。
+
+多机验证：
+
+```bash
+python3 scripts/check_multi_locomotion.py \
+  --manifest generated/shaoxing_las_go2/robots.json \
+  --output generated/shaoxing_las_go2/multi_locomotion_validation.json
+```
+
+会轮流单独驱动每台机器人、同时驱动全部，并检查任意两台不重叠；结束后复位全部。
 标题显示帧率、点数、ROS 状态和键盘速度指令。查看器发布速度指令并订阅实际物理状态，
 不自行推进机器人位置。关闭窗口或在启动终端按 Ctrl-C 会结束本次启动的三个进程。
 同一生成目录不能重复启动。没有图形会话时可以运行：

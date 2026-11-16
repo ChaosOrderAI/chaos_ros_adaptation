@@ -21,6 +21,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -99,6 +100,7 @@ class SimulatorNode final : public rclcpp::Node {
     struct Loaded {
       std::unique_ptr<Simulation> simulation;
       std::string name, ns;
+      std::unordered_map<std::string, std::string> robot_namespaces;
     };
     std::vector<Loaded> loaded;
     loaded.reserve(entries.size());
@@ -139,7 +141,19 @@ class SimulatorNode final : public rclcpp::Node {
       if (std::abs(timestep_us - 1000.0) > 1e-6 && std::abs(timestep_us - 2000.0) > 1e-6)
         throw std::invalid_argument("only model timesteps of 1ms or 2ms are supported");
       minimum_us = std::min(minimum_us, static_cast<int>(std::llround(timestep_us)));
-      loaded.push_back(Loaded{std::move(simulation), name, ns});
+      Loaded item{std::move(simulation), name, ns, {}};
+      // Optional explicit per-robot namespaces for a multi-root model. Any
+      // body left out falls back to the default nested scheme.
+      if (entry.contains("robot_namespaces")) {
+        if (!entry["robot_namespaces"].is_object())
+          throw std::invalid_argument("robot_namespaces must be an object of body -> namespace");
+        for (const auto &[body, value] : entry["robot_namespaces"].items()) {
+          if (!value.is_string())
+            throw std::invalid_argument("robot_namespaces values must be strings");
+          item.robot_namespaces[body] = value.get<std::string>();
+        }
+      }
+      loaded.push_back(std::move(item));
     }
     tick_period_ = std::chrono::microseconds(minimum_us);
     std::set<std::string> names, namespaces;
@@ -153,11 +167,15 @@ class SimulatorNode final : public rclcpp::Node {
       } else {
         for (std::size_t robot = 0; robot < robots; ++robot) {
           const auto &body = simulation.world->robotName(robot);
-          // Keep the configured root and append the body segment: /sim/go2 +
-          // go2_2 -> /sim/go2/go2_2. A robot named exactly like the entry keeps
-          // the configured namespace, so existing multi-robot layouts are
-          // unchanged.
-          const std::string ns = body == entry.name ? entry.ns : entry.ns + "/" + body;
+          // robot_namespaces wins; otherwise keep the configured root for the
+          // matching body and nest the rest under it.
+          auto ns = entry.ns;
+          const auto override_ns = entry.robot_namespaces.find(body);
+          if (override_ns != entry.robot_namespaces.end()) {
+            ns = override_ns->second;
+          } else if (body != entry.name) {
+            ns += "/" + body;
+          }
           addInstance(simulation, static_cast<int>(robot), body, ns, names, namespaces,
                       name_pattern, ns_pattern);
         }
