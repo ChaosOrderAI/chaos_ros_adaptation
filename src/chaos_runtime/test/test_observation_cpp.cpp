@@ -508,15 +508,19 @@ protected:
   // full, construction_failed, admitted, coalesced) is returned unchanged, so
   // the drop outcome under test is never retried away. The contended attempts
   // stay visible in the dropped_contended counter.
-  Admission admitRetrying(const std::function<Admission()> & attempt,
-                           int max_attempts = 256) {
-    Admission outcome = Admission::contended;
-    for (int index = 0; index < max_attempts; ++index) {
-      outcome = attempt();
-      if (outcome != Admission::contended) {
-        return outcome;
-      }
+  //
+  // The bound is a duration, not an attempt count: a fixed number of yields
+  // lasts only some tens of microseconds, less than one scheduling delay of a
+  // worker that holds the queue lock.
+  Admission admitRetrying(
+    const std::function<Admission()> & attempt,
+    std::chrono::milliseconds budget = std::chrono::milliseconds(5000)) {
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    Admission outcome = attempt();
+    while (outcome == Admission::contended &&
+           std::chrono::steady_clock::now() < deadline) {
       std::this_thread::yield();
+      outcome = attempt();
     }
     return outcome;
   }

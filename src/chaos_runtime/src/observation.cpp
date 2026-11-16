@@ -605,7 +605,7 @@ struct ObservationImpl : public std::enable_shared_from_this<ObservationImpl> {
     reservation.holders[kLogChannelIndex] = log_holder;
     reservation.producer = std::make_shared<ProducerState>();
     {
-      std::lock_guard<std::timed_mutex> guard(mutex);
+      std::lock_guard<std::mutex> guard(mutex);
       // The registration gate: a stopped or joining generation never
       // acquires a new live sink.
       if (stop_requested.load(std::memory_order_acquire) ||
@@ -640,7 +640,7 @@ struct ObservationImpl : public std::enable_shared_from_this<ObservationImpl> {
   // by the workers, which then close and retire the registration.
   bool commitReservation(Registration & reservation) {
     {
-      std::lock_guard<std::timed_mutex> guard(mutex);
+      std::lock_guard<std::mutex> guard(mutex);
       Slot & slot = slots[reservation.slot];
       if (!slot.reserved ||
           slot.registration_id != reservation.registration_id) {
@@ -668,7 +668,7 @@ struct ObservationImpl : public std::enable_shared_from_this<ObservationImpl> {
   void rollbackReservation(Registration & reservation) {
     std::array<std::shared_ptr<ChannelSink>, kChannelCount> released;
     {
-      std::lock_guard<std::timed_mutex> guard(mutex);
+      std::lock_guard<std::mutex> guard(mutex);
       Slot & slot = slots[reservation.slot];
       if (slot.reserved &&
           slot.registration_id == reservation.registration_id) {
@@ -700,7 +700,7 @@ struct ObservationImpl : public std::enable_shared_from_this<ObservationImpl> {
         recordOutcome(producer, channel, Outcome::closed);
         return Admission::closed;
       }
-      std::unique_lock<std::timed_mutex> lock(mutex, std::try_to_lock);
+      std::unique_lock<std::mutex> lock(mutex, std::try_to_lock);
       if (!lock.owns_lock()) {
         recordOutcome(producer, channel, Outcome::contended);
         return Admission::contended;
@@ -831,7 +831,7 @@ struct ObservationImpl : public std::enable_shared_from_this<ObservationImpl> {
         recordOutcome(producer, kStateChannelIndex, Outcome::closed);
         return Admission::closed;
       }
-      std::unique_lock<std::timed_mutex> lock(mutex, std::try_to_lock);
+      std::unique_lock<std::mutex> lock(mutex, std::try_to_lock);
       if (!lock.owns_lock()) {
         recordOutcome(producer, kStateChannelIndex, Outcome::contended);
         return Admission::contended;
@@ -1264,7 +1264,7 @@ struct ObservationImpl : public std::enable_shared_from_this<ObservationImpl> {
       std::uint64_t sequence = 0;
       std::shared_ptr<ProducerState> producer;
       {
-        std::unique_lock<std::timed_mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
         for (std::size_t step = 0; step < kSlotCount; ++step) {
           const std::size_t index = (cursor + step) % kSlotCount;
           Slot & slot = slots[index];
@@ -1314,7 +1314,7 @@ struct ObservationImpl : public std::enable_shared_from_this<ObservationImpl> {
             worker_busy_since_ns[channel_index].store(0,
                                                       std::memory_order_relaxed);
             {
-              std::lock_guard<std::timed_mutex> guard(mutex);
+              std::lock_guard<std::mutex> guard(mutex);
               Slot & slot = slots[retire_index];
               slot.channel_retiring[channel_index] = false;
               slot.channel_retired[channel_index] = true;
@@ -1375,7 +1375,7 @@ struct ObservationImpl : public std::enable_shared_from_this<ObservationImpl> {
       if (producer->in_flight_items.load(std::memory_order_relaxed) == 0U) {
         // The last resource of this producer is gone: a registration whose
         // four channels already retired becomes reusable now.
-        std::lock_guard<std::timed_mutex> guard(mutex);
+        std::lock_guard<std::mutex> guard(mutex);
         reclaimReadyLocked();
       }
       if (threw) {
@@ -1391,7 +1391,7 @@ struct ObservationImpl : public std::enable_shared_from_this<ObservationImpl> {
       cv.notify_all();
     }
     {
-      std::lock_guard<std::timed_mutex> guard(mutex);
+      std::lock_guard<std::mutex> guard(mutex);
       live_workers.fetch_sub(1, std::memory_order_release);
     }
     cv.notify_all();
@@ -1403,8 +1403,12 @@ struct ObservationImpl : public std::enable_shared_from_this<ObservationImpl> {
     worker_exit[channel_index].promise.set_value_at_thread_exit();
   }
 
-  mutable std::timed_mutex mutex;
-  std::condition_variable_any cv;
+  // The queue lock is a plain mutex with a plain condition variable. A
+  // condition_variable_any takes an internal mutex while the caller still
+  // holds the queue lock, so the woken workers form a convoy on it and the
+  // try_lock of the producers fails for the whole convoy.
+  mutable std::mutex mutex;
+  std::condition_variable cv;
   // The join ownership of the worker threads. It is independent of the
   // queue lock: a join never holds the queue lock while it waits.
   std::timed_mutex join_mutex;
