@@ -1,0 +1,96 @@
+{
+  "network": {
+    "access": "system"
+  },
+  "mqtt": {
+    "host": "mqtt.example.com",
+    "port": 8883,
+    "client_id": "fleet-platform",
+    "command_topic": "robots/platform/command",
+    "response_topic": "robots/platform/command/result",
+    "ca_file": "/etc/mqtt_ros2_adapter/certs/ca.crt",
+    "client_certificate_file": "/etc/mqtt_ros2_adapter/certs/platform.crt",
+    "client_key_file": "/etc/mqtt_ros2_adapter/certs/platform.key",
+    "username": "platform",
+    "password_environment": "MQTT_PASSWORD",
+    "keep_alive_seconds": 30,
+    "maximum_clock_skew_ms": 5000
+  },
+  "ros2": {
+    "node_name": "fleet_downlink",
+    "topic_prefix": "fleet",
+    "qos_depth": 32
+  },
+  "route_profile": "custom",
+  "routes": [],
+  "topic_mappings": [
+    {
+      "name": "go2_01_pose_downlink",
+      "direction": "mqtt_to_ros2",
+      "mqtt_topic": "telemetry/go2-01/pose",
+      "ros_topic": "/fleet/go2_01/odom",
+      "msg_type": "nav_msgs/msg/Odometry",
+      "mqtt": {
+        "qos": 0,
+        "retain": false
+      },
+      "ros": {
+        "depth": 4,
+        "reliability": "reliable",
+        "durability": "volatile"
+      },
+      "max_payload_bytes": 8192
+    },
+    {
+      "name": "go2_01_joints_downlink",
+      "direction": "mqtt_to_ros2",
+      "mqtt_topic": "telemetry/go2-01/joints",
+      "ros_topic": "/fleet/go2_01/joint_states",
+      "msg_type": "sensor_msgs/msg/JointState",
+      "mqtt": {
+        "qos": 0,
+        "retain": false
+      },
+      "ros": {
+        "depth": 4,
+        "reliability": "reliable",
+        "durability": "volatile"
+      },
+      "max_payload_bytes": 8192
+    },
+    {
+      "name": "go2_01_events_downlink",
+      "direction": "mqtt_to_ros2",
+      "mqtt_topic": "telemetry/go2-01/task_events",
+      "ros_topic": "/fleet/go2_01/task_events",
+      "msg_type": "std_msgs/msg/String",
+      "mqtt": {
+        "qos": 1,
+        "retain": false
+      },
+      "ros": {
+        "depth": 32,
+        "reliability": "reliable",
+        "durability": "volatile"
+      },
+      "max_payload_bytes": 8192
+    },
+    {
+      "name": "go2_01_command_downlink",
+      "direction": "mqtt_to_ros2",
+      "mqtt_topic": "robots/go2-01/command",
+      "ros_topic": "/fleet/go2_01/command",
+      "msg_type": "std_msgs/msg/String",
+      "mqtt": {
+        "qos": 1,
+        "retain": false
+      },
+      "ros": {
+        "depth": 8,
+        "reliability": "reliable",
+        "durability": "volatile"
+      },
+      "max_payload_bytes": 8192
+    }
+  ]
+}

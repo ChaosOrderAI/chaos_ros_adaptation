@@ -194,6 +194,12 @@ pub struct TopicMapping {
     pub msg_type: String,
     #[serde(default)]
     pub delivery: Delivery,
+    /// Optional bound on how often a ros2_to_mqtt sample is forwarded to the
+    /// broker, in messages per second. The ROS subscription still receives
+    /// every sample; between quota windows new samples replace the pending
+    /// one so the newest state always wins. Without this bound every sample
+    /// is forwarded, subject only to the `delivery` queue policy.
+    pub max_rate_hz: Option<f64>,
     #[serde(default)]
     pub mqtt: MqttDelivery,
     #[serde(default)]
@@ -236,6 +242,27 @@ pub fn validate(config: &AdapterConfig) -> Result<(), String> {
         }
         if mapping.delivery == Delivery::LatestNonterminal && mapping.msg_type != "std_msgs/msg/String" {
             return Err(fail("latest_nonterminal requires std_msgs/msg/String JSON events"));
+        }
+        match mapping.max_rate_hz {
+            None => {}
+            Some(_) if mapping.direction != Direction::Ros2ToMqtt => {
+                return Err(fail("max_rate_hz applies only to ros2_to_mqtt mappings"));
+            }
+            Some(rate) if !(rate.is_finite() && (0.001..=1000.0).contains(&rate)) => {
+                return Err(fail("max_rate_hz must be between 0.001 and 1000"));
+            }
+            // Rate limiting coalesces state through a single pending slot —
+            // a semantic that makes sense with delivery=latest or
+            // latest_nonterminal (terminal events park in their own slot and
+            // always take the blocking publish path, so guaranteed delivery
+            // is preserved). Plain queued delivery promises every sample
+            // forward-subject-to-backpressure, which a coalescing window
+            // cannot honour, so that combination is rejected rather than
+            // silently lossy.
+            Some(_) if mapping.delivery == Delivery::Queued => {
+                return Err(fail("max_rate_hz is incompatible with delivery=queued; use latest or latest_nonterminal"));
+            }
+            Some(_) => {}
         }
         if mapping.name.is_empty() || !names.insert(&mapping.name) {
             return Err(fail("name must be non-empty and unique"));
@@ -333,6 +360,13 @@ mod tests {
             validate(&config).unwrap();
             assert_eq!(config.topic_mappings.len(), 2);
         }
+        for text in [
+            include_str!("../../config.fleet.robot.example.json"),
+            include_str!("../../config.fleet.platform.example.json"),
+        ] {
+            let config: AdapterConfig = serde_json::from_str(text).unwrap();
+            validate(&config).unwrap();
+        }
         let config: AdapterConfig = serde_json::from_value(base()).unwrap();
         validate(&config).unwrap();
         assert_eq!(config.topic_mappings[0].mqtt.qos, 1);
@@ -353,6 +387,39 @@ mod tests {
         let config: AdapterConfig = serde_json::from_value(value.clone()).unwrap();
         assert!(validate(&config).is_err());
         value["topic_mappings"][0]["msg_type"] = json!("std_msgs/msg/String");
+        let config: AdapterConfig = serde_json::from_value(value).unwrap();
+        validate(&config).unwrap();
+    }
+
+    #[test]
+    fn max_rate_hz_only_applies_to_outgoing_mappings() {
+        let mut value = base();
+        value["topic_mappings"][0]["max_rate_hz"] = json!(5.0);
+        let config: AdapterConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(validate(&config).is_err());
+        value["topic_mappings"][0]["direction"] = json!("ros2_to_mqtt");
+        value["topic_mappings"][0]["delivery"] = json!("latest");
+        let config: AdapterConfig = serde_json::from_value(value.clone()).unwrap();
+        validate(&config).unwrap();
+        assert_eq!(config.topic_mappings[0].max_rate_hz, Some(5.0));
+        value["topic_mappings"][0]["max_rate_hz"] = json!(0.0);
+        let config: AdapterConfig = serde_json::from_value(value).unwrap();
+        assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn max_rate_hz_requires_coalesceable_delivery() {
+        let mut value = base();
+        value["topic_mappings"][0]["direction"] = json!("ros2_to_mqtt");
+        value["topic_mappings"][0]["max_rate_hz"] = json!(5.0);
+        // delivery defaults to queued — incompatible with rate coalescing.
+        let config: AdapterConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(validate(&config).is_err());
+        value["topic_mappings"][0]["delivery"] = json!("latest");
+        let config: AdapterConfig = serde_json::from_value(value.clone()).unwrap();
+        validate(&config).unwrap();
+        value["topic_mappings"][0]["msg_type"] = json!("std_msgs/msg/String");
+        value["topic_mappings"][0]["delivery"] = json!("latest_nonterminal");
         let config: AdapterConfig = serde_json::from_value(value).unwrap();
         validate(&config).unwrap();
     }

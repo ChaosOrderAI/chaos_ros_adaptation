@@ -408,6 +408,7 @@ cargo run --release --example latency_probe -- --config config.json -n 300
 | `ros_topic` | 以 `/` 开头的完整 ROS 2 话题名 |
 | `msg_type` | `包名/msg/类型名`；类型必须存在于构建时加载的 ROS 2 环境 |
 | `delivery` | 出站队列策略：`queued`（默认）、`latest`、`latest_nonterminal`；后两者只允许 `ros2_to_mqtt` |
+| `max_rate_hz` | 可选，仅 `ros2_to_mqtt`：把 ROS 侧消息按此频率上限抽样后再发布（0.001–1000）。ROS 订阅本身仍收全部样本；相邻配额窗口之间的新样本覆盖旧样本，因此总是最新状态优先，与 `delivery` 无关 |
 | `mqtt.qos` | 0 或 1，默认 1；入站为订阅 QoS，出站为发布 QoS |
 | `mqtt.retain` | 默认 false；只有 `ros2_to_mqtt` 可设置 true |
 | `ros.depth` | DDS KeepLast 深度，1–1024，默认 32 |
@@ -432,6 +433,8 @@ MQTT payload 是与 ROS 消息字段一致的 JSON 对象。例如 `std_msgs/msg
 QoS 0 在网络断开或队列拥塞时可能丢失；QoS 1 的出站消息保留到 broker 确认，断线自动补发。ROS 2/DDS 与 MQTT 之间没有跨协议事务保证，实际 ROS 执行结果应使用下方命令路由协议。直接话题映射不增加 `message_id`、防重放或业务响应 envelope。
 
 `delivery=latest` 适用于周期状态：每个 MQTT topic 只保留最新的未提交样本，最多 128 个 topic，与响应队列分开。每个 topic 最多一个样本等待 MQTT 确认，所有此类样本最多占用一半发送窗口，避免弱网下旧状态占满结果通道。这种策略允许丢弃旧样本，即使配置 QoS 1，也不会保证每个历史样本被发送；重连时丢弃旧的在途遥测，后续发送当前最新样本。
+
+`max_rate_hz` 与 `delivery` 独立：前者在 ROS 订阅侧按固定配额窗口抽样（窗口之间只保留最新样本），后者决定样本进入 MQTT 发送通道后排队的策略。高频遥测（如 100 Hz 的 `odom`）必须同时设两者：`delivery=latest` 防止旧样本在弱网下占住一半发送窗口，`max_rate_hz` 则把上游速率降到链路可用范围内，避免 pending slot 一直等待。
 
 `delivery=latest_nonterminal` 仅适用于 `std_msgs/msg/String` 的 JSON 事件：当 `data` 内 JSON 明确包含 `"terminal": false` 时按最新样本合并；`terminal=true`、缺失字段或无法识别的事件保留默认队列语义。统一框架用它合并任务反馈，终态仍通过可靠队列发送，并同时回写命令响应。终态提交时会移除同 topic 尚未发送的反馈。队列和重放缓存都在内存中；进程退出或缓存淘汰后，不保证恢复。
 

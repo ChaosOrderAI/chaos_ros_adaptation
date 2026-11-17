@@ -1,0 +1,97 @@
+{
+  "network": {
+    "access": "4g",
+    "interface": "wwan0",
+    "connection_timeout_seconds": 30,
+    "tcp_nodelay": true,
+    "reconnect_initial_ms": 2000,
+    "reconnect_max_ms": 60000
+  },
+  "mqtt": {
+    "host": "mqtt.example.com",
+    "port": 8883,
+    "client_id": "go2-01",
+    "command_topic": "robots/go2-01/command",
+    "response_topic": "robots/go2-01/command/result",
+    "ca_file": "/etc/mqtt_ros2_adapter/certs/ca.crt",
+    "client_certificate_file": "/etc/mqtt_ros2_adapter/certs/go2-01.crt",
+    "client_key_file": "/etc/mqtt_ros2_adapter/certs/go2-01.key",
+    "username": "go2-01",
+    "password_environment": "MQTT_PASSWORD",
+    "keep_alive_seconds": 60,
+    "maximum_clock_skew_ms": 5000
+  },
+  "ros2": {
+    "node_name": "go2_mqtt_bridge",
+    "topic_prefix": "robot",
+    "qos_depth": 32
+  },
+  "route_profile": "custom",
+  "routes": [
+    {
+      "command": "robot.command",
+      "topic_suffix": "mqtt/command",
+      "msg_type": "std_msgs/String"
+    }
+  ],
+  "response_timeout_ms": 30000,
+  "action_timeout_ms": 600000,
+  "topic_mappings": [
+    {
+      "name": "task_events_uplink",
+      "direction": "ros2_to_mqtt",
+      "mqtt_topic": "telemetry/go2-01/task_events",
+      "ros_topic": "/robot/mqtt/task_events",
+      "msg_type": "std_msgs/msg/String",
+      "delivery": "latest_nonterminal",
+      "mqtt": {
+        "qos": 1,
+        "retain": false
+      },
+      "ros": {
+        "depth": 32,
+        "reliability": "reliable",
+        "durability": "volatile"
+      },
+      "max_payload_bytes": 8192
+    },
+    {
+      "name": "pose_uplink",
+      "direction": "ros2_to_mqtt",
+      "mqtt_topic": "telemetry/go2-01/pose",
+      "ros_topic": "/robot/odom",
+      "msg_type": "nav_msgs/msg/Odometry",
+      "delivery": "latest",
+      "max_rate_hz": 5.0,
+      "mqtt": {
+        "qos": 0,
+        "retain": true
+      },
+      "ros": {
+        "depth": 4,
+        "reliability": "best_effort",
+        "durability": "volatile"
+      },
+      "max_payload_bytes": 8192
+    },
+    {
+      "name": "joints_uplink",
+      "direction": "ros2_to_mqtt",
+      "mqtt_topic": "telemetry/go2-01/joints",
+      "ros_topic": "/robot/joint_states",
+      "msg_type": "sensor_msgs/msg/JointState",
+      "delivery": "latest",
+      "max_rate_hz": 10.0,
+      "mqtt": {
+        "qos": 0,
+        "retain": true
+      },
+      "ros": {
+        "depth": 4,
+        "reliability": "best_effort",
+        "durability": "volatile"
+      },
+      "max_payload_bytes": 8192
+    }
+  ]
+}

@@ -186,6 +186,8 @@ install(FILES transport/README.md transport/SOURCE_PROVENANCE.md
   transport/SOURCE_MANIFEST.json transport/Cargo.toml transport/Cargo.lock
   transport/config.example.json transport/config.wifi.example.json
   transport/config.4g.example.json transport/config.5g.example.json
+  transport/config.fleet.robot.example.json
+  transport/config.fleet.platform.example.json
   DESTINATION share/${PROJECT_NAME}/transport)
 install(DIRECTORY transport/examples transport/scripts transport/deploy
   DESTINATION share/${PROJECT_NAME}/transport
