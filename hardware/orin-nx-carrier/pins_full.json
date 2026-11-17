@@ -1,0 +1,1116 @@
+{
+ "source": "ConnectTech Jetson Orin NX Data Sheet DS-10712-001, Jetson Orin NX Pin List 表",
+ "url": "https://connecttech.com/ftp/pdf/jetson_orin_nx_datasheet.pdf",
+ "pins": [
+  {
+   "pin": 1,
+   "name": "GND"
+  },
+  {
+   "pin": 2,
+   "name": "GND"
+  },
+  {
+   "pin": 3,
+   "name": "CSI1_D0_N"
+  },
+  {
+   "pin": 4,
+   "name": "CSI0_D0_N"
+  },
+  {
+   "pin": 5,
+   "name": "CSI1_D0_P"
+  },
+  {
+   "pin": 6,
+   "name": "CSI0_D0_P"
+  },
+  {
+   "pin": 7,
+   "name": "GND"
+  },
+  {
+   "pin": 8,
+   "name": "GND"
+  },
+  {
+   "pin": 9,
+   "name": "CSI1_CLK_N"
+  },
+  {
+   "pin": 10,
+   "name": "CSI0_CLK_N"
+  },
+  {
+   "pin": 11,
+   "name": "CSI1_CLK_P"
+  },
+  {
+   "pin": 12,
+   "name": "CSI0_CLK_P"
+  },
+  {
+   "pin": 13,
+   "name": "GND"
+  },
+  {
+   "pin": 14,
+   "name": "GND"
+  },
+  {
+   "pin": 15,
+   "name": "CSI1_D1_N"
+  },
+  {
+   "pin": 16,
+   "name": "CSI0_D1_N"
+  },
+  {
+   "pin": 17,
+   "name": "CSI1_D1_P"
+  },
+  {
+   "pin": 18,
+   "name": "CSI0_D1_P"
+  },
+  {
+   "pin": 19,
+   "name": "GND"
+  },
+  {
+   "pin": 20,
+   "name": "GND"
+  },
+  {
+   "pin": 21,
+   "name": "CSI3_D0_N"
+  },
+  {
+   "pin": 22,
+   "name": "CSI2_D0_N"
+  },
+  {
+   "pin": 23,
+   "name": "CSI3_D0_P"
+  },
+  {
+   "pin": 24,
+   "name": "CSI2_D0_P"
+  },
+  {
+   "pin": 25,
+   "name": "GND"
+  },
+  {
+   "pin": 26,
+   "name": "GND"
+  },
+  {
+   "pin": 27,
+   "name": "CSI3_CLK_N"
+  },
+  {
+   "pin": 28,
+   "name": "CSI2_CLK_N"
+  },
+  {
+   "pin": 29,
+   "name": "CSI3_CLK_P"
+  },
+  {
+   "pin": 30,
+   "name": "CSI2_CLK_P"
+  },
+  {
+   "pin": 31,
+   "name": "GND"
+  },
+  {
+   "pin": 32,
+   "name": "GND"
+  },
+  {
+   "pin": 33,
+   "name": "CSI3_D1_N"
+  },
+  {
+   "pin": 34,
+   "name": "CSI2_D1_N"
+  },
+  {
+   "pin": 35,
+   "name": "CSI3_D1_P"
+  },
+  {
+   "pin": 36,
+   "name": "CSI2_D1_P"
+  },
+  {
+   "pin": 37,
+   "name": "GND"
+  },
+  {
+   "pin": 38,
+   "name": "GND"
+  },
+  {
+   "pin": 39,
+   "name": "USBSS1_RX_N"
+  },
+  {
+   "pin": 40,
+   "name": "PCIE2_RX0_N"
+  },
+  {
+   "pin": 41,
+   "name": "USBSS1_RX_P"
+  },
+  {
+   "pin": 42,
+   "name": "PCIE2_RX0_P"
+  },
+  {
+   "pin": 43,
+   "name": "GND"
+  },
+  {
+   "pin": 44,
+   "name": "GND"
+  },
+  {
+   "pin": 45,
+   "name": "USBSS1_TX_N"
+  },
+  {
+   "pin": 46,
+   "name": "PCIE2_TX0_N"
+  },
+  {
+   "pin": 47,
+   "name": "USBSS1_TX_P"
+  },
+  {
+   "pin": 48,
+   "name": "PCIE2_TX0_P"
+  },
+  {
+   "pin": 49,
+   "name": "GND"
+  },
+  {
+   "pin": 50,
+   "name": "GND"
+  },
+  {
+   "pin": 51,
+   "name": "USBSS2_RX_N"
+  },
+  {
+   "pin": 52,
+   "name": "PCIE2_CLK_N"
+  },
+  {
+   "pin": 53,
+   "name": "USBSS2_RX_P"
+  },
+  {
+   "pin": 54,
+   "name": "PCIE2_CLK_P"
+  },
+  {
+   "pin": 55,
+   "name": "GND"
+  },
+  {
+   "pin": 56,
+   "name": "GND"
+  },
+  {
+   "pin": 57,
+   "name": "USBSS2_TX_N"
+  },
+  {
+   "pin": 58,
+   "name": "PCIE2_RX1_N"
+  },
+  {
+   "pin": 59,
+   "name": "USBSS2_TX_P"
+  },
+  {
+   "pin": 60,
+   "name": "PCIE2_RX1_P"
+  },
+  {
+   "pin": 61,
+   "name": "GND"
+  },
+  {
+   "pin": 62,
+   "name": "GND"
+  },
+  {
+   "pin": 63,
+   "name": "DP1_TXD0_N"
+  },
+  {
+   "pin": 64,
+   "name": "PCIE2_TX1_N"
+  },
+  {
+   "pin": 65,
+   "name": "DP1_TXD0_P"
+  },
+  {
+   "pin": 66,
+   "name": "PCIE2_TX1_P"
+  },
+  {
+   "pin": 67,
+   "name": "GND"
+  },
+  {
+   "pin": 68,
+   "name": "GND"
+  },
+  {
+   "pin": 69,
+   "name": "DP1_TXD1_N"
+  },
+  {
+   "pin": 70,
+   "name": "RSVD"
+  },
+  {
+   "pin": 71,
+   "name": "DP1_TXD1_P"
+  },
+  {
+   "pin": 72,
+   "name": "RSVD"
+  },
+  {
+   "pin": 73,
+   "name": "GND"
+  },
+  {
+   "pin": 74,
+   "name": "GND"
+  },
+  {
+   "pin": 75,
+   "name": "DP1_TXD2_N"
+  },
+  {
+   "pin": 76,
+   "name": "RSVD"
+  },
+  {
+   "pin": 77,
+   "name": "DP1_TXD2_P"
+  },
+  {
+   "pin": 78,
+   "name": "RSVD"
+  },
+  {
+   "pin": 79,
+   "name": "GND"
+  },
+  {
+   "pin": 80,
+   "name": "GND"
+  },
+  {
+   "pin": 81,
+   "name": "DP1_TXD3_N"
+  },
+  {
+   "pin": 82,
+   "name": "RSVD"
+  },
+  {
+   "pin": 83,
+   "name": "DP1_TXD3_P"
+  },
+  {
+   "pin": 84,
+   "name": "RSVD"
+  },
+  {
+   "pin": 85,
+   "name": "GND"
+  },
+  {
+   "pin": 86,
+   "name": "GND"
+  },
+  {
+   "pin": 87,
+   "name": "GPIO00"
+  },
+  {
+   "pin": 88,
+   "name": "RSVD"
+  },
+  {
+   "pin": 89,
+   "name": "SPI0_MOSI"
+  },
+  {
+   "pin": 90,
+   "name": "RSVD"
+  },
+  {
+   "pin": 91,
+   "name": "SPI0_SCK"
+  },
+  {
+   "pin": 92,
+   "name": "RSVD"
+  },
+  {
+   "pin": 93,
+   "name": "SPI0_MISO"
+  },
+  {
+   "pin": 94,
+   "name": "HDMI_CEC"
+  },
+  {
+   "pin": 95,
+   "name": "SPI0_CS0"
+  },
+  {
+   "pin": 96,
+   "name": "DP1_HPD"
+  },
+  {
+   "pin": 97,
+   "name": "SPI0_CS1"
+  },
+  {
+   "pin": 98,
+   "name": "DP1_AUX_N"
+  },
+  {
+   "pin": 99,
+   "name": "UART0_TXD"
+  },
+  {
+   "pin": 100,
+   "name": "DP1_AUX_P"
+  },
+  {
+   "pin": 101,
+   "name": "UART0_RXD"
+  },
+  {
+   "pin": 102,
+   "name": "GND"
+  },
+  {
+   "pin": 103,
+   "name": "UART0_RTS"
+  },
+  {
+   "pin": 104,
+   "name": "SPI1_MOSI"
+  },
+  {
+   "pin": 105,
+   "name": "UART0_CTS"
+  },
+  {
+   "pin": 106,
+   "name": "SPI1_SCK"
+  },
+  {
+   "pin": 107,
+   "name": "GND"
+  },
+  {
+   "pin": 108,
+   "name": "SPI1_MISO"
+  },
+  {
+   "pin": 109,
+   "name": "USB0_D_N"
+  },
+  {
+   "pin": 110,
+   "name": "SPI1_CS0"
+  },
+  {
+   "pin": 111,
+   "name": "USB0_D_P"
+  },
+  {
+   "pin": 112,
+   "name": "SPI1_CS1"
+  },
+  {
+   "pin": 113,
+   "name": "GND"
+  },
+  {
+   "pin": 114,
+   "name": "CAM0_PWDN"
+  },
+  {
+   "pin": 115,
+   "name": "USB1_D_N"
+  },
+  {
+   "pin": 116,
+   "name": "CAM0_MCLK"
+  },
+  {
+   "pin": 117,
+   "name": "USB1_D_P"
+  },
+  {
+   "pin": 118,
+   "name": "GPIO01",
+   "note": "CLK"
+  },
+  {
+   "pin": 119,
+   "name": "GND"
+  },
+  {
+   "pin": 120,
+   "name": "CAM1_PWDN"
+  },
+  {
+   "pin": 121,
+   "name": "USB2_D_N"
+  },
+  {
+   "pin": 122,
+   "name": "CAM1_MCLK"
+  },
+  {
+   "pin": 123,
+   "name": "USB2_D_P"
+  },
+  {
+   "pin": 124,
+   "name": "GPIO02"
+  },
+  {
+   "pin": 125,
+   "name": "GND"
+  },
+  {
+   "pin": 126,
+   "name": "GPIO03"
+  },
+  {
+   "pin": 127,
+   "name": "GPIO04"
+  },
+  {
+   "pin": 128,
+   "name": "GPIO05"
+  },
+  {
+   "pin": 129,
+   "name": "GND"
+  },
+  {
+   "pin": 130,
+   "name": "GPIO06"
+  },
+  {
+   "pin": 131,
+   "name": "PCIE0_RX0_N"
+  },
+  {
+   "pin": 132,
+   "name": "GND"
+  },
+  {
+   "pin": 133,
+   "name": "PCIE0_RX0_P"
+  },
+  {
+   "pin": 134,
+   "name": "PCIE0_TX0_N"
+  },
+  {
+   "pin": 135,
+   "name": "GND"
+  },
+  {
+   "pin": 136,
+   "name": "PCIE0_TX0_P"
+  },
+  {
+   "pin": 137,
+   "name": "PCIE0_RX1_N"
+  },
+  {
+   "pin": 138,
+   "name": "GND"
+  },
+  {
+   "pin": 139,
+   "name": "PCIE0_RX1_P"
+  },
+  {
+   "pin": 140,
+   "name": "PCIE0_TX1_N"
+  },
+  {
+   "pin": 141,
+   "name": "GND"
+  },
+  {
+   "pin": 142,
+   "name": "PCIE0_TX1_P"
+  },
+  {
+   "pin": 143,
+   "name": "CAN_RX"
+  },
+  {
+   "pin": 144,
+   "name": "GND"
+  },
+  {
+   "pin": 145,
+   "name": "CAN_TX"
+  },
+  {
+   "pin": 146,
+   "name": "GND"
+  },
+  {
+   "pin": 147,
+   "name": "GND"
+  },
+  {
+   "pin": 148,
+   "name": "PCIE0_TX2_N"
+  },
+  {
+   "pin": 149,
+   "name": "PCIE0_RX2_N"
+  },
+  {
+   "pin": 150,
+   "name": "PCIE0_TX2_P"
+  },
+  {
+   "pin": 151,
+   "name": "PCIE0_RX2_P"
+  },
+  {
+   "pin": 152,
+   "name": "GND"
+  },
+  {
+   "pin": 153,
+   "name": "GND"
+  },
+  {
+   "pin": 154,
+   "name": "PCIE0_TX3_N"
+  },
+  {
+   "pin": 155,
+   "name": "PCIE0_RX3_N"
+  },
+  {
+   "pin": 156,
+   "name": "PCIE0_TX3_P"
+  },
+  {
+   "pin": 157,
+   "name": "PCIE0_RX3_P"
+  },
+  {
+   "pin": 158,
+   "name": "GND"
+  },
+  {
+   "pin": 159,
+   "name": "GND"
+  },
+  {
+   "pin": 160,
+   "name": "PCIE0_CLK_N"
+  },
+  {
+   "pin": 161,
+   "name": "USBSS0_RX_N"
+  },
+  {
+   "pin": 162,
+   "name": "PCIE0_CLK_P"
+  },
+  {
+   "pin": 163,
+   "name": "USBSS0_RX_P"
+  },
+  {
+   "pin": 164,
+   "name": "GND"
+  },
+  {
+   "pin": 165,
+   "name": "GND"
+  },
+  {
+   "pin": 166,
+   "name": "USBSS0_TX_N"
+  },
+  {
+   "pin": 167,
+   "name": "PCIE1_RX0_N"
+  },
+  {
+   "pin": 168,
+   "name": "USBSS0_TX_P"
+  },
+  {
+   "pin": 169,
+   "name": "PCIE1_RX0_P"
+  },
+  {
+   "pin": 170,
+   "name": "GND"
+  },
+  {
+   "pin": 171,
+   "name": "GND"
+  },
+  {
+   "pin": 172,
+   "name": "PCIE1_TX0_N"
+  },
+  {
+   "pin": 173,
+   "name": "PCIE1_CLK_N"
+  },
+  {
+   "pin": 174,
+   "name": "PCIE1_TX0_P"
+  },
+  {
+   "pin": 175,
+   "name": "PCIE1_CLK_P"
+  },
+  {
+   "pin": 176,
+   "name": "GND"
+  },
+  {
+   "pin": 177,
+   "name": "GND"
+  },
+  {
+   "pin": 178,
+   "name": "MOD_SLEEP"
+  },
+  {
+   "pin": 179,
+   "name": "PCIE_WAKE"
+  },
+  {
+   "pin": 180,
+   "name": "PCIE0_CLKREQ"
+  },
+  {
+   "pin": 181,
+   "name": "PCIE0_RST"
+  },
+  {
+   "pin": 182,
+   "name": "PCIE1_CLKREQ"
+  },
+  {
+   "pin": 183,
+   "name": "PCIE1_RST"
+  },
+  {
+   "pin": 184,
+   "name": "GBE_MDI0_N"
+  },
+  {
+   "pin": 185,
+   "name": "I2C0_SCL"
+  },
+  {
+   "pin": 186,
+   "name": "GBE_MDI0_P"
+  },
+  {
+   "pin": 187,
+   "name": "I2C0_SDA"
+  },
+  {
+   "pin": 188,
+   "name": "GBE_LED_LINK"
+  },
+  {
+   "pin": 189,
+   "name": "I2C1_SCL"
+  },
+  {
+   "pin": 190,
+   "name": "GBE_MDI1_N"
+  },
+  {
+   "pin": 191,
+   "name": "I2C1_SDA"
+  },
+  {
+   "pin": 192,
+   "name": "GBE_MDI1_P"
+  },
+  {
+   "pin": 193,
+   "name": "I2S0_DOUT"
+  },
+  {
+   "pin": 194,
+   "name": "GBE_LED_ACT"
+  },
+  {
+   "pin": 195,
+   "name": "I2S0_DIN"
+  },
+  {
+   "pin": 196,
+   "name": "GBE_MDI2_N"
+  },
+  {
+   "pin": 197,
+   "name": "I2S0_FS"
+  },
+  {
+   "pin": 198,
+   "name": "GBE_MDI2_P"
+  },
+  {
+   "pin": 199,
+   "name": "I2S0_SCLK"
+  },
+  {
+   "pin": 200,
+   "name": "GND"
+  },
+  {
+   "pin": 201,
+   "name": "GND"
+  },
+  {
+   "pin": 202,
+   "name": "GBE_MDI3_N"
+  },
+  {
+   "pin": 203,
+   "name": "UART1_TXD"
+  },
+  {
+   "pin": 204,
+   "name": "GBE_MDI3_P"
+  },
+  {
+   "pin": 205,
+   "name": "UART1_RXD"
+  },
+  {
+   "pin": 206,
+   "name": "GPIO07"
+  },
+  {
+   "pin": 207,
+   "name": "UART1_RTS"
+  },
+  {
+   "pin": 208,
+   "name": "GPIO08"
+  },
+  {
+   "pin": 209,
+   "name": "UART1_CTS"
+  },
+  {
+   "pin": 210,
+   "name": "CLK_32K_OUT"
+  },
+  {
+   "pin": 211,
+   "name": "GPIO09"
+  },
+  {
+   "pin": 212,
+   "name": "GPIO10"
+  },
+  {
+   "pin": 213,
+   "name": "CAM_I2C_SCL"
+  },
+  {
+   "pin": 214,
+   "name": "FORCE_RECOVERY"
+  },
+  {
+   "pin": 215,
+   "name": "CAM_I2C_SDA"
+  },
+  {
+   "pin": 216,
+   "name": "GPIO11"
+  },
+  {
+   "pin": 217,
+   "name": "MODULE_ID"
+  },
+  {
+   "pin": 218,
+   "name": "GPIO12"
+  },
+  {
+   "pin": 219,
+   "name": "PCIE2_RST"
+  },
+  {
+   "pin": 220,
+   "name": "I2S1_DOUT"
+  },
+  {
+   "pin": 221,
+   "name": "PCIE2_CLKREQ"
+  },
+  {
+   "pin": 222,
+   "name": "I2S1_DIN"
+  },
+  {
+   "pin": 223,
+   "name": "PCIE3_RST"
+  },
+  {
+   "pin": 224,
+   "name": "I2S1_FS"
+  },
+  {
+   "pin": 225,
+   "name": "PCIE3_CLKREQ"
+  },
+  {
+   "pin": 226,
+   "name": "I2S1_SCLK"
+  },
+  {
+   "pin": 227,
+   "name": "PCIE3_CLK_N"
+  },
+  {
+   "pin": 228,
+   "name": "GPIO13"
+  },
+  {
+   "pin": 229,
+   "name": "PCIE3_CLK_P"
+  },
+  {
+   "pin": 230,
+   "name": "GPIO14"
+  },
+  {
+   "pin": 231,
+   "name": "GND"
+  },
+  {
+   "pin": 232,
+   "name": "I2C2_SCL"
+  },
+  {
+   "pin": 233,
+   "name": "SHUTDOWN_REQ"
+  },
+  {
+   "pin": 234,
+   "name": "I2C2_SDA"
+  },
+  {
+   "pin": 235,
+   "name": "PMIC_BBAT"
+  },
+  {
+   "pin": 236,
+   "name": "UART2_TXD"
+  },
+  {
+   "pin": 237,
+   "name": "POWER_EN"
+  },
+  {
+   "pin": 238,
+   "name": "UART2_RXD"
+  },
+  {
+   "pin": 239,
+   "name": "SYS_RESET"
+  },
+  {
+   "pin": 240,
+   "name": "SLEEP/WAKE"
+  },
+  {
+   "pin": 241,
+   "name": "GND"
+  },
+  {
+   "pin": 242,
+   "name": "GND"
+  },
+  {
+   "pin": 243,
+   "name": "GND"
+  },
+  {
+   "pin": 244,
+   "name": "GND"
+  },
+  {
+   "pin": 245,
+   "name": "GND"
+  },
+  {
+   "pin": 246,
+   "name": "GND"
+  },
+  {
+   "pin": 247,
+   "name": "GND"
+  },
+  {
+   "pin": 248,
+   "name": "GND"
+  },
+  {
+   "pin": 249,
+   "name": "GND"
+  },
+  {
+   "pin": 250,
+   "name": "GND"
+  },
+  {
+   "pin": 251,
+   "name": "VDD_IN"
+  },
+  {
+   "pin": 252,
+   "name": "VDD_IN"
+  },
+  {
+   "pin": 253,
+   "name": "VDD_IN"
+  },
+  {
+   "pin": 254,
+   "name": "VDD_IN"
+  },
+  {
+   "pin": 255,
+   "name": "VDD_IN"
+  },
+  {
+   "pin": 256,
+   "name": "VDD_IN"
+  },
+  {
+   "pin": 257,
+   "name": "VDD_IN"
+  },
+  {
+   "pin": 258,
+   "name": "VDD_IN"
+  },
+  {
+   "pin": 259,
+   "name": "VDD_IN"
+  },
+  {
+   "pin": 260,
+   "name": "VDD_IN"
+  }
+ ],
+ "gnd_pins": [
+  1,
+  2,
+  7,
+  8,
+  13,
+  14,
+  19,
+  20,
+  25,
+  26,
+  31,
+  32,
+  37,
+  38,
+  43,
+  44,
+  49,
+  50,
+  55,
+  56,
+  61,
+  62,
+  67,
+  68,
+  73,
+  74,
+  79,
+  80,
+  85,
+  86,
+  102,
+  107,
+  113,
+  119,
+  125,
+  129,
+  132,
+  135,
+  138,
+  141,
+  144,
+  146,
+  147,
+  152,
+  153,
+  158,
+  159,
+  164,
+  165,
+  170,
+  171,
+  176,
+  177,
+  200,
+  201,
+  231,
+  241,
+  242,
+  243,
+  244,
+  245,
+  246,
+  247,
+  248,
+  249,
+  250
+ ],
+ "conflicts": []
+}

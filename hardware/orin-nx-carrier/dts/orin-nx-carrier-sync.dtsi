@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Orin NX 载板叠加：同步板 + PPS + 载板 EEPROM
+ *
+ * 配套 hardware/orin-nx-carrier/connections.md（157 网络 / 60 器件）与
+ * hardware/stm32h7-sync-board/（STM32H7 同步板）。
+ *
+ * 用法：把本文件放进内核源码的 arch/arm64/boot/dts/ 下，按需改 include，
+ * 或用 dtc 单独编译后由 extlinux.conf 的 FDT 指向。
+ *
+ * TODO(载板 bring-up 时必须逐条核对):
+ *   1. 串口节点用 &uart_b（模块 pin 203/205 = UART1_TXD/RXD）。L4T 35.x 里
+ *      ttyTHS0 是 UART_A（调试口，pin 99/101），UART_B 对应 ttyTHS1；
+ *      节点名与地址随 JetPack 版本变化，以实际 /proc/device-tree/serial@* 为准。
+ *   2. GPIO 编号取自 connections.md：PPS 输入 = pin 87 → GPIO0；
+ *      同步板复位 = pin 118 → GPIO1；PPS 锁定 = pin 124 → GPIO2；
+ *      风扇 PWM = pin 126 → GPIO3；触发状态 = pin 212 → GPIO10。
+ *   3. 相机回读走同步板 mezzanine（J12.27），不是模块 GPIO。
+ *   4. I2C0 的节点标签在 L4T 里可能是 i2c_c（对应 pin 185/187），需核对。
+ */
+
+/ {
+	aliases {
+		syncboard0 = &syncboard_uart;
+		pps0 = &pps_in;
+	};
+
+	/* 载板 EEPROM：Orin 用它识别载板型号与尺寸（I2C0 @ 0x50） */
+	carrier_eeprom: eeprom@50 {
+		compatible = "atmel,24aa01";
+		reg = <0x50>;
+		pagesize = <16>;
+	};
+
+	/* RTK 的 PPS（经 RS-422 接收 + 施密特整形）喂给模块 GPIO（pin 87 / GPIO00） */
+	pps_in: pps {
+		compatible = "pps-gpio";
+		gpios = <&gpio TEGRA234_MAIN_GPIO(GPIO, 0) GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/* UART1：与同步板通信（connections.md 的 UART1_TXD_18 / UART1_RXD_18） */
+&uart_b {
+	status = "okay";
+
+	/* TODO: 填 pinctrl-0 / pinctrl-names，参考 L4T 里 uart_b 的默认组 */
+
+	syncboard_uart: syncboard@0 {
+		compatible = "vendor,chaos-syncboard";
+		/* 波特率由 userspace 设定（921600 8N1） */
+		current-speed = <921600>;
+
+		/* 同步板回报的 PPS 锁定状态（pin 124 / GPIO02），低有效 */
+		status-gpios = <&gpio TEGRA234_MAIN_GPIO(GPIO, 2) GPIO_ACTIVE_LOW>;
+
+		/* 触发运行状态（pin 212 / GPIO10） */
+		trigger-gpios = <&gpio TEGRA234_MAIN_GPIO(GPIO, 10) GPIO_ACTIVE_HIGH>;
+
+		/*
+		 * 同步板的硬件复位在载板上是手动按键（SW3 → J12.22 → 同步板 NRST），
+		 * 不用模块 GPIO 复位，所以这里没有 reset-gpios。
+		 * 要软件复位，走串口帧协议的 "reinit" 命令。
+		 */
+	};
+};
+
+/* I2C0：载板 EEPROM @ 0x50（pin 185/187） */
+&i2c_c {
+	status = "okay";
+};

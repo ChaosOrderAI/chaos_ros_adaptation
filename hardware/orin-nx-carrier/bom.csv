@@ -1,0 +1,66 @@
+位号,型号,封装,MPN,说明
+J1,Orin NX 260-pin,按 NVIDIA 规范选型,,Orin NX 模块座
+J2,DC_IN_5.5x2.5,Connector_BarrelJack:BarrelJack_Horizontal,,12–20 V 电源输入
+J3,RJ45_PoE,Connector_RJ45:Amphenol_74005251-0001,,千兆网口（PoE PD，雷达/骨干）
+J4,M.2_Key_M_2280,Connector_M.2:M.2_Key_M_2280_22x-4H,,NVMe SSD (PCIe x4)
+J5,M.2_Key_B_2242,Connector_M.2:M.2_Key_B_2242_22x-4H,,5G 模组（PCIe x2 数据 + USB 2.0 控制）
+J6,M.2_Key_E_2230,Connector_M.2:M.2_Key_E_2230_22x-4H,,WiFi/BT 预留（REFCLK 脚位按所选模组核对）
+J7,USB-C_3.0,Connector_USB:USB_C_Receptacle_16P,,USB 3.0 #1：Gemini 335
+J8,USB-C_3.0,Connector_USB:USB_C_Receptacle_16P,,USB 3.0 #2
+J9,USB-C_3.0,Connector_USB:USB_C_Receptacle_16P,,USB 3.0 #3（仅 SS）
+J10,CSI_22pin,Connector_PinHeader:PinHeader_2x11_P2.00mm_Vertical,,CSI 相机座 #1
+J11,CSI_22pin,Connector_PinHeader:PinHeader_2x11_P2.00mm_Vertical,,CSI 相机座 #2
+J12,SYNC_MEZZ_2x22,Connector_PinHeader:PinHeader_2x22_P2.00mm_Vertical,,同步板（STM32H7）板对板接口
+J13,CAM_SYNC_8pin,Connector_PinHeader:PinHeader_2x04_P2.00mm_Vertical,,Gemini 335 8-pin 硬件同步座
+J14,RTK_CONN,Connector_PinHeader:PinHeader_1x06_P2.54mm_Vertical,,RTK 接收机（差分 PPS + NMEA）
+J15,CAN_3pin,Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical,,隔离 CAN #1
+J16,CAN_3pin,Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical,,隔离 CAN #2
+J17,DEBUG_UART,Connector_PinHeader:PinHeader_1x06_P2.54mm_Vertical,,调试串口（UART0）+ 备用 GPIO
+J18,FAN_4pin,Connector_JST:JST_PH_B4B-PH-SM4-TB_1x04_P2.00mm,,风扇（PWM 调速）
+J19,RTC_BATT,Battery:BatteryHolder_Keystone_1060_1x20mm,1060,模块 PMIC_BBAT 备份电池
+J20,SIM_6pin,Connector_PinHeader:PinHeader_1x06_P2.54mm_Vertical,,SIM 卡座
+J21,TRIG_OUT_6pin,Connector_JST:JST_XH_B6B-XH-A_1x06_P2.50mm_Vertical,,触发线束座：四路触发（3.3 V）+ 两路 1.8 V 副本
+U1,TPS54560-Q1,Package_TO_SOT_SMD:SOT-23-6,TPS54560QDGQR,5 V / 5 A buck（载板电源）
+U2,TPS23753,Package_TO_SOT_SMD:SOT-23-6,TPS23753-4ECNR,PoE PD 控制器
+U3,H110F,Package_SO:SOIC-16_3.9x9.9mm_P1.27mm,H110FNL,千兆网络变压器
+U4,TXS0102,Package_TO_SOT_SMD:SOT-23-6,TXS0102DCTR,UART1 双向 1.8 V ↔ 3.3 V
+U5,74AVC4T245,Package_SO:SOIC-16_3.9x9.9mm_P1.27mm,SN74AVC4T245PWR,四路触发输出 3.3 V → 1.8 V
+U6,TXS0104,Package_SO:SOIC-16_3.9x9.9mm_P1.27mm,TXS0104PWR,模块→同步板的 4 路状态 GPIO（1.8 V → 3.3 V）
+U7,TXS0102,Package_TO_SOT_SMD:SOT-23-6,TXS0102DCTR,相机同步回读 1.8 V → 3.3 V
+U8,74LVC1G17,Package_TO_SOT_SMD:SOT-23-5,SN74LVC1G17DBVR,RTK PPS 施密特整形（3.3 V）
+U16,SN74LVC2T45,Package_SO:SOIC-8_3.9x4.9mm_P1.27mm,SN74LVC2T45DR,1.8 V ↔ 3.3 V：PPS 送给模块、模块 UART2 TX 送回 RTK
+U17,74LVC1G17,Package_TO_SOT_SMD:SOT-23-5,SN74LVC1G17DBVR,RTK NMEA 施密特整形
+U9,24AA01,Package_TO_SOT_SMD:SOT-23-5,24AA01T-I/OT,载板 EEPROM（Orin 靠它识别载板，I2C0 @0x50）
+U10,TPS3808G01,Package_SOT_SMD:SOT-23-6,TPS3808G01DBVR,电源时序 / UVLO 监控，输出 POWER_EN
+U11,TPS7A4700,Package_TO_SOT_SMD:SOT-23-6,TPS7A4700RGWR,低噪声 3.3 V LDO（信号域供电）
+U12,TPS54302,Package_TO_SOT_SMD:SOT-23-6,TPS54302DDCR,3.3 V / 3 A buck（5G 模组）
+U13,SN74LVC1G125,Package_TO_SOT_SMD:SOT-23-5,SN74LVC1G125DBVR,POWER_EN 施密特缓冲（模块要求）
+Q1,Si2302CDS,Package_TO_SOT_SMD:SOT-23-6,,5G PWRKEY 驱动
+Q2,Si2302CDS,Package_TO_SOT_SMD:SOT-23-6,,5G RESET 驱动
+SW1,SW_Push,Button_Switch_SMD:SW_SPST_SKRPACE010,,电源键
+SW2,SW_Push,Button_Switch_SMD:SW_SPST_SKRPACE010,,强制恢复（低有效）
+SW3,SW_Push,Button_Switch_SMD:SW_SPST_SKRPACE010,,同步板复位（低有效）
+D1,LED_Green,LED_SMD:LED_0603_1608Metric,,电源/运行
+D2,LED_Yellow,LED_SMD:LED_0603_1608Metric,,PPS 锁定
+D3,LED_Red,LED_SMD:LED_0603_1608Metric,,故障
+F1,Fuse_3A,Fuse:Fuse_1812_4532Metric,,输入保险丝
+D4,SMBJ33A,Diode_SMD:D_SMB,,输入 TVS
+D5,SS54,Diode_SMD:D_SMA,,防反接
+L1,10uH,Inductor_SMD:L_1210_3225Metric,,5 V 输出滤波
+L2,4u7,Inductor_SMD:L_1210_3225Metric,,3.3 V 输出滤波
+C1,22uF,Capacitor_SMD:C_1210_3225Metric,,输入储能
+C2,100uF,Capacitor_SMD:C_1210_3225Metric,,5 V 轨储能
+C3,10uF,Capacitor_SMD:C_0805_2012Metric,,5 V 轨
+C4,22uF,Capacitor_SMD:C_0805_2012Metric,,3.3 V 轨
+C5,100nF,Capacitor_SMD:C_0603_1608Metric,,去耦
+C6,100uF,Capacitor_SMD:C_0805_2012Metric,,3.3 V 轨（5G 专用）
+C7,22uF,Capacitor_SMD:C_0805_2012Metric,,5G VBUS 储能
+R1,1k,Resistor_SMD:R_0603_1608Metric,,D1 限流
+R2,1k,Resistor_SMD:R_0603_1608Metric,,D2 限流
+R3,1k,Resistor_SMD:R_0603_1608Metric,,D3 限流
+R4,10k,Resistor_SMD:R_0603_1608Metric,,信号下拉
+R5,4k7,Resistor_SMD:R_0603_1608Metric,,I2C 上拉
+R6,100R,Resistor_SMD:R_0603_1608Metric,,串联匹配（预留）
+R7,10k,Resistor_SMD:R_0603_1608Metric,,FORCE_RECOVERY 上拉
+R8,4k7,Resistor_SMD:R_0603_1608Metric,,NMEA 3.3→1.8 分压上臂
+R9,4k7,Resistor_SMD:R_0603_1608Metric,,NMEA 3.3→1.8 分压下臂

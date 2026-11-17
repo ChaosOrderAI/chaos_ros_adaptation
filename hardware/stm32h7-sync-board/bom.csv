@@ -1,0 +1,59 @@
+位号,型号,封装,MPN,说明
+U1,STM32H743VGTx,Package_QFP:LQFP-100_14x14mm_P0.5mm,STM32H743VGT6,主控，480 MHz
+U2,74LVC2G17,Package_TO_SOT_SMD:SOT-23-5,SN74LVC2G17DBVR,双施密特触发器：PPS 与外部触发的整形
+U3,SN65HVD75,Package_SO:SOIC-8_3.9x4.9mm_P1.27mm,SN65HVD75DR,RS-485 收发器，主机长线用（可 DNP）
+U4,74LVC2G34,Package_TO_SOT_SMD:SOT-23-5,SN74LVC2G34DBVR,触发输出缓冲 1/2（3.3 V）
+U5,74LVC2G34,Package_TO_SOT_SMD:SOT-23-5,SN74LVC2G34DBVR,触发输出缓冲 2/2（3.3 V）
+U6,74HCT125,Package_SO:SOIC-14_3.9x8.7mm_P1.27mm,SN74HCT125DR,触发输出缓冲（5 V），经跳线与 3.3 V 版本二选一
+U7,AT24C02,Package_TO_SOT_SMD:SOT-23-6,AT24C02D-SSHM,配置存储（I2C2）
+U8,MCP1700-3302,Package_TO_SOT_SMD:SOT-23-3,MCP1700T-3302E/TT,MCU 3.3 V LDO
+U9,AP2112K-3.3,Package_TO_SOT_SMD:SOT-23-5,AP2112K-3.3TRG1,RTC/模拟部分 3.3 V LDO（与 MCU 电源隔离）
+Y1,25MHz,Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm,ABM8G-25.000MHZ,HSE 主晶振
+Y2,32.768kHz,Crystal:Crystal_SMD_3215-4Pin_3.2x1.5mm,ABS07-32.768KHZ-T,LSE rtc 晶振
+BT1,CR1220,Battery:BatteryHolder_Keystone_3000_1x12mm,3000,RTC 备份电池
+J1,Conn_01x06,Connector_Molex:Molex_Micro-Fit_3.0_43045-1006_1x06_P3.00mm_Vertical,43045-1006,GNSS/RTK 模块接口
+J2,Conn_01x08,Connector_Molex:Molex_Micro-Fit_3.0_43045-1108_1x08_P3.00mm_Vertical,43045-1108,四路触发输出 + 电源
+J3,Conn_01x06,Connector_JST:JST_XH_B6B-XH-A_1x06_P2.50mm_Vertical,B6B-XH-A,主机通信（UART / RS-485）
+J4,Conn_01x04,Connector_JST:JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical,B4B-XH-A,外部触发输入 + 状态输出
+J5,Conn_01x04,Connector_PinHeader:PinHeader_1x04_P2.54mm_Vertical,,SWD 调试
+J6,Conn_01x04,Connector_JST:JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical,B4B-XH-A,DS3231 RTC 模块
+J7,Conn_USB:USB_C_Receptacle_GCT_USB4105-xx-A_1x06_P2.50mm_Vertical,USB4105-xx-A,USB-C 调试口（CDC）,
+J8,Conn_01x02,Connector_PinHeader:PinHeader_1x02_P2.54mm_Vertical,,电源输入
+J9,Conn_01x04,Connector_PinHeader:PinHeader_1x04_P2.54mm_Vertical,,可选 5 V 触发输出（U6 未贴时为空）
+J10,Conn_02x22,Connector_PinHeader:PinHeader_2x22_P2.00mm_Vertical,,载板 mezzanine：与 orin-nx-carrier 的 J12 一一对应
+SW1,SW_Push,Button_Switch_SMD:SW_SPST_SKRPACE010,,复位
+SW2,SW_Push,Button_Switch_SMD:SW_SPST_SKRPACE010,,BOOT0
+D1,LED_Green,LED_SMD:LED_0603_1608Metric,,PPS 锁定
+D2,LED_Yellow,LED_SMD:LED_0603_1608Metric,,触发运行
+D3,LED_Red,LED_SMD:LED_0603_1608Metric,,掉 PPS / 故障
+FB1,Ferrite_600R@100MHz,Inductor_SMD:L_0603_1608Metric,BLM18PG601SN1D,模拟/数字分区
+L1,Ferrite_600R@100MHz,Inductor_SMD:L_0603_1608Metric,BLM18PG601SN1D,输入电源滤波
+R1,1k,Resistor_SMD:R_0603_1608Metric,,PPS 限流
+R2,100pF,Capacitor_SMD:C_0603_1608Metric,,PPS 低通（fc≈1.6 MHz）
+R3,1k,Resistor_SMD:R_0603_1608Metric,,EXT 输入限流
+R4,100pF,Capacitor_SMD:C_0603_1608Metric,,EXT 输入低通
+R5,10k,Resistor_SMD:R_0603_1608Metric,,BOOT0 下拉
+R6,0R,Resistor_SMD:R_0603_1608Metric,,电源选择
+R7,10k,Resistor_SMD:R_0603_1608Metric,,I2C1 上拉（模块自带则 DNP）
+R8,10k,Resistor_SMD:R_0603_1608Metric,,I2C1 上拉
+R9,2.2k,Resistor_SMD:R_0603_1608Metric,,I2C2 上拉
+R10,2.2k,Resistor_SMD:R_0603_1608Metric,,I2C2 上拉
+R11,4.7k,Resistor_SMD:R_0603_1608Metric,,USB CC 下拉
+R12,4.7k,Resistor_SMD:R_0603_1608Metric,,USB CC 下拉
+C1,22pF,Capacitor_SMD:C_0603_1608Metric,,Y1 负载电容
+C2,22pF,Capacitor_SMD:C_0603_1608Metric,,Y1 负载电容
+C3,6.8pF,Capacitor_SMD:C_0603_1608Metric,,Y2 负载电容
+C4,6.8pF,Capacitor_SMD:C_0603_1608Metric,,Y2 负载电容
+C5,100nF,Capacitor_SMD:C_0603_1608Metric,,U1 去耦
+C6,100nF,Capacitor_SMD:C_0603_1608Metric,,U1 去耦
+C7,4.7uF,Capacitor_SMD:C_0805_2012Metric,,U8 输入
+C8,10uF,Capacitor_SMD:C_0805_2012Metric,,U8 输出
+C9,100nF,Capacitor_SMD:C_0603_1608Metric,,U9 输入
+C10,10uF,Capacitor_SMD:C_0805_2012Metric,,U9 输出
+C11,100nF,Capacitor_SMD:C_0603_1608Metric,,U7 去耦
+C12,4.7uF,Capacitor_SMD:C_0805_2012Metric,,输入电源储能
+C13,100nF,Capacitor_SMD:C_0603_1608Metric,,USB 旁路
+C14,4.7uF,Capacitor_SMD:C_0805_2012Metric,,USB VBUS 去耦
+C15,1uF,Capacitor_SMD:C_0603_1608Metric,,VBACKUP
+D4,1N4148W,Diode_SMD:D_SOD-323,,电池防反充
+D5,ESD_Array,Diode_SMD:D_SOT-23-6,TPD6E05U06RVZR,外部接口 ESD

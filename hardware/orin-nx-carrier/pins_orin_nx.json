@@ -1,0 +1,1049 @@
+{
+ "source": "ConnectTech Jetson Orin NX Data Sheet DS-10712-001 (NVIDIA Jetson Orin NX Series Data Sheet, tables 1.9.x)",
+ "url": "https://connecttech.com/ftp/pdf/jetson_orin_nx_datasheet.pdf",
+ "pins": [
+  {
+   "pin": 3,
+   "name": "CSI1_D0_N",
+   "desc": "Camera, CSI 1 Data 0–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 4,
+   "name": "CSI0_D0_N",
+   "desc": "Camera, CSI 0 Data 0–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 5,
+   "name": "CSI1_D0_P",
+   "desc": "Camera, CSI 1 Data 0+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 6,
+   "name": "CSI0_D0_P",
+   "desc": "Camera, CSI 0 Data 0+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 10,
+   "name": "CSI0_CLK_N",
+   "desc": "Camera, CSI 0 Clock–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 12,
+   "name": "CSI0_CLK_P",
+   "desc": "Camera, CSI 0 Clock+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 15,
+   "name": "CSI1_D1_N",
+   "desc": "Camera, CSI 1 Data 1–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 16,
+   "name": "CSI0_D1_N",
+   "desc": "Camera, CSI 0 Data 1–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 17,
+   "name": "CSI1_D1_P",
+   "desc": "Camera, CSI 1 Data 1+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 18,
+   "name": "CSI0_D1_P",
+   "desc": "Camera, CSI 0 Data 1+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 21,
+   "name": "CSI3_D0_N",
+   "desc": "Camera, CSI 3 Data 0–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 22,
+   "name": "CSI2_D0_N",
+   "desc": "Camera, CSI 2 Data 0–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 23,
+   "name": "CSI3_D0_P",
+   "desc": "Camera, CSI 3 Data 0+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 24,
+   "name": "CSI2_D0_P",
+   "desc": "Camera, CSI 2 Data 0+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 27,
+   "name": "CSI3_CLK_N",
+   "desc": "Camera, CSI 3 Clock–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 28,
+   "name": "CSI2_CLK_N",
+   "desc": "Camera, CSI 2 Clock–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 29,
+   "name": "CSI3_CLK_P",
+   "desc": "Camera, CSI 3 Clock+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 30,
+   "name": "CSI2_CLK_P",
+   "desc": "Camera, CSI 2 Clock+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 33,
+   "name": "CSI3_D1_N",
+   "desc": "Camera, CSI 3 Data 1–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 34,
+   "name": "CSI2_D1_N",
+   "desc": "Camera, CSI 2 Data 1–",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 35,
+   "name": "CSI3_D1_P",
+   "desc": "Camera, CSI 3 Data 1+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 36,
+   "name": "CSI2_D1_P",
+   "desc": "Camera, CSI 2 Data 1+",
+   "dir": "Input",
+   "type": "MIPI D-PHY"
+  },
+  {
+   "pin": 39,
+   "name": "USBSS1_RX_N",
+   "desc": "USB SS Receive– (USB 3.2 Ctrl #1)",
+   "dir": "Input",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 40,
+   "name": "PCIE2_RX0_N",
+   "desc": "PCIe 2 Receive 0– (PCIe Ctrl #7 Lane 0)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 41,
+   "name": "USBSS1_RX_P",
+   "desc": "USB SS Receive+ (USB 3.2 Ctrl #1)",
+   "dir": "Input",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 42,
+   "name": "PCIE2_RX0_P",
+   "desc": "PCIe 2 Receive 0+ (PCIe Ctrl #7 Lane 0)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 45,
+   "name": "USBSS1_TX_N",
+   "desc": "USB SS Transmit– (USB 3.2 Ctrl #1)",
+   "dir": "Output",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 46,
+   "name": "PCIE2_TX0_N",
+   "desc": "PCIe 2 Transmit 0– (PCIe Ctrl #7 Lane 0)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 47,
+   "name": "USBSS1_TX_P",
+   "desc": "USB SS Transmit+ (USB 3.2 Ctrl #1)",
+   "dir": "Output",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 48,
+   "name": "PCIE2_TX0_P",
+   "desc": "PCIe 2 Transmit 0+ (PCIe Ctrl #7 Lane 0)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 51,
+   "name": "USBSS2_RX_N",
+   "desc": "USB SS Receive– (USB 3.2 Ctrl #2)",
+   "dir": "Input",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 52,
+   "name": "PCIE2_CLK_N",
+   "desc": "PCIe 2 Reference Clock– (PCIe Ctrl #7)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 53,
+   "name": "USBSS2_RX_P",
+   "desc": "USB SS Receive+ (USB 3.2 Ctrl #2)",
+   "dir": "Input",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 54,
+   "name": "PCIE2_CLK_P",
+   "desc": "PCIe 2 Reference Clock+ (PCIe Ctrl #7)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 57,
+   "name": "USBSS2_TX_N",
+   "desc": "USB SS Transmit– (USB 3.2 Ctrl #2)",
+   "dir": "Output",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 58,
+   "name": "PCIE2_RX1_N",
+   "desc": "PCIe 2 Receive 1– (PCIe Ctrl #7 Lane 1) or PCIe 3",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 59,
+   "name": "USBSS2_TX_P",
+   "desc": "USB SS Transmit+ (USB 3.2 Ctrl #2)",
+   "dir": "Output",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 60,
+   "name": "PCIE2_RX1_P",
+   "desc": "PCIe 2 Receive 1+ (PCIe Ctrl #7 Lane 1) or PCIe 3",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 64,
+   "name": "PCIE2_TX1_N",
+   "desc": "PCIe 2 Transmit 1– (PCIe Ctrl #7 Lane 1) or PCIe 3",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 66,
+   "name": "PCIE2_TX1_P",
+   "desc": "PCIe 2 Transmit 1+ (PCIe Ctrl #7 Lane 1) or PCIe 3",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 87,
+   "name": "GPIO00",
+   "desc": "GPIO #0 or USB 0 VBUS Enable #0",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 89,
+   "name": "SPI0_MOSI",
+   "desc": "SPI 0 Master Out / Slave In",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 91,
+   "name": "SPI0_SCK",
+   "desc": "SPI 0 Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 93,
+   "name": "SPI0_MISO",
+   "desc": "SPI 0 Master In / Slave Out",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 99,
+   "name": "UART0_TXD",
+   "desc": "UART #0 Transmit",
+   "dir": "Output",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 101,
+   "name": "UART0_RXD",
+   "desc": "UART #0 Receive",
+   "dir": "Input",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 104,
+   "name": "SPI1_MOSI",
+   "desc": "SPI 1 Master Out / Slave In",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 106,
+   "name": "SPI1_SCK",
+   "desc": "SPI 1 Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 108,
+   "name": "SPI1_MISO",
+   "desc": "SPI 1 Master In / Slave Out",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 109,
+   "name": "USB0_D_N",
+   "desc": "USB 2.0 Port 0 Data–",
+   "dir": "Bidir",
+   "type": "USB PHY"
+  },
+  {
+   "pin": 111,
+   "name": "USB0_D_P",
+   "desc": "USB 2.0 Port 0 Data+",
+   "dir": "Bidir",
+   "type": "USB PHY"
+  },
+  {
+   "pin": 114,
+   "name": "CAM0_PWDN",
+   "desc": "Camera 0 Powerdown or GPIO",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 115,
+   "name": "USB1_D_N",
+   "desc": "USB 2.0 Port 1 Data–",
+   "dir": "Bidir",
+   "type": "USB PHY"
+  },
+  {
+   "pin": 116,
+   "name": "CAM0_MCLK",
+   "desc": "Camera 0 Reference Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 117,
+   "name": "USB1_D_P",
+   "desc": "USB 2.0 Port 1 Data+",
+   "dir": "Bidir",
+   "type": "USB PHY"
+  },
+  {
+   "pin": 118,
+   "name": "GPIO01",
+   "desc": "GPIO #1 or Generic Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 120,
+   "name": "CAM1_PWDN",
+   "desc": "Camera 1 Powerdown or GPIO",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 121,
+   "name": "USB2_D_N",
+   "desc": "USB 2.0 Port 2 Data–",
+   "dir": "Bidir",
+   "type": "USB PHY"
+  },
+  {
+   "pin": 122,
+   "name": "CAM1_MCLK",
+   "desc": "Camera 1 Reference Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 123,
+   "name": "USB2_D_P",
+   "desc": "USB 2.0 Port 2 Data+",
+   "dir": "Bidir",
+   "type": "USB PHY"
+  },
+  {
+   "pin": 124,
+   "name": "GPIO02",
+   "desc": "GPIO #2",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 126,
+   "name": "GPIO03",
+   "desc": "GPIO #3",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 127,
+   "name": "GPIO04",
+   "desc": "GPIO #4",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 128,
+   "name": "GPIO05",
+   "desc": "GPIO #5",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 130,
+   "name": "GPIO06",
+   "desc": "GPIO #6",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 131,
+   "name": "PCIE0_RX0_N",
+   "desc": "PCIe 0 Receive 0– (PCIe Ctrl #4 Lane 0)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 133,
+   "name": "PCIE0_RX0_P",
+   "desc": "PCIe 0 Receive 0+ (PCIe Ctrl #4 Lane 0)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 134,
+   "name": "PCIE0_TX0_N",
+   "desc": "PCIe 0 Transmit 0– (PCIe Ctrl #4 Lane 0)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 136,
+   "name": "PCIE0_TX0_P",
+   "desc": "PCIe 0 Transmit 0+ (PCIe Ctrl #4 Lane 0)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 137,
+   "name": "PCIE0_RX1_N",
+   "desc": "PCIe 0 Receive 1– (PCIe Ctrl #4 Lane 1)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 139,
+   "name": "PCIE0_RX1_P",
+   "desc": "PCIe 0 Receive 1+ (PCIe Ctrl #4 Lane 1)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 140,
+   "name": "PCIE0_TX1_N",
+   "desc": "PCIe 0 Transmit 1– PCIe Ctrl #4 Lane 1)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 142,
+   "name": "PCIE0_TX1_P",
+   "desc": "PCIe 0 Transmit 1+ (PCIe Ctrl #4 Lane 1)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 143,
+   "name": "CAN_RX",
+   "desc": "CAN Receive",
+   "dir": "Input",
+   "type": "CMOS – 3.3V"
+  },
+  {
+   "pin": 145,
+   "name": "CAN_TX",
+   "desc": "CAN Transmit",
+   "dir": "Output",
+   "type": "CMOS – 3.3V"
+  },
+  {
+   "pin": 148,
+   "name": "PCIE0_TX2_N",
+   "desc": "PCIe 0 Transmit 2– (PCIe Ctrl #4 Lane 2)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 149,
+   "name": "PCIE0_RX2_N",
+   "desc": "PCIe 0 Receive 2– (PCIe Ctrl #4 Lane 2)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 150,
+   "name": "PCIE0_TX2_P",
+   "desc": "PCIe 0 Transmit 2+ (PCIe Ctrl #4 Lane 2)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 151,
+   "name": "PCIE0_RX2_P",
+   "desc": "PCIe 0 Receive 2+ (PCIe Ctrl #4 Lane 2)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 154,
+   "name": "PCIE0_TX3_N",
+   "desc": "PCIe 0 Transmit 3– (PCIe Ctrl #4 Lane 3)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 155,
+   "name": "PCIE0_RX3_N",
+   "desc": "PCIe 0 Receive 3– (PCIe Ctrl #4 Lane 3)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 156,
+   "name": "PCIE0_TX3_P",
+   "desc": "PCIe 0 Transmit 3+ (PCIe Ctrl #4 Lane 3)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 157,
+   "name": "PCIE0_RX3_P",
+   "desc": "PCIe 0 Receive 3+ (PCIe Ctrl #4 Lane 3)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 160,
+   "name": "PCIE0_CLK_N",
+   "desc": "PCIe #0 Reference Clock- (reference clock input when",
+   "dir": "Bidir",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 161,
+   "name": "USBSS0_RX_N",
+   "desc": "USB SS Receive– (USB 3.2 Ctrl #0)",
+   "dir": "Input",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 162,
+   "name": "PCIE0_CLK_P",
+   "desc": "PCIe #0 Reference Clock+ (reference clock input when",
+   "dir": "Bidir",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 163,
+   "name": "USBSS0_RX_P",
+   "desc": "USB SS Receive+ (USB 3.2 Ctrl #0)",
+   "dir": "Input",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 166,
+   "name": "USBSS0_TX_N",
+   "desc": "USB SS Transmit– (USB 3.2 Ctrl #0)",
+   "dir": "Output",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 167,
+   "name": "PCIE1_RX0_N",
+   "desc": "PCIe 1 Receive 0– (PCIe Ctrl #1 Lane 0)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 168,
+   "name": "USBSS0_TX_P",
+   "desc": "USB SS Transmit+ (USB 3.2 Ctrl #0)",
+   "dir": "Output",
+   "type": "USB SS PHY"
+  },
+  {
+   "pin": 169,
+   "name": "PCIE1_RX0_P",
+   "desc": "PCIe 1 Receive 0+ (PCIe Ctrl #1 Lane 0)",
+   "dir": "Input",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 172,
+   "name": "PCIE1_TX0_N",
+   "desc": "PCIe 1 Transmit 0– (PCIe Ctrl #1 Lane 0)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 173,
+   "name": "PCIE1_CLK_N",
+   "desc": "PCIe 1 Reference Clock– (PCIe Ctrl #1)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 174,
+   "name": "PCIE1_TX0_P",
+   "desc": "PCIe 1 Transmit 0+ (PCIe Ctrl #1 Lane 0)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 175,
+   "name": "PCIE1_CLK_P",
+   "desc": "PCIe 1 Reference Clock+ (PCIe Ctrl #1)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 184,
+   "name": "GBE_MDI0_N",
+   "desc": "GbE Transformer Data 0–",
+   "dir": "Bidir",
+   "type": "MDI"
+  },
+  {
+   "pin": 185,
+   "name": "I2C0_SCL",
+   "desc": "General I2C 0 Clock. 1.5kΩ pull-up to 3.3V on module.",
+   "dir": "Bidir",
+   "type": "Open Drain – 3.3V"
+  },
+  {
+   "pin": 186,
+   "name": "GBE_MDI0_P",
+   "desc": "GbE Transformer Data 0+",
+   "dir": "Bidir",
+   "type": "MDI"
+  },
+  {
+   "pin": 187,
+   "name": "I2C0_SDA",
+   "desc": "General I2C 0 Data. 1.5kΩ pull-up to 3.3V on the module.",
+   "dir": "Bidir",
+   "type": "Open Drain – 3.3V"
+  },
+  {
+   "pin": 188,
+   "name": "GBE_LED_LINK",
+   "desc": "Ethernet Link LED (Green)",
+   "dir": "Output",
+   "type": "-"
+  },
+  {
+   "pin": 189,
+   "name": "I2C1_SCL",
+   "desc": "General I2C 1 Clock. 1.5kΩ pull-up to 3.3V on the module.",
+   "dir": "Bidir",
+   "type": "Open Drain – 3.3V"
+  },
+  {
+   "pin": 190,
+   "name": "GBE_MDI1_N",
+   "desc": "GbE Transformer Data 1–",
+   "dir": "Bidir",
+   "type": "MDI"
+  },
+  {
+   "pin": 191,
+   "name": "I2C1_SDA",
+   "desc": "General I2C 1 Data. 1.5kΩ pull-up to 3.3V on the module.",
+   "dir": "Bidir",
+   "type": "Open Drain – 3.3V"
+  },
+  {
+   "pin": 192,
+   "name": "GBE_MDI1_P",
+   "desc": "GbE Transformer Data 1+",
+   "dir": "Bidir",
+   "type": "MDI"
+  },
+  {
+   "pin": 193,
+   "name": "I2S0_DOUT",
+   "desc": "I2S Audio Port 0 Data Out",
+   "dir": "Output",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 194,
+   "name": "GBE_LED_ACT",
+   "desc": "Ethernet Activity LED (Yellow)",
+   "dir": "Output",
+   "type": "-"
+  },
+  {
+   "pin": 195,
+   "name": "I2S0_DIN",
+   "desc": "I2S Audio Port 0 Data In",
+   "dir": "Input",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 196,
+   "name": "GBE_MDI2_N",
+   "desc": "GbE Transformer Data 2–",
+   "dir": "Bidir",
+   "type": "MDI"
+  },
+  {
+   "pin": 197,
+   "name": "I2S0_FS",
+   "desc": "I2S Audio Port 0 Left/Right Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 198,
+   "name": "GBE_MDI2_P",
+   "desc": "GbE Transformer Data 2+",
+   "dir": "Bidir",
+   "type": "MDI"
+  },
+  {
+   "pin": 199,
+   "name": "I2S0_SCLK",
+   "desc": "I2S Audio Port 0 Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 202,
+   "name": "GBE_MDI3_N",
+   "desc": "GbE Transformer Data 3–",
+   "dir": "Bidir",
+   "type": "MDI"
+  },
+  {
+   "pin": 203,
+   "name": "UART1_TXD",
+   "desc": "UART #1 Transmit",
+   "dir": "Output",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 204,
+   "name": "GBE_MDI3_P",
+   "desc": "GbE Transformer Data 3+",
+   "dir": "Bidir",
+   "type": "MDI"
+  },
+  {
+   "pin": 205,
+   "name": "UART1_RXD",
+   "desc": "UART #1 Receive",
+   "dir": "Input",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 206,
+   "name": "GPIO07",
+   "desc": "Pulse Width Modulator or GPIO #7",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 206,
+   "name": "GPIO07",
+   "desc": "GPIO #7 or Pulse Width Modulator",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 208,
+   "name": "GPIO08",
+   "desc": "GPIO #8 or Fan Tachometer",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 210,
+   "name": "CLK_32K_OUT",
+   "desc": "Sleep/Suspend clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 211,
+   "name": "GPIO09",
+   "desc": "GPIO #9 or Audio Codec Master Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 212,
+   "name": "GPIO10",
+   "desc": "GPIO #10",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 216,
+   "name": "GPIO11",
+   "desc": "GPIO #11 or Generic Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 218,
+   "name": "GPIO12",
+   "desc": "Pulse Width Modulator or GPIO #12",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 218,
+   "name": "GPIO12",
+   "desc": "GPIO #12 or Pulse Width Modulator",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 220,
+   "name": "I2S1_DOUT",
+   "desc": "I2S Audio Port 1 Data Out",
+   "dir": "Output",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 222,
+   "name": "I2S1_DIN",
+   "desc": "I2S Audio Port 1 Data In",
+   "dir": "Input",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 224,
+   "name": "I2S1_FS",
+   "desc": "I2S Audio Port 1 Left/Right Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 226,
+   "name": "I2S1_SCLK",
+   "desc": "I2S Audio Port 1 Clock",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 227,
+   "name": "PCIE3_CLK_N",
+   "desc": "PCIe 3 Reference Clock+ (PCIe Ctrl #9)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 228,
+   "name": "GPIO13",
+   "desc": "Pulse Width Modulator or GPIO #13",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 228,
+   "name": "GPIO13",
+   "desc": "GPIO #13 or Pulse Width Modulator",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 229,
+   "name": "PCIE3_CLK_P",
+   "desc": "PCIe 3 Reference Clock– (PCIe Ctrl #9)",
+   "dir": "Output",
+   "type": "PCIe PHY"
+  },
+  {
+   "pin": 230,
+   "name": "GPIO14",
+   "desc": "Pulse Width Modulator or GPIO #14",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 230,
+   "name": "GPIO14",
+   "desc": "GPIO #14 or Pulse Width Modulator",
+   "dir": "Bidir",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 232,
+   "name": "I2C2_SCL",
+   "desc": "General I2C 2 Clock. 1.5kΩ pull-up to 1.8V on the module.",
+   "dir": "Bidir",
+   "type": "Open Drain – 1.8V"
+  },
+  {
+   "pin": 234,
+   "name": "I2C2_SDA",
+   "desc": "General I2C 2 Data. 1.5kΩ pull-up to 1.8V on the module.",
+   "dir": "Bidir",
+   "type": "Open Drain – 1.8V"
+  },
+  {
+   "pin": 235,
+   "name": "PMIC_BBAT",
+   "desc": "Real Time Clock. Optionally used to provide back-up power",
+   "dir": "Input",
+   "type": "1.75V to 5.5V"
+  },
+  {
+   "pin": 235,
+   "name": "PMIC_BBAT",
+   "desc": "Real Time Clock. Optionally used to provide back-up power for the",
+   "dir": "Input",
+   "type": "1.75V to 5.5V"
+  },
+  {
+   "pin": 236,
+   "name": "UART2_TXD",
+   "desc": "UART #2 Transmit",
+   "dir": "Output",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 237,
+   "name": "POWER_EN",
+   "desc": "Signal for module on/off: high level on, low level off.",
+   "dir": "Input",
+   "type": "Analog 5.0V"
+  },
+  {
+   "pin": 238,
+   "name": "UART2_RXD",
+   "desc": "UART #2 Receive",
+   "dir": "Input",
+   "type": "CMOS – 1.8V"
+  },
+  {
+   "pin": 251,
+   "name": "VDD_IN",
+   "desc": "Main power – Supplies PMIC and other registers",
+   "dir": "Input",
+   "type": "5V to 20V"
+  }
+ ],
+ "groups": {
+  "CSI1": 4,
+  "CSI0": 6,
+  "CSI3": 6,
+  "CSI2": 6,
+  "USBSS1": 4,
+  "PCIE2": 10,
+  "USBSS2": 4,
+  "GPIO00": 1,
+  "SPI0": 3,
+  "UART0": 2,
+  "SPI1": 3,
+  "USB0": 2,
+  "CAM0": 2,
+  "USB1": 2,
+  "GPIO01": 1,
+  "CAM1": 2,
+  "USB2": 2,
+  "GPIO02": 1,
+  "GPIO03": 1,
+  "GPIO04": 1,
+  "GPIO05": 1,
+  "GPIO06": 1,
+  "PCIE0": 18,
+  "CAN": 2,
+  "USBSS0": 4,
+  "PCIE1": 6,
+  "GBE": 10,
+  "I2C0": 2,
+  "I2C1": 2,
+  "I2S0": 4,
+  "UART1": 2,
+  "GPIO07": 2,
+  "GPIO08": 1,
+  "CLK": 1,
+  "GPIO09": 1,
+  "GPIO10": 1,
+  "GPIO11": 1,
+  "GPIO12": 2,
+  "I2S1": 4,
+  "PCIE3": 2,
+  "GPIO13": 2,
+  "GPIO14": 2,
+  "I2C2": 2,
+  "PMIC": 2,
+  "UART2": 2,
+  "POWER": 1,
+  "VDD": 1
+ }
+}

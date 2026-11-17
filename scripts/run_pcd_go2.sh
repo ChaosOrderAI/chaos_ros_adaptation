@@ -221,10 +221,12 @@ else
   else
     # Select the discrete GPU on PRIME laptops; the viewer reports the actual
     # OpenGL renderer and rejects software rendering unless explicitly selected.
+    namespace_args=()
+    if [[ -f "$manifest" ]]; then namespace_args=(--namespaces "$manifest"); fi
     __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
       "$viewer_python" -u "$task_root/scripts/pcd_gpu_viewer.py" \
       --cloud "$scene_dir/cloud_gpu.npy" --model-path "$gpu_viewer_model" \
-      --namespaces "$manifest" \
+      "${namespace_args[@]}" \
       --render-mode "$render_mode" --state-timeout 240 \
       --camera-distance 5 --camera-azimuth -110 --camera-elevation -25 \
       >"$scene_dir/viewer.log" 2>&1 9>&- &

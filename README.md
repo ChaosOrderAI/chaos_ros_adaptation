@@ -14,19 +14,21 @@
 - [Unitree Go2 机器狗配置、驱动与部署](docs/unitree-go2.md)
 - [原生人形机器人后端与 Booster T2](docs/humanoid.md)
 - [Go2 / T2 MuJoCo 物理仿真、关节控制与查看器](docs/mujoco.md)
-- [庭院点云 Go2 场景](docs/pcd-go2-scene.md) / [绍兴全图](docs/shaoxing-go2-scene.md) / [绍兴 LAS](docs/shaoxing-las-go2-scene.md)
+- [庭院点云 Go2 场景](docs/pcd-go2-scene.md) / [绍兴全图](docs/shaoxing-go2-scene.md) / [绍兴 LAS](docs/shaoxing-las-go2-scene.md) / [绍兴重建网格](docs/merged-recon-go2-scene.md)
 - [Ubuntu 22.04 / Humble 旧车端验收](docs/humble.md)
 - [传感器配置、标准接口与诊断](docs/sensors.md)
 - [奥比中光 Gemini 335 官方驱动](docs/orbbec-driver.md)
 - [URDF / Xacro 导入、TF 归属与 RViz](docs/robot-description.md)
 - [数据采集、时间同步与离线审计](docs/data-collection.md)
 - [训练数据规范、任务片段与离线导出](docs/training-data.md)
+- [多机协同感知预研路线（尚无实现）](docs/collaborative-perception-preresearch.md)
+- [Go2 SLAM 导航链路的开发约束](docs/go2-slam-agents.md)（FAST-LIVO2、SCAN-Planner vendored 来源与改动纪律）
 - [示例资产清单](src/chaos_assets/config/demo.yaml)
 - [无人车型号](src/chaos_assets/models/lingao_vehicle/v1/model.yaml) / [无人机型号](src/chaos_assets/models/dji_m3td/v1/model.yaml) / [机器狗型号](src/chaos_assets/models/unitree_go2/v1/model.yaml)
 
 ## 开发环境构建与启动
 
-工作空间包含 **10 个生产 ROS 包、1 个可选仿真包和 1 个基准包**，业务运行时全部为原生 C++17 实现（Python 仅保留 launch 胶水、薄绑定、第三方 Xacro 桥接及工具/测试脚本）。
+工作空间包含 **chaos_* 生产包 + Go2 SLAM 导航包**，业务运行时全部为原生 C++17 实现（Python 仅保留 launch 胶水、薄绑定、第三方 Xacro 桥接及工具/测试脚本）。SLAM 部分由 `fast_livo2`(FAST-LIVO2 Jazzy 移植)、`go2_slam_backend`、`go2_terrain_planner`、`go2_perception`、`scan_planner` 系列、`livox_ros_driver2`、`go2_bringup` 组成,见 [Go2 SLAM 约束](docs/go2-slam-agents.md)。
 
 运行时依赖 ROS 2 Jazzy、colcon、ament_cmake/ament_cmake_python、rclcpp、geometry_msgs、std_msgs、sensor_msgs、nav_msgs、diagnostic_msgs、tf2_ros、action_msgs、rosidl_default_generators、rosbag2_cpp、rosbag2_storage、rosbag2_transport、rosidl_typesupport_introspection_cpp、nlohmann_json、yaml-cpp、Boost 头文件、OpenSSL。`chaos_mqtt` 内置的 Rust 传输还需 Rust/Cargo 与 `build-essential`、`cmake`、`pkg-config`、`libclang-dev`。模型导入使用 robot_state_publisher、urdfdom；Xacro 模型另需 xacro。现有厂商程序无需参与 mock 构建。
 
@@ -49,7 +51,10 @@ NumPy **不是生产依赖**：原生导出用 C++ 写出 NPY 数组，运行期
 ```bash
 source /opt/ros/jazzy/setup.bash
 
-# 全新构建目录：build-<tag> / install-<tag> / log-<tag>
+# 一把全编(含 SLAM 包;有 Livox SDK 时用脚本走正确顺序)
+./scripts/build_slam.sh
+
+# 或手动:全新构建目录 build-<tag> / install-<tag> / log-<tag>
 colcon --log-base log build --base-paths src \
   --build-base build --install-base install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
