@@ -229,10 +229,41 @@ impl MqttHandle {
         &self,
         request: PublishRequest,
     ) -> Result<(), mpsc::error::SendError<PublishRequest>> {
-        // In particular, a terminal event supersedes unsent feedback on the
-        // same topic. Already submitted MQTT packets retain their wire order.
-        self.sender.latest.remove(&request.topic);
-        self.sender.tx.send(request).await
+        // Await capacity first, then apply the terminal-supersedes-feedback
+        // invariant: only remove the pending latest entry once the request is
+        // actually queued, so a failed send does not evict a previously
+        // accepted latest-only sample for the same topic.
+        let topic = request.topic.clone();
+        self.sender.tx.send(request).await?;
+        self.sender.latest.remove(&topic);
+        Ok(())
+    }
+
+    /// Non-blocking variant of `publish` for rate-limited forwarding loops
+    /// that must not await the queue. A full channel rejects the request so
+    /// the caller can keep the newest sample pending instead of unbounded
+    /// growth or blocking a shared quota window.
+    ///
+    /// On `TrySendError::Full` the request is rejected but nothing else is
+    /// touched — in particular a previously queued latest-only sample for the
+    /// same topic is NOT evicted, so a failed send does not silently lose
+    /// state that was already accepted. The terminal-supersedes-feedback
+    /// invariant (removing the pending latest entry for the same topic) is
+    /// only applied once the send is known to have succeeded.
+    pub fn try_publish(
+        &self,
+        request: PublishRequest,
+    ) -> Result<(), mpsc::error::TrySendError<PublishRequest>> {
+        let topic = request.topic.clone();
+        match self.sender.tx.try_send(request) {
+            Ok(()) => {
+                // Now that the request is queued, a queued latest-only sample
+                // for the same topic is superseded and can be dropped.
+                self.sender.latest.remove(&topic);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn publish_latest(&self, request: PublishRequest) -> Result<(), String> {
@@ -504,8 +535,12 @@ async fn manager_loop(
     info!(host = %config.mqtt.host, port = config.mqtt.port, access = ?config.network.access, interface = ?config.network.interface, "connecting to MQTT broker");
 
     loop {
+        // The publish_rx.is_empty() gate starved latest-mode topics whenever
+        // the channel held any queued request; capacity in the outbox is the
+        // real constraint, so drop the channel-emptiness check and rely on
+        // the outbox bounds alone.
         let latest_ready = connected.load(Ordering::SeqCst) && !input_closed && retry_target.is_none()
-            && publish_rx.is_empty() && outbox.0.len() < MAX_OUTBOX
+            && outbox.0.len() < MAX_OUTBOX
             && outbox.0.iter().filter(|entry| entry.latest).count() < usize::from(MAX_INFLIGHT / 2);
         if latest_ready {
             if let Some(request) = latest.pop_available(|topic| !outbox.0.iter()
