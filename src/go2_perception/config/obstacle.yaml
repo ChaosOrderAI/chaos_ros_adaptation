@@ -1,0 +1,18 @@
+obstacle_cloud:
+  ros__parameters:
+    input_topic: /livox/lidar
+    output_topic: /navigation/obstacle_cloud
+    # Trunk centre, not the IMU (base_link). The body box below is in this frame.
+    base_frame: trunk
+    min_z: 0.15
+    max_z: 1.2
+    # trunk 中心离地高度，把 z 换算成离地高度。上车前按实测修改。
+    base_to_ground: 0.35
+    min_range: 0.3
+    max_range: 8.0
+    # Placeholder body box. Measure it on the robot; blind is not a substitute.
+    body_x_min: -0.45
+    body_x_max: 0.25
+    body_y: 0.18
+    body_z_max: 0.35
+    voxel_leaf: 0.08

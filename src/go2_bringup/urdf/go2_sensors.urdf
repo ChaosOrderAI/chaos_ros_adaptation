@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<robot name="go2_sensors">
+  <!-- Extrinsics below are placeholders. Replace them with the measured mounts. -->
+  <!-- base_link: the Mid-360 built-in IMU, i.e. the FAST-LIVO2 body frame.
+       odom -> base_link comes from the estimator.
+       trunk: centre of the Go2 trunk. Body boxes, footprints and the stair
+       planner's stance height are defined here. -->
+  <link name="base_link"/>
+  <link name="trunk"/>
+  <link name="livox_frame"/>
+  <link name="camera_front"/>
+  <link name="thermal_frame"/>
+
+  <!-- Factory IMU-to-lidar offset, the same as extrinsic_T in
+       fast_livo2/config/go2_mid360.yaml. Keep the two in sync. -->
+  <joint name="base_to_livox" type="fixed">
+    <parent link="base_link"/>
+    <child link="livox_frame"/>
+    <origin xyz="-0.011 -0.02329 0.04412" rpy="0 0 0"/>
+  </joint>
+  <!-- PLACEHOLDER. Trunk centre in the IMU frame. Derived from the earlier
+       placeholder lidar mount of 0.30 m ahead of and 0.15 m above the trunk
+       centre. This is the one transform to measure for the body boxes. -->
+  <joint name="base_to_trunk" type="fixed">
+    <parent link="base_link"/>
+    <child link="trunk"/>
+    <origin xyz="-0.311 -0.02329 -0.10588" rpy="0 0 0"/>
+  </joint>
+  <joint name="trunk_to_camera" type="fixed">
+    <parent link="trunk"/>
+    <child link="camera_front"/>
+    <origin xyz="0.32 0.0 0.12" rpy="0 0 0"/>
+  </joint>
+  <joint name="trunk_to_thermal" type="fixed">
+    <parent link="trunk"/>
+    <child link="thermal_frame"/>
+    <origin xyz="0.32 0.0 0.08" rpy="0 0.4 0"/>
+  </joint>
+</robot>

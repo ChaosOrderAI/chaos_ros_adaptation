@@ -1,0 +1,41 @@
+SCAN-Planner — Spatial Collision-Aware Local Planning for
+Route-Guided Long-Range Quadruped Navigation
+
+Upstream research code:  https://github.com/wuyi2121/SCAN-Planner (ROS 1, Apache-2.0)
+ROS 2 port vendored from: https://github.com/xiaoqi371317/SCAN-Planner-Ros2
+Vendored commit:          103bce48bd9de783511d20e286c5e6299b79e47a (main)
+License: Apache-2.0 (see LICENSE, NOTICE)
+
+Only the src/planner/ packages are vendored; the src/simulator/ demo
+packages (mockamap, local_sensing, map_generator, go2_description,
+odom_visualization, waypoint_generator, pose_utils) are not included.
+
+Changes made in this workspace (keep this list complete):
+- plan_manage/package.xml: dropped exec_depends on the simulator
+  packages that are not vendored (go2_description, local_sensing_node,
+  map_generator, mockamap, odom_visualization) and on
+  robot_state_publisher/xacro, which the Go2 stack supplies itself.
+- Jazzy build fixes, if any, listed below:
+  - plan_env/include/plan_env/grid_map.h: cv_bridge/cv_bridge.h ->
+    cv_bridge/cv_bridge.hpp (Jazzy removed the .h header).
+- plan_env/grid_map.h, plan_env/grid_map.cpp: the raycast visit flags and
+  raycast_num_ are int instead of char (a char counter aliased every ~128
+  scans and left stale free-space/obstacle updates); the IMU->lidar
+  translation is read from grid_map.lidar_extrinsic_tx/ty/tz instead of
+  being compiled in.
+- plan_manage: the body_pose twist (body frame per nav_msgs/Odometry) is
+  rotated into odom before it is used as a start velocity; RViz goals are
+  transformed from header.frame_id into fsm.goal_frame (default odom)
+  instead of ignoring the frame; the global-path projection is anchored to
+  the last progress so it cannot jump to a later switchback leg; the
+  initial_path subscription is transient-local so a restarted planner
+  receives the current route.
+- plan_manage/closed_loop_controller: stops publishing nonzero commands when
+  body_pose is older than odom_timeout and gives up after finish_hold_time
+  at the trajectory end instead of pushing forever.
+- plan_manage/planner_manager: default optimization.vel_tolerance and
+  acc_tolerance are 0.1; upstream's 1.0 accepted max_vel + 1.0. The final
+  checkDynamicFeasibility compares each axis (like checkFeasibility) against
+  max * (1 + manager.feasibility_tolerance) + tolerance, the same enlarged
+  bound the optimizer was given, instead of the vector norm against max +
+  tolerance.

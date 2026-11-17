@@ -1,0 +1,40 @@
+Upstream: https://github.com/hku-mars/FAST-LIVO2
+Commit: 0d2c034 ("[Docs] update FAST-LIVO2-Dataset download link.")
+License: GPL-2.0 (see LICENSE). This package is a modified version of that work.
+For commercial use of FAST-LIVO2, contact the original authors (see README_upstream.md).
+
+Changes made in this package (ROS 2 Jazzy port):
+- catkin/roscpp -> ament_cmake/rclcpp. Parameters are ROS 2 parameters with
+  '.'-separated names (common.lid_topic instead of common/lid_topic).
+- Livox input is sensor_msgs/PointCloud2 from livox_ros_driver2 (xfer_format 0).
+  The livox_ros_driver CustomMsg path and its vendored headers were removed.
+- Sophus (non-templated a621ff) replaced by include/utils/se3.h.
+- rpg_vikit replaced by include/utils/camera.h and include/utils/vision.h,
+  written for this package: pinhole camera with radtan distortion, bilinear
+  interpolation, half sampling, Shi-Tomasi score. No vikit source is included.
+- /cloud_registered always carries the full undistorted scan (XYZI) after each
+  LIO update. The camera-coloured cloud moved to /cloud_registered_rgb.
+- Output stamps are sensor time, not wall time. Frame names and the TF
+  broadcast are parameters.
+- Log files go to common.log_dir instead of the source tree.
+- Optional lidar-frame box crop (preprocess.crop_*) for the legs of a walking robot.
+- One PointCloud2 callback for every lidar type. time_offset.lidar_time_offset
+  now also applies to Livox (upstream's CustomMsg path ignored it), and empty
+  scans are dropped for every type.
+- /aft_mapped_to_init carries the twist in the body frame (upstream left it
+  zero): linear = R^T * v, angular = last gyro sample minus gyro bias.
+- LidarMeasureGroup::measures is cleared in ONLY_LIO / ONLY_LO mode before each
+  push. Upstream kept every IMU message of the run there.
+- common.debug_log_en turns off Log/mat_pre.txt, mat_out.txt and imu.txt.
+- common.reliable_sensors selects reliable instead of best-effort subscriptions.
+- Camera distortion is applied when any coefficient is non-zero (vikit checked
+  only d0), and pixel undistortion iterates to convergence instead of OpenCV's
+  five iterations.
+- A scan reduced to <= 1 point is dropped in the lidar callback, and
+  sync_packages pops such a scan instead of rejecting it forever (upstream
+  left the deque front stuck, stopping LIO until restart).
+- Lidar loop-back clears lid_header_time_buffer together with
+  lid_raw_data_buffer, so scan/header pairing stays aligned after a time jump.
+- The VIO projection Jacobian includes the radial-tangential distortion
+  derivative (PinholeCamera::distortionJacobian). Upstream used a pinhole
+  Jacobian even when world2cam() applied distortion.

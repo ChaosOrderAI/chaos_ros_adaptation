@@ -1,0 +1,120 @@
+# Unitree Go2 + Livox Mid-360 (its built-in IMU) + one front camera.
+# Values marked PLACEHOLDER must be measured or calibrated before use on the robot.
+/**:
+  ros__parameters:
+    common:
+      lid_topic: "/livox/lidar"   # livox_ros_driver2, xfer_format 0 (PointCloud2)
+      imu_topic: "/livox/imu"     # Mid-360 built-in IMU, not the Go2 body IMU
+      img_topic: "/camera_front/image_raw"
+      img_compressed: false
+      # LIO only until the camera has intrinsics, Rcl/Pcl and a trigger on the
+      # lidar clock. Set to 1 and load camera_go2_front.yaml for LIVO.
+      img_en: 0
+      lidar_en: 1
+      ros_driver_bug_fix: false
+      # Best effort works when the driver runs on this machine. Set true when
+      # it runs elsewhere and large scans lose fragments over the network.
+      reliable_sensors: false
+      # mat_pre.txt / mat_out.txt / imu.txt under ~/.ros/fast_livo2/Log grow for
+      # the whole run. Off on the robot.
+      debug_log_en: false
+
+    extrin_calib:
+      # Lidar in the IMU frame (p_imu = R * p_lidar + T). Mid-360 factory
+      # value: the IMU sits at (11.0, 23.29, -44.12) mm in the lidar frame.
+      extrinsic_T: [-0.011, -0.02329, 0.04412]
+      extrinsic_R: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+      # Lidar to camera (p_cam = Rcl * p_lidar + Pcl). PLACEHOLDER: a forward
+      # camera 2 cm ahead of and 3 cm below the lidar. Use FAST-Calib.
+      Rcl: [0.0, -1.0, 0.0,
+            0.0, 0.0, -1.0,
+            1.0, 0.0, 0.0]
+      Pcl: [0.0, -0.03, -0.02]
+
+    time_offset:
+      imu_time_offset: 0.0
+      lidar_time_offset: 0.0
+      # Image stamps are the trigger edge on the PTP clock, see docs/mcu_trigger_timing.md.
+      img_time_offset: 0.0
+      exposure_time_init: 0.0
+
+    preprocess:
+      point_filter_num: 1
+      filter_size_surf: 0.1
+      lidar_type: 1   # Livox PointCloud2
+      scan_line: 4    # Mid-360 reports line 0..3
+      blind: 0.5
+      # Box in the lidar frame removed before undistortion, for the torso and
+      # legs. PLACEHOLDER: must cover the full leg swing for the real mount.
+      crop_en: true
+      crop_min: [-0.80, -0.30, -0.70]
+      crop_max: [0.10, 0.30, 0.05]
+
+    vio:
+      max_iterations: 5
+      outlier_threshold: 1000
+      img_point_cov: 100
+      patch_size: 8
+      patch_pyrimid_level: 4
+      normal_en: true
+      raycast_en: false
+      inverse_composition_en: false
+      exposure_estimate_en: true
+      inv_expo_cov: 0.1
+
+    imu:
+      imu_en: true
+      imu_int_frame: 30
+      # Handheld values from upstream. Gait vibration is larger; raise these
+      # first if LIO diverges while walking.
+      acc_cov: 0.5
+      gyr_cov: 0.3
+
+    lio:
+      max_iterations: 5
+      dept_err: 0.02
+      beam_err: 0.05
+      min_eigen_value: 0.0025
+      voxel_size: 0.5
+      max_layer: 2
+      max_points_num: 50
+      layer_init_num: [5, 5, 5, 5, 5]
+
+    local_map:
+      # Long walks: keep the voxel map bounded.
+      map_sliding_en: true
+      half_map_size: 100
+      sliding_thresh: 8.0
+
+    uav:
+      imu_rate_odom: false
+      # The robot may start tilted. Align z with gravity so the terrain
+      # planner's heights are vertical.
+      gravity_align_en: true
+
+    publish:
+      # go2_slam_backend reads the odometry in 'odom' and publishes
+      # odom -> base_link itself, so this node does not send TF.
+      world_frame: "odom"
+      body_frame: "base_link"
+      tf_en: false
+      dense_map_en: true
+      pub_effect_point_en: false
+      pub_plane_en: false
+      pub_scan_num: 1
+      blind_rgb_points: 0.0
+
+    evo:
+      seq_name: "go2"
+      pose_output_en: false
+
+    pcd_save:
+      pcd_save_en: false
+      type: 0
+      colmap_output_en: false
+      filter_size_pcd: 0.15
+      interval: -1
+
+    image_save:
+      img_save_en: false
+      interval: 1

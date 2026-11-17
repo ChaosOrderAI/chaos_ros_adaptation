@@ -1,0 +1,47 @@
+terrain_planner:
+  ros__parameters:
+    cloud_topic: /cloud_registered
+    # RViz 的 2D Goal Pose 默认发到这个话题。
+    goal_topic: /goal_pose
+    path_topic: /terrain/path
+    elevation_topic: /terrain/elevation
+    # scan-planner（navi_mode=3）在 odom 系里工作，这份路径是它的全局路由。
+    route_topic: /initial_path
+    route_frame: odom
+    # 回环修正 map -> odom 后，按这个周期检查并重新发布 odom 系路由。
+    route_refresh_period: 1.0
+    map_frame: map
+    odom_frame: odom
+    # 机体中心 trunk，不是 IMU（base_link）。机体盒子和落脚高度都相对它。
+    base_frame: trunk
+    # /cloud_registered 在 camera_init，本节点把它当作 odom，再用 map -> odom 变到 map。
+    cloud_in_odom: true
+    resolution: 0.1
+    half_size: 20.0
+    # 相邻格子允许的最大高差。按这台狗的实际抬腿能力改，不是认证值。
+    max_step_height: 0.16
+    snap_radius: 0.45
+    min_count: 3
+    step_weight: 2.0
+    # 相对机器人高度。要盖住一整跑楼梯，不能只留 1.2 m，否则上平台进不了图。
+    below_robot: 3.5
+    above_robot: 3.5
+    # 机体半径。踏面比这个窄时规划失败，这是故意的。设为 0 则只检查中心格。
+    footprint_radius: 0.22
+    # trunk 是机体中心，不是脚。落脚格必须在机身下方这个范围内。
+    min_stance_drop: 0.02
+    max_stance_drop: 0.80
+    # map → odom 跳过这么多就重投影已有高程，避免回环后留下两份楼梯。
+    reproject_translation: 0.05
+    reproject_yaw_deg: 1.0
+    insert_range: 12.0
+    voxel_leaf: 0.05
+    elevation_period: 1.0
+    # 机体盒子是占位，上车前按腿的运动范围改。z 下界必须在地面之上：
+    # trunk 在 IMU 下方 0.10588 m，IMU 离地 0.35 m，地面在 trunk 系
+    # z = -0.244 m，所以下界取 -0.20（比地面高约 4.4 cm）。
+    body_x_min: -0.45
+    body_x_max: 0.25
+    body_y: 0.18
+    body_z_min: -0.20
+    body_z_max: 0.35
