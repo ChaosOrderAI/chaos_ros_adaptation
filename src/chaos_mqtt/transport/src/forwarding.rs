@@ -108,8 +108,21 @@ impl TopicForwarding {
                     message = incoming_rx.recv() => {
                         let Some(message) = message else { break };
                         let Some((mapping, publisher)) = self.incoming.get(&message.topic) else { continue };
-                        let result = decode(mapping, &message.payload)
-                            .and_then(|value| publisher.publish(value).map_err(|error| error.to_string()));
+                        // A std_msgs/String downlink carries the MQTT payload
+                        // verbatim in `data` (e.g. a v1 protocol envelope), not
+                        // as a field-mapped object. Other types keep the
+                        // field-mapped decode path.
+                        let result = if mapping.msg_type == "std_msgs/msg/String" {
+                            match std::str::from_utf8(&message.payload) {
+                                Ok(text) => publisher
+                                    .publish(serde_json::json!({"data": text}))
+                                    .map_err(|error| error.to_string()),
+                                Err(error) => Err(format!("payload is not UTF-8: {error}")),
+                            }
+                        } else {
+                            decode(mapping, &message.payload)
+                                .and_then(|value| publisher.publish(value).map_err(|error| error.to_string()))
+                        };
                         if let Err(error) = result {
                             warn!(mapping = %mapping.name, %error, "MQTT-to-ROS topic forwarding failed");
                         }

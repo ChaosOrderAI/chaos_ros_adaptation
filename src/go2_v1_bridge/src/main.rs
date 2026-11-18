@@ -222,7 +222,19 @@ async fn run(config: BridgeConfig) -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
                 if let Ok(value) = msg {
-                    let payload = value.get("data").and_then(Value::as_str).unwrap_or("").to_string();
+                    // Two wire shapes reach here: a std_msgs/String whose
+                    // `data` holds the v1 JSON (e.g. a manual ROS publisher or
+                    // a transport mapping that wraps the payload in `data`),
+                    // or the raw v1 envelope object itself when the transport
+                    // forwards the MQTT payload as message fields. Accept both
+                    // so the bridge works whichever way the mapping is wired.
+                    let payload = match value.get("data").and_then(Value::as_str) {
+                        Some(s) if !s.is_empty() => s.to_string(),
+                        _ if value.get("command").is_some() || value.get("protocol_version").is_some() => {
+                            value.to_string()
+                        }
+                        _ => String::new(),
+                    };
                     info!(%channel, len = payload.len(), "v1 command received");
                     if tx.send(RawCmd { channel, payload }).await.is_err() {
                         break;
