@@ -1,0 +1,24 @@
+{
+  "device_id": "robot-dog-2",
+  "prefix": "go2/002",
+  "odom_topic": "/aft_mapped_to_init",
+  "joints_topic": "/joint_states",
+  "cmd_vel_topic": "/cmd_vel",
+  "route_topic": "/initial_path",
+  "goal_topic": "/goal_pose",
+  "obstacles_topic": "/obstacles_switch",
+  "cmd_in_topic": "/v1/cmd",
+  "nav_cmd_in_topic": "/v1/nav_cmd",
+  "mgmt_cmd_in_topic": "/v1/mgmt_cmd",
+  "uplink": {
+    "resp": "/v1/resp",
+    "nav_resp": "/v1/nav_resp",
+    "mgmt_resp": "/v1/mgmt_resp",
+    "nav_event": "/v1/nav_event",
+    "state": "/v1/state",
+    "nav_state": "/v1/nav_state",
+    "detections": "/v1/detections",
+    "status": "/v1/status"
+  },
+  "dedup_ttl_s": 120.0
+}

@@ -1,0 +1,20 @@
+[package]
+name = "go2_v1_bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Platform v1 MQTT device protocol bridge for Go2 (envelope pack/unpack between the MQTT transport and the ROS 2 stack)"
+license = "Apache-2.0"
+
+[dependencies]
+r2r = { git = "https://github.com/sequenceplanner/r2r", tag = "0.9.7" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+futures = "0.3"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }

@@ -188,6 +188,7 @@ install(FILES transport/README.md transport/SOURCE_PROVENANCE.md
   transport/config.4g.example.json transport/config.5g.example.json
   transport/config.fleet.robot.example.json
   transport/config.fleet.platform.example.json
+  transport/config.platform.go2_002.example.json
   DESTINATION share/${PROJECT_NAME}/transport)
 install(DIRECTORY transport/examples transport/scripts transport/deploy
   DESTINATION share/${PROJECT_NAME}/transport
