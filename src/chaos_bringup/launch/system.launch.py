@@ -22,7 +22,17 @@ def _start(context):
         LaunchConfiguration('host_id').perform(context), mode=mode or None,
         asset_ids=selected, enable_mqtt=mqtt_enabled, check_files=not dry_run,
     )
-    return build_launch_actions(plan, dry_run=dry_run, discovery=discovery)
+    skills = {
+        'enable_agent': parse_bool(LaunchConfiguration('enable_agent').perform(context), 'enable_agent'),
+        'vocabulary_file': LaunchConfiguration('vocabulary_file').perform(context) or None,
+        'initial_hub': LaunchConfiguration('initial_hub').perform(context) or None,
+        'llama_endpoint': LaunchConfiguration('llama_endpoint').perform(context) or None,
+        'task': LaunchConfiguration('task').perform(context) or None,
+        'iteration_hz': (float(LaunchConfiguration('iteration_hz').perform(context))
+                         if LaunchConfiguration('iteration_hz').perform(context) else None),
+    }
+    return build_launch_actions(plan, dry_run=dry_run, discovery=discovery,
+                                capabilities={'skills': skills})
 
 
 def generate_launch_description():
@@ -35,5 +45,11 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_mqtt', default_value='false'),
         DeclareLaunchArgument('dry_run', default_value='false', description='Validate and print the plan without starting nodes'),
         DeclareLaunchArgument('discovery_range', default_value='LOCALHOST'),
+        DeclareLaunchArgument('enable_agent', default_value='false'),
+        DeclareLaunchArgument('vocabulary_file', default_value='', description='Versioned skill vocabulary JSON for every selected asset'),
+        DeclareLaunchArgument('initial_hub', default_value=''),
+        DeclareLaunchArgument('llama_endpoint', default_value=''),
+        DeclareLaunchArgument('task', default_value='', description='Task text handed to the onboard agent'),
+        DeclareLaunchArgument('iteration_hz', default_value=''),
         OpaqueFunction(function=_start),
     ])

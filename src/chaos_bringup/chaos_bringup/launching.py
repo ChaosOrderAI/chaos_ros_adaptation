@@ -23,6 +23,7 @@ from .description import description_processes
 from .drivers import driver_processes
 from .planning import component_asset, plan_summary, preflight, snapshot_parameter_files
 from .sensors import sensor_processes
+from .skills import skill_processes
 
 
 def parse_bool(value, name):
@@ -143,6 +144,21 @@ def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST', capabili
         for label, child in collection_processes(node_asset, environment):
             actions.append(RegisterEventHandler(OnProcessExit(
                 target_action=child, on_exit=on_collection_exit(label))))
+            actions.append(child)
+        # The skill/agent layer is opt-in per launch: a vocabulary_file selects
+        # it for every chosen asset. It is derived in Python because it is a
+        # launch-time selection, not an asset contract.
+        skill_opts = options.get('skills') or {}
+        for label, child in skill_processes(
+                asset, environment,
+                enable_agent=skill_opts.get('enable_agent', False),
+                vocabulary_file=skill_opts.get('vocabulary_file'),
+                initial_hub=skill_opts.get('initial_hub'),
+                llama_endpoint=skill_opts.get('llama_endpoint'),
+                task=skill_opts.get('task'),
+                iteration_hz=skill_opts.get('iteration_hz')):
+            actions.append(RegisterEventHandler(OnProcessExit(target_action=child,
+                on_exit=_on_exit(label))))
             actions.append(child)
         if item['mqtt']:
             transport = item['mqtt']

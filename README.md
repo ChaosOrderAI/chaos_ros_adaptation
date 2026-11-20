@@ -22,6 +22,7 @@
 - [数据采集、时间同步与离线审计](docs/data-collection.md)
 - [训练数据规范、任务片段与离线导出](docs/training-data.md)
 - [多机协同感知预研路线（尚无实现）](docs/collaborative-perception-preresearch.md)
+- [机载 AI 智能体层：chaos_agent + chaos_skill（开发中）](docs/agent-skill-layer.md)
 - [Go2 SLAM 导航链路的开发约束](docs/go2-slam-agents.md)（FAST-LIVO2、SCAN-Planner vendored 来源与改动纪律）
 - [示例资产清单](src/chaos_assets/config/demo.yaml)
 - [无人车型号](src/chaos_assets/models/lingao_vehicle/v1/model.yaml) / [无人机型号](src/chaos_assets/models/dji_m3td/v1/model.yaml) / [机器狗型号](src/chaos_assets/models/unitree_go2/v1/model.yaml)

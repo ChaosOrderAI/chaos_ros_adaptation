@@ -1,0 +1,19 @@
+# Long-running execution of one skill token. Feedback reports the runtime's
+# own sub-state (which hub it is moving through), not raw device telemetry.
+
+SkillToken token
+# Unix UTC deadline for starting this goal, not for completing it; zero disables it.
+builtin_interfaces/Time expires_at
+---
+bool success
+string code
+string message
+# The hub state the asset rests in after the skill: e.g. "idle", "carrying",
+# "airborne". Empty when the skill ended in a state the vocabulary does not name.
+string hub_state
+---
+# The hub-state name the runtime is currently moving through, or empty when it
+# is still deciding.
+string current_hub
+float32 progress
+string code

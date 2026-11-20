@@ -1,0 +1,10 @@
+# Request the skill runtime to execute one token now. The runtime validates
+# the token against the asset's declared hub state before dispatching.
+
+SkillToken token
+# Unix UTC deadline for accepting this request; zero means no transport deadline.
+builtin_interfaces/Time expires_at
+---
+bool accepted
+string code
+string message

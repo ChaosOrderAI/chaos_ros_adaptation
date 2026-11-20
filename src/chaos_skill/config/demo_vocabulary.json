@@ -1,0 +1,51 @@
+{
+  "hub_states": ["idle", "carrying", "airborne", "failed"],
+  "skills": [
+    {
+      "token": "takeoff",
+      "description": "Lift off to the given altitude",
+      "entry_hub": "idle",
+      "exit_hub": "airborne",
+      "needs_lease": true,
+      "arguments_schema": {"altitude_m": {"type": "number", "description": "target altitude in metres"}}
+    },
+    {
+      "token": "land",
+      "description": "Descend and touch down",
+      "entry_hub": "airborne",
+      "exit_hub": "idle",
+      "needs_lease": true,
+      "arguments_schema": {}
+    },
+    {
+      "token": "navigate_to",
+      "description": "Move to the given base-frame pose",
+      "entry_hub": "idle",
+      "exit_hub": "idle",
+      "needs_lease": true,
+      "arguments_schema": {
+        "x": {"type": "number", "description": "metres forward"},
+        "y": {"type": "number", "description": "metres left"},
+        "yaw": {"type": "number", "description": "heading radians", "default": 0}
+      }
+    },
+    {
+      "token": "stop",
+      "description": "Immediately stop all motion and release the lease",
+      "entry_hub": "idle",
+      "exit_hub": "idle",
+      "needs_lease": false,
+      "any_entry_hub": true,
+      "arguments_schema": {}
+    },
+    {
+      "token": "hold",
+      "description": "Remain in the current hub for one step",
+      "entry_hub": "idle",
+      "exit_hub": "idle",
+      "needs_lease": false,
+      "any_entry_hub": true,
+      "arguments_schema": {}
+    }
+  ]
+}
