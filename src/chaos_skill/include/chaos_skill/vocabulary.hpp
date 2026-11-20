@@ -8,6 +8,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "chaos_skill/capability.hpp"
+
 namespace chaos_skill
 {
 
@@ -35,6 +37,13 @@ struct SkillDef
   /// Skills that do not change the hub state (e.g. "hold", "report") may be
   /// invoked from any entry hub; the entry_hub is then informational only.
   bool any_entry_hub = false;
+  /// The base capability family this skill invokes.
+  ///
+  /// The skill layer is the only layer that reaches the platform, so the
+  /// family is declared with the skill rather than inferred from the token:
+  /// the vocabulary is the one place that says which base function a token
+  /// ends up calling.
+  Capability capability = Capability::Motion;
 };
 
 /// The whole skill vocabulary of one asset configuration.

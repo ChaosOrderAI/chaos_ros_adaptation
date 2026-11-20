@@ -47,11 +47,13 @@ TEST(AdapterConfig, GeneratorIsPureScopedAndHasNoLegacyRoutes)
   }
   EXPECT_EQ(ros_topics,
     (std::set<std::string>{"/robots/vehicle_001/mqtt/state",
-      "/robots/vehicle_001/mqtt/task_events"}));
+      "/robots/vehicle_001/mqtt/task_events",
+      "/robots/vehicle_001/mqtt/announcement"}));
   EXPECT_EQ(config["mqtt"]["command_topic"], "robots/vehicle_001/commands");
   EXPECT_EQ(delivery,
     (std::map<std::string, std::string>{
-      {"chaos_state", "latest"}, {"chaos_task_events", "latest_nonterminal"}}));
+      {"chaos_state", "latest"}, {"chaos_task_events", "latest_nonterminal"},
+      {"chaos_announcement", "latest"}}));
   EXPECT_EQ(config["action_timeout_ms"], 360000);
 }
 
@@ -98,8 +100,8 @@ TEST(AdapterConfig, CollectionStatusIsOptionalReadOnlyAndDoesNotExposeSensorData
     {"data_collection", json{{"enabled", true}}},
   };
   const json config = build_adapter_config(asset, json{{"config", json::object()}});
-  ASSERT_EQ(config["topic_mappings"].size(), 3);
-  const json & mapping = config["topic_mappings"][2];
+  ASSERT_EQ(config["topic_mappings"].size(), 4);
+  const json & mapping = config["topic_mappings"][3];
   EXPECT_EQ(mapping["ros_topic"], "/robots/unit/data_collection/status");
   EXPECT_EQ(mapping["mqtt_topic"], "robots/unit/data_collection/status");
   EXPECT_EQ(mapping["direction"], "ros2_to_mqtt");
@@ -109,7 +111,7 @@ TEST(AdapterConfig, CollectionStatusIsOptionalReadOnlyAndDoesNotExposeSensorData
     EXPECT_EQ(route["command"].get<std::string>().find("record"), std::string::npos);
   }
   asset["data_collection"]["enabled"] = false;
-  EXPECT_EQ(build_adapter_config(asset, json{{"config", json::object()}})["topic_mappings"].size(), 2);
+  EXPECT_EQ(build_adapter_config(asset, json{{"config", json::object()}})["topic_mappings"].size(), 3);
 }
 
 TEST(AdapterConfig, GeneratorRejectsInvalidNames)

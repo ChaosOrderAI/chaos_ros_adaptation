@@ -122,8 +122,13 @@ LlamaClient::Response LlamaClient::chat(
       if (!tc.raw_arguments.empty()) {
         try {
           tc.arguments = nlohmann::json::parse(tc.raw_arguments);
+          if (!tc.arguments.is_object()) {
+            tc.arguments = nlohmann::json::object();
+            tc.arguments_valid = false;
+          }
         } catch (const std::exception &) {
           tc.arguments = nlohmann::json::object();
+          tc.arguments_valid = false;
         }
       }
       if (!tc.name.empty()) {

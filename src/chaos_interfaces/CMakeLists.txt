@@ -8,6 +8,7 @@ find_package(geometry_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotState.msg" "msg/CommandResult.msg" "msg/VelocityCommand.msg" "msg/ControlTrace.msg"
   "msg/DriverVelocityCommand.msg" "msg/SkillToken.msg"
+  "msg/SkillIntent.msg" "msg/SkillEvent.msg" "msg/Announcement.msg"
   "srv/GetDescription.srv" "srv/ControlLease.srv" "srv/Stop.srv" "srv/SkillRequest.srv"
   "action/NavigatePose.action" "action/Flight.action" "action/SoftwareUpdate.action"
   "action/ExecuteSkill.action"

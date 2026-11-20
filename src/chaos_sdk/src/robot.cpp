@@ -758,7 +758,8 @@ std::shared_future<chaos_interfaces::srv::ControlLease::Response> Robot::release
 }
 
 std::shared_future<chaos_interfaces::srv::Stop::Response> Robot::stop(
-  std::optional<std::string> request_id, std::optional<double> ttl_s)
+  std::optional<std::string> request_id, std::optional<double> ttl_s,
+  std::optional<std::string> lease_token)
 {
   chaos_interfaces::srv::Stop::Request request;
   request.expires_at = deadline(ttl_s);
@@ -766,7 +767,7 @@ std::shared_future<chaos_interfaces::srv::Stop::Response> Robot::stop(
     *request_id : new_request_id();
   // The token of the request is the session that the stop ends. It is
   // captured here, because the answer may arrive after the lease changed.
-  const std::string request_token = require_token();
+  const std::string request_token = lease_token ? *lease_token : require_token();
   request.lease_token = request_token;
   rclcpp::Client<chaos_interfaces::srv::Stop>::SharedPtr client;
   {
@@ -829,11 +830,12 @@ std::string Robot::velocity(
 std::shared_future<std::shared_ptr<Robot::NavigationTask>> Robot::navigate(
   const geometry_msgs::msg::PoseStamped & target,
   std::function<void (NavigatePose::Feedback)> feedback_callback,
-  std::optional<double> ttl_s)
+  std::optional<double> ttl_s,
+  std::optional<std::string> lease_token)
 {
   NavigatePose::Goal goal;
   goal.expires_at = deadline(ttl_s);
-  goal.lease_token = require_token();
+  goal.lease_token = lease_token ? *lease_token : require_token();
   goal.target = target;
   return send_goal<NavigatePose>(
     impl_->namespace_ + "/navigation/to_pose", goal, std::move(feedback_callback));
@@ -842,11 +844,12 @@ std::shared_future<std::shared_ptr<Robot::NavigationTask>> Robot::navigate(
 std::shared_future<std::shared_ptr<Robot::FlightTask>> Robot::takeoff(
   double altitude_m,
   std::function<void (Flight::Feedback)> feedback_callback,
-  std::optional<double> ttl_s)
+  std::optional<double> ttl_s,
+  std::optional<std::string> lease_token)
 {
   Flight::Goal goal;
   goal.expires_at = deadline(ttl_s);
-  goal.lease_token = require_token();
+  goal.lease_token = lease_token ? *lease_token : require_token();
   goal.altitude_m = altitude_m;
   return send_goal<Flight>(
     impl_->namespace_ + "/flight/takeoff", goal, std::move(feedback_callback));
@@ -854,11 +857,12 @@ std::shared_future<std::shared_ptr<Robot::FlightTask>> Robot::takeoff(
 
 std::shared_future<std::shared_ptr<Robot::FlightTask>> Robot::land(
   std::function<void (Flight::Feedback)> feedback_callback,
-  std::optional<double> ttl_s)
+  std::optional<double> ttl_s,
+  std::optional<std::string> lease_token)
 {
   Flight::Goal goal;
   goal.expires_at = deadline(ttl_s);
-  goal.lease_token = require_token();
+  goal.lease_token = lease_token ? *lease_token : require_token();
   goal.altitude_m = 0.0;
   return send_goal<Flight>(
     impl_->namespace_ + "/flight/land", goal, std::move(feedback_callback));

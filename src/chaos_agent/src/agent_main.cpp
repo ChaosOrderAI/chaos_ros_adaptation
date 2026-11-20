@@ -51,7 +51,7 @@ public:
     }
     const auto planner_document = nlohmann::json::parse(vocab_json);
 
-    loop_ = std::make_unique<chaos_agent::AgentLoop>(
+    loop_ = std::make_shared<chaos_agent::AgentLoop>(
       shared_from_this(), asset_id, skill_ns, planner_document, system_prompt, endpoint);
     loop_->set_task(task);
 
@@ -64,21 +64,27 @@ public:
 private:
   void tick()
   {
-    if (running_.exchange(true)) {
+    if (running_->exchange(true)) {
       return;  // previous iteration still in flight
     }
-    std::thread([this] {
-        const auto cont = loop_->run_once();
-        running_ = false;
+    // The worker must not touch the node: the node may be destroyed while
+    // the iteration is still in flight. Everything it needs is held by a
+    // shared pointer.
+    const auto loop = loop_;
+    const auto timer = timer_;
+    const auto running = running_;
+    std::thread([loop, timer, running] {
+        const auto cont = loop->run_once();
         if (!cont) {
-          timer_->cancel();
+          timer->cancel();
         }
+        running->store(false);
       }).detach();
   }
 
-  std::unique_ptr<chaos_agent::AgentLoop> loop_;
+  std::shared_ptr<chaos_agent::AgentLoop> loop_;
   rclcpp::TimerBase::SharedPtr timer_;
-  std::atomic<bool> running_{false};
+  std::shared_ptr<std::atomic<bool>> running_ = std::make_shared<std::atomic<bool>>(false);
 };
 
 }  // namespace

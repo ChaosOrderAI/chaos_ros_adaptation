@@ -30,6 +30,10 @@ public:
     nlohmann::json arguments = nlohmann::json::object();
     /// The raw `arguments` string as returned by the server, for logging.
     std::string raw_arguments;
+    /// Whether the arguments were a JSON object. False when the model
+    /// produced something that is not JSON: that is a different fault than a
+    /// missing argument, and the caller has to tell them apart.
+    bool arguments_valid = true;
   };
 
   struct Response

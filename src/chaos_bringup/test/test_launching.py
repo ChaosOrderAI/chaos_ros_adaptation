@@ -104,8 +104,10 @@ def test_every_process_obeys_explicit_discovery_and_removes_legacy_override(monk
                 assert env['ROS_AUTOMATIC_DISCOVERY_RANGE'] == 'SUBNET'
                 assert env['ROS_DOMAIN_ID'] == '87'
                 children.append(action)
-        # Runtime + gateway + transport for each of the two assets.
-        assert len(children) == 6
+        # Runtime + gateway + transport for each of the two assets, plus the
+        # skill server: the MQTT capability commands reach the platform
+        # through the skill layer, so it runs whenever MQTT is enabled.
+        assert len(children) == 8
     finally:
         for directory in generated:
             directory.cleanup()

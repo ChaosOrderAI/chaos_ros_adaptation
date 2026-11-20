@@ -23,7 +23,7 @@ from .description import description_processes
 from .drivers import driver_processes
 from .planning import component_asset, plan_summary, preflight, snapshot_parameter_files
 from .sensors import sensor_processes
-from .skills import skill_processes
+from .skills import default_vocabulary_file, skill_processes
 
 
 def parse_bool(value, name):
@@ -149,14 +149,29 @@ def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST', capabili
         # it for every chosen asset. It is derived in Python because it is a
         # launch-time selection, not an asset contract.
         skill_opts = options.get('skills') or {}
+        vocabulary_file = skill_opts.get('vocabulary_file')
+        if not vocabulary_file and item['mqtt']:
+            # The MQTT capability commands reach the platform through the
+            # skill layer, so the layer has to run when MQTT is enabled. The
+            # shipped vocabulary is used when the operator named none.
+            vocabulary_file = default_vocabulary_file()
+            actions.append(LogInfo(msg=(
+                f'MQTT is enabled for {asset["id"]}: the skill layer runs with '
+                f'the shipped vocabulary {vocabulary_file}')))
         for label, child in skill_processes(
                 asset, environment,
                 enable_agent=skill_opts.get('enable_agent', False),
-                vocabulary_file=skill_opts.get('vocabulary_file'),
+                vocabulary_file=vocabulary_file,
                 initial_hub=skill_opts.get('initial_hub'),
                 llama_endpoint=skill_opts.get('llama_endpoint'),
                 task=skill_opts.get('task'),
-                iteration_hz=skill_opts.get('iteration_hz')):
+                iteration_hz=skill_opts.get('iteration_hz'),
+                intent_topic=skill_opts.get('intent_topic') or 'skill_intent',
+                event_topic=skill_opts.get('event_topic') or 'skill_event',
+                announcement_topic=skill_opts.get('announcement_topic') or
+                'communication/announcement',
+                sensor_cloud_topic=skill_opts.get('sensor_cloud_topic') or '',
+                sensor_imu_topic=skill_opts.get('sensor_imu_topic') or ''):
             actions.append(RegisterEventHandler(OnProcessExit(target_action=child,
                 on_exit=_on_exit(label))))
             actions.append(child)

@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -31,6 +32,8 @@
 #include "chaos_interfaces/action/navigate_pose.hpp"
 #include "chaos_interfaces/msg/command_result.hpp"
 #include "chaos_interfaces/msg/robot_state.hpp"
+#include "chaos_interfaces/msg/skill_event.hpp"
+#include "chaos_interfaces/msg/skill_intent.hpp"
 #include "chaos_interfaces/msg/velocity_command.hpp"
 #include "chaos_interfaces/srv/control_lease.hpp"
 #include "chaos_interfaces/srv/get_description.hpp"
@@ -63,6 +66,163 @@ struct GatewayParameter
 
   std::string name;
   rclcpp::ParameterValue value;
+};
+
+/// The skill layer of the fixture.
+///
+/// The gateway hands the capability commands to the skill layer as intents
+/// and follows the lifecycle the skill layer publishes. The mock reproduces
+/// the scenarios the mock runtime used for its action servers: a request
+/// that is accepted and never finishes, a request that is completed only
+/// when the test releases it, and a request that reports feedback before it
+/// succeeds.
+class MockSkillLayer : public rclcpp::Node
+{
+public:
+  MockSkillLayer()
+  : Node("mock_skill_layer")
+  {
+    event_pub_ = create_publisher<chaos_interfaces::msg::SkillEvent>("skill_event", 512);
+  }
+
+  /// Start answering the intents of the gateway.
+  ///
+  /// A fixture that switches this off exercises a command that arrives
+  /// before the skill layer is reachable.
+  void listen()
+  {
+    if (intent_sub_) {
+      return;
+    }
+    intent_sub_ = create_subscription<chaos_interfaces::msg::SkillIntent>(
+      "skill_intent", 512, [this](chaos_interfaces::msg::SkillIntent::ConstSharedPtr intent) {
+        on_intent(intent);
+      });
+  }
+
+  /// Release the requests that wait for the feedback barrier.
+  void release_feedback_intents()
+  {
+    {
+      const std::lock_guard<std::mutex> guard(mutex_);
+      feedback_released_ = true;
+    }
+    feedback_cv_.notify_all();
+  }
+
+  /// Complete the requests that were held back, after the gateway retired them.
+  void complete_held_intents()
+  {
+    std::vector<chaos_interfaces::msg::SkillIntent> held;
+    {
+      const std::lock_guard<std::mutex> guard(mutex_);
+      held.swap(held_);
+    }
+    for (const auto & intent : held) {
+      event_pub_->publish(
+        terminal(intent, true, "OK", "completed after the gateway stopped observing"));
+    }
+  }
+
+  /// Number of requests that were accepted and never finished.
+  std::size_t silent_intent_count()
+  {
+    const std::lock_guard<std::mutex> guard(mutex_);
+    return silent_.size();
+  }
+
+  /// Number of requests the skill layer received in total.
+  std::size_t received_intent_count()
+  {
+    const std::lock_guard<std::mutex> guard(mutex_);
+    return received_;
+  }
+
+private:
+  static double argument_x(const chaos_interfaces::msg::SkillIntent & intent)
+  {
+    try {
+      const auto args = nlohmann::json::parse(intent.token.arguments_json);
+      return args.value("x", 0.0);
+    } catch (const std::exception &) {
+      return 0.0;
+    }
+  }
+
+  static chaos_interfaces::msg::SkillEvent base(
+    const chaos_interfaces::msg::SkillIntent & intent, const std::string & phase)
+  {
+    chaos_interfaces::msg::SkillEvent event;
+    event.request_id = intent.request_id;
+    event.source = intent.token.source;
+    event.token = intent.token.token;
+    event.phase = phase;
+    event.hub_state = "idle";
+    return event;
+  }
+
+  static chaos_interfaces::msg::SkillEvent terminal(
+    const chaos_interfaces::msg::SkillIntent & intent, bool ok,
+    const std::string & code, const std::string & message)
+  {
+    auto event = base(intent, ok ? "succeeded" : "failed");
+    event.success = ok;
+    event.code = code;
+    event.message = message;
+    return event;
+  }
+
+  void on_intent(const chaos_interfaces::msg::SkillIntent::ConstSharedPtr & intent)
+  {
+    if (!intent) {
+      return;
+    }
+    {
+      const std::lock_guard<std::mutex> guard(mutex_);
+      // A repeated request id must not run the skill a second time.
+      if (seen_.count(intent->request_id) != 0) {
+        return;
+      }
+      seen_.insert(intent->request_id);
+      ++received_;
+    }
+    event_pub_->publish(base(*intent, "accepted"));
+
+    const double x = argument_x(*intent);
+    if (x == 42.0) {
+      // The request is accepted and never finishes.
+      const std::lock_guard<std::mutex> guard(mutex_);
+      silent_.push_back(*intent);
+      return;
+    }
+    if (x == 43.0) {
+      // The request is held back until the test completes it.
+      const std::lock_guard<std::mutex> guard(mutex_);
+      held_.push_back(*intent);
+      return;
+    }
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      feedback_cv_.wait_for(lock, 20s, [this]() {return feedback_released_;});
+    }
+    for (int i = 0; i < 3; ++i) {
+      auto feedback = base(*intent, "feedback");
+      feedback.progress = 0.33F * static_cast<float>(i + 1);
+      event_pub_->publish(feedback);
+      std::this_thread::sleep_for(10ms);
+    }
+    event_pub_->publish(terminal(*intent, true, "OK", "arrived"));
+  }
+
+  rclcpp::Publisher<chaos_interfaces::msg::SkillEvent>::SharedPtr event_pub_;
+  rclcpp::Subscription<chaos_interfaces::msg::SkillIntent>::SharedPtr intent_sub_;
+  std::mutex mutex_;
+  std::condition_variable feedback_cv_;
+  bool feedback_released_ = false;
+  std::set<std::string> seen_;
+  std::vector<chaos_interfaces::msg::SkillIntent> silent_;
+  std::vector<chaos_interfaces::msg::SkillIntent> held_;
+  std::size_t received_ = 0;
 };
 
 class MockRuntime : public rclcpp::Node
@@ -336,6 +496,11 @@ protected:
   /// request that arrives before the action server exists.
   virtual bool with_navigation_server() const {return true;}
 
+  /// Whether the skill layer answers the intents of the gateway. A derived
+  /// fixture switches it off to exercise a command that arrives before the
+  /// skill layer is reachable.
+  virtual bool with_skill_layer() const {return true;}
+
   void SetUp() override
   {
     setenv("ROS_DOMAIN_ID", "188", 1);
@@ -372,8 +537,17 @@ protected:
     // must never delay the gateway's goal acknowledgment.
     runtime_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
     runtime_executor_->add_node(runtime_);
+    // The skill layer owns a separate executor too: the gateway hands it the
+    // capability commands and follows the lifecycle it publishes.
+    skill_layer_ = std::make_shared<MockSkillLayer>();
+    skill_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    skill_executor_->add_node(skill_layer_);
     spin_thread_ = std::thread([this]() { executor_->spin(); });
     runtime_thread_ = std::thread([this]() { runtime_executor_->spin(); });
+    skill_thread_ = std::thread([this]() { skill_executor_->spin(); });
+    if (with_skill_layer()) {
+      skill_layer_->listen();
+    }
     create_gateway({{"request_timeout_s", 0.4}, {"action_timeout_s", 1.0}});
     // Wait for discovery between the fresh nodes.
     std::this_thread::sleep_for(500ms);
@@ -381,14 +555,19 @@ protected:
 
   void TearDown() override
   {
-    // Release a goal that still waits for the feedback barrier: the runtime
-    // executor must be able to stop even when the test failed early.
+    // Release a request that still waits for the feedback barrier: the
+    // executors must be able to stop even when the test failed early.
     if (runtime_) {
       runtime_->release_feedback_goals();
     }
-    // Quiesce both executors before the nodes are destroyed.
+    if (skill_layer_) {
+      skill_layer_->release_feedback_intents();
+    }
+    // Quiesce every executor before the nodes are destroyed.
     runtime_executor_->cancel();
     runtime_thread_.join();
+    skill_executor_->cancel();
+    skill_thread_.join();
     executor_->cancel();
     spin_thread_.join();
     if (gateway_) {
@@ -397,8 +576,10 @@ protected:
     }
     executor_->remove_node(client_);
     runtime_executor_->remove_node(runtime_);
+    skill_executor_->remove_node(skill_layer_);
     client_.reset();
     runtime_.reset();
+    skill_layer_.reset();
   }
 
   /// (Re)create the gateway node with the given parameters.
@@ -562,6 +743,12 @@ protected:
     runtime_thread_ = std::thread([this]() { runtime_executor_->spin(); });
   }
 
+  /// The skill layer starts answering the intents of the gateway.
+  void start_skill_layer()
+  {
+    skill_layer_->listen();
+  }
+
   std::shared_ptr<MockRuntime> runtime_;
   std::shared_ptr<GatewayNode> gateway_;
   std::shared_ptr<rclcpp::Node> client_;
@@ -571,8 +758,11 @@ protected:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr command_pub_;
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> runtime_executor_;
+  std::shared_ptr<MockSkillLayer> skill_layer_;
+  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> skill_executor_;
   std::thread spin_thread_;
   std::thread runtime_thread_;
+  std::thread skill_thread_;
   std::mutex mutex_;
   std::vector<json> replies_;
   std::vector<json> events_;
@@ -648,18 +838,20 @@ TEST_F(GatewayIntegration, ActionLifecycleAcceptFeedbackTerminalAndReplay)
   EXPECT_TRUE(accepted["response"]["ok"].get<bool>());
   EXPECT_EQ(accepted["response"]["phase"], "accepted");
   EXPECT_FALSE(accepted["response"]["terminal"].get<bool>());
-  const std::string goal = accepted["response"]["goal_id"];
+  // A skill has no ROS action goal, so the reply names the skill that ran.
+  const std::string skill = accepted["response"]["skill"];
+  EXPECT_EQ(skill, "navigate_to");
 
   // The mock publishes the feedback only after the acceptance was observed:
-  // the gateway has mapped the goal UUID before the feedback arrives.
-  runtime_->release_feedback_goals();
+  // the gateway has mapped the request before the feedback arrives.
+  skill_layer_->release_feedback_intents();
 
   // Feedback and terminal events arrive on task_events with goal correlation.
   ASSERT_TRUE(wait_for([&]() {
     const std::lock_guard<std::mutex> guard(mutex_);
     return std::any_of(events_.begin(), events_.end(), [&](const json & event) {
       return event["request_id"] == goal_id && event["phase"] == "feedback" &&
-        event["goal_id"] == goal;
+        event["skill"] == skill;
     });
   }));
   ASSERT_TRUE(wait_for([&]() {
@@ -667,7 +859,7 @@ TEST_F(GatewayIntegration, ActionLifecycleAcceptFeedbackTerminalAndReplay)
     return std::any_of(events_.begin(), events_.end(), [&](const json & event) {
       return event["request_id"] == goal_id && event["terminal"].get<bool>() &&
         event["ok"].get<bool>() && event["execution_state"] == "known" &&
-        event["goal_id"] == goal;
+        event["skill"] == skill;
     });
   }));
 
@@ -678,7 +870,7 @@ TEST_F(GatewayIntegration, ActionLifecycleAcceptFeedbackTerminalAndReplay)
   EXPECT_EQ(completed["response"]["phase"], "result");
   EXPECT_TRUE(completed["response"]["terminal"].get<bool>());
   EXPECT_TRUE(completed["response"]["ok"].get<bool>());
-  EXPECT_EQ(completed["response"]["goal_id"], goal);
+  EXPECT_EQ(completed["response"]["skill"], skill);
   json terminal_event;
   {
     const std::lock_guard<std::mutex> guard(mutex_);
@@ -763,8 +955,8 @@ TEST_F(GatewayIntegration, AcceptedActionTimeoutKeepsUnknownExecutionState)
       {"target", {{"frame_id", "map"}, {"position", {{"x", 42.0}}}}}});
   ASSERT_TRUE(wait_for([&]() { return !reply_with_phase(hang_goal, "accepted").is_null(); }));
   EXPECT_EQ(reply_with_phase(hang_goal, "accepted")["response"]["phase"], "accepted");
-  // The server keeps the goal in EXECUTING state forever.
-  ASSERT_TRUE(wait_for([&]() { return runtime_->silent_goal_count() >= 1; }));
+  // The skill layer keeps the request in EXECUTING state forever.
+  ASSERT_TRUE(wait_for([&]() { return skill_layer_->silent_intent_count() >= 1; }));
   // action_timeout_s is 1.0 s in the fixture; the mock never finishes.
   ASSERT_TRUE(wait_for([&]() {
     const std::lock_guard<std::mutex> guard(mutex_);
@@ -851,8 +1043,8 @@ TEST_F(GatewayIntegration, ManySilentGoalsDoNotStarveAValidGoal)
     ASSERT_TRUE(wait_for([&]() { return !reply_with_phase(request_id, "accepted").is_null(); }, 30s))
       << "goal " << i << " was never accepted";
   }
-  // The server really holds 40 goals in EXECUTING state.
-  ASSERT_TRUE(wait_for([&]() { return runtime_->silent_goal_count() >= kSilentGoals; }, 30s));
+  // The skill layer really holds 40 requests in EXECUTING state.
+  ASSERT_TRUE(wait_for([&]() { return skill_layer_->silent_intent_count() >= kSilentGoals; }, 30s));
 
   // While all silent goals are still observed, a normal goal must keep
   // receiving feedback and finally succeed.
@@ -861,7 +1053,7 @@ TEST_F(GatewayIntegration, ManySilentGoalsDoNotStarveAValidGoal)
     {{"lease_token", token},
       {"target", {{"frame_id", "map"}, {"position", {{"x", 0.25}}}}}});
   ASSERT_TRUE(wait_for([&]() { return !reply_with_phase(valid_goal, "accepted").is_null(); }, 30s));
-  runtime_->release_feedback_goals();
+  skill_layer_->release_feedback_intents();
   ASSERT_TRUE(wait_for([&]() {
     const std::lock_guard<std::mutex> guard(mutex_);
     return std::any_of(events_.begin(), events_.end(), [&](const json & event) {
@@ -917,7 +1109,7 @@ TEST_F(GatewayIntegration, LateGoalResultAfterTimeoutIsIgnored)
 
   // The server now completes the goal. The gateway already retired the
   // observation, so nothing may be published.
-  runtime_->complete_held_goals();
+  skill_layer_->complete_held_intents();
   std::this_thread::sleep_for(1500ms);
   EXPECT_EQ(replies_for(goal_id).size(), reply_count);
   EXPECT_EQ(events_for(goal_id).size(), event_count);
@@ -933,10 +1125,10 @@ TEST_F(GatewayIntegration, LateGoalResultAfterTimeoutIsIgnored)
 
 // The number of simultaneously observed goals is bounded. Exceeding the
 // capacity is rejected instead of growing the observation state.
-TEST_F(GatewayIntegration, ActionSlotCapacityRejectsExcessGoals)
+TEST_F(GatewayIntegration, SkillRequestCapacityRejectsExcessRequests)
 {
   create_gateway(
-    {{"request_timeout_s", 0.4}, {"action_timeout_s", 30.0}, {"action_slot_capacity", 4}});
+    {{"request_timeout_s", 0.4}, {"action_timeout_s", 30.0}, {"skill_request_capacity", 4}});
   std::this_thread::sleep_for(500ms);
 
   const std::string acquire_id = "acquire_capacity";
@@ -971,9 +1163,9 @@ TEST_F(GatewayIntegration, ActionSlotCapacityRejectsExcessGoals)
   }
   EXPECT_EQ(accepted, 4);
   EXPECT_EQ(rejected, 4);
-  // Exactly the accepted goals are observed by the server.
-  ASSERT_TRUE(wait_for([&]() { return runtime_->silent_goal_count() >= 4; }, 10s));
-  EXPECT_EQ(runtime_->silent_goal_count(), 4u);
+  // Exactly the accepted requests are observed by the skill layer.
+  ASSERT_TRUE(wait_for([&]() { return skill_layer_->silent_intent_count() >= 4; }, 10s));
+  EXPECT_EQ(skill_layer_->silent_intent_count(), 4u);
 }
 
 // Destroying the gateway while goals are still observed must not leave
@@ -1047,8 +1239,8 @@ TEST_F(GatewayIntegration, SilentEndpointsDoNotAccumulateUnboundedState)
     ASSERT_TRUE(wait_for([&]() { return !reply_with_phase(request_id, "accepted").is_null(); }, 30s))
       << "goal " << i << " was never accepted";
   }
-  // All 40 goals are really observed by the server.
-  ASSERT_TRUE(wait_for([&]() { return runtime_->silent_goal_count() >= 40; }, 30s));
+  // All 40 requests are really observed by the skill layer.
+  ASSERT_TRUE(wait_for([&]() { return skill_layer_->silent_intent_count() >= 40; }, 30s));
   ASSERT_TRUE(wait_for([&]() {
     const std::lock_guard<std::mutex> guard(mutex_);
     return std::count_if(events_.begin(), events_.end(), [&](const json & event) {
@@ -1067,7 +1259,7 @@ TEST_F(GatewayIntegration, SilentEndpointsDoNotAccumulateUnboundedState)
     {{"lease_token", token},
       {"target", {{"frame_id", "map"}, {"position", {{"x", 0.5}}}}}});
   ASSERT_TRUE(wait_for([&]() { return !reply_with_phase(goal_id, "accepted").is_null(); }, 20s));
-  runtime_->release_feedback_goals();
+  skill_layer_->release_feedback_intents();
   ASSERT_TRUE(wait_for([&]() {
     const std::lock_guard<std::mutex> guard(mutex_);
     return std::any_of(events_.begin(), events_.end(), [&](const json & event) {
@@ -1077,21 +1269,20 @@ TEST_F(GatewayIntegration, SilentEndpointsDoNotAccumulateUnboundedState)
   }, 20s));
 }
 
-// The mock runtime of this fixture starts *without* the navigation action
-// server. A navigation request therefore arrives before any server is
-// discoverable: the gateway has to defer the dispatch instead of rejecting
-// the command.
-class GatewayIntegrationLateNavigation : public GatewayIntegration
+// The skill layer of this fixture does not answer yet. A capability command
+// therefore arrives before the skill layer is reachable: the gateway has to
+// defer the dispatch instead of rejecting the command.
+class GatewayIntegrationLateSkillLayer : public GatewayIntegration
 {
 protected:
-  bool with_navigation_server() const override {return false;}
+  bool with_skill_layer() const override {return false;}
 };
 
 // Regression for the early UNAVAILABLE: a navigation request that arrives
 // before the action server exists must not be rejected. The gateway defers
 // the dispatch and sends the goal exactly once as soon as the server is
 // reachable.
-TEST_F(GatewayIntegrationLateNavigation, NavigationBeforeServerAppearsIsDeferredAndDispatchedOnce)
+TEST_F(GatewayIntegrationLateSkillLayer, NavigationBeforeTheSkillLayerAnswersIsDeferredAndDispatchedOnce)
 {
   // The lease is held by the mock runtime, so the token stays valid when the
   // gateway is recreated below.
@@ -1119,33 +1310,35 @@ TEST_F(GatewayIntegrationLateNavigation, NavigationBeforeServerAppearsIsDeferred
     {{"ttl_ms", 15000}, {"lease_token", token},
       {"target", {{"frame_id", "map"}, {"position", {{"x", 0.1}}}}}});
 
-  // The action server does not exist yet. The gateway has to stay silent:
+  // The skill layer does not answer yet. The gateway has to stay silent:
   // the old behaviour answered UNAVAILABLE immediately instead of deferring
   // the dispatch.
   ASSERT_FALSE(wait_for([&]() { return !replies_for(goal_id).empty(); }, 1s))
-    << "the gateway answered before the action server existed: "
+    << "the gateway answered before the skill layer answered: "
     << reply_diagnostics(goal_id);
-  EXPECT_EQ(runtime_->received_goal_count(), 0u) << "the goal was sent without a server";
+  EXPECT_EQ(skill_layer_->received_intent_count(), 0u)
+    << "the request was dispatched without a skill layer";
 
-  // The server appears now: the deferred goal is dispatched and accepted.
-  start_runtime_navigation_server();
+  // The skill layer answers now: the deferred request is dispatched and
+  // accepted.
+  start_skill_layer();
   ASSERT_TRUE(wait_for([&]() { return !reply_with_phase(goal_id, "accepted").is_null(); }, 15s));
   const json accepted = reply_with_phase(goal_id, "accepted");
   EXPECT_TRUE(accepted["response"]["ok"].get<bool>());
   EXPECT_EQ(accepted["response"]["phase"], "accepted");
   EXPECT_FALSE(accepted["response"]["terminal"].get<bool>());
 
-  // The goal runs to completion: the mock publishes feedback and a result.
-  runtime_->release_feedback_goals();
+  // The request runs to completion: the mock publishes feedback and a result.
+  skill_layer_->release_feedback_intents();
   ASSERT_TRUE(wait_for([&]() { return has_terminal_reply(goal_id); }, 15s));
   const json completed = replies_for(goal_id).back();
   EXPECT_EQ(completed["response"]["phase"], "result");
   EXPECT_TRUE(completed["response"]["ok"].get<bool>());
 
-  // The goal was dispatched exactly once: the server received a single goal
-  // and the gateway reported a single acceptance. The duplicate of the
-  // pending request did not create a second goal.
-  EXPECT_EQ(runtime_->received_goal_count(), 1u);
+  // The request was dispatched exactly once: the skill layer received a
+  // single intent and the gateway reported a single acceptance. The
+  // duplicate of the pending request did not create a second request.
+  EXPECT_EQ(skill_layer_->received_intent_count(), 1u);
   int acceptances = 0;
   for (const auto & reply : replies_for(goal_id)) {
     if (reply["response"].contains("phase") && reply["response"]["phase"] == "accepted") {
@@ -1158,7 +1351,7 @@ TEST_F(GatewayIntegrationLateNavigation, NavigationBeforeServerAppearsIsDeferred
 // The other half of the deferral contract: a request whose correlation
 // expires while the action server is still missing must never reach the
 // robot, not even when the server appears afterwards.
-TEST_F(GatewayIntegrationLateNavigation, NavigationThatExpiresBeforeTheServerAppearsIsNeverSent)
+TEST_F(GatewayIntegrationLateSkillLayer, NavigationThatExpiresBeforeTheSkillLayerAnswersIsNeverSent)
 {
   // The fixture gateway correlates a request for 0.4 s: the request below
   // expires while the action server is still missing.
@@ -1171,20 +1364,20 @@ TEST_F(GatewayIntegrationLateNavigation, NavigationThatExpiresBeforeTheServerApp
   const json expired = replies_for(goal_id).back();
   EXPECT_EQ(expired["response"]["code"], "RESPONSE_TIMEOUT");
   EXPECT_TRUE(expired["response"]["terminal"].get<bool>());
-  EXPECT_EQ(runtime_->received_goal_count(), 0u);
+  EXPECT_EQ(skill_layer_->received_intent_count(), 0u);
 
-  // The server appears only now. The expired request must not be sent.
-  start_runtime_navigation_server();
+  // The skill layer answers only now. The expired request must not be sent.
+  start_skill_layer();
   ASSERT_FALSE(wait_for([&]() { return !reply_with_phase(goal_id, "accepted").is_null(); }, 2s))
-    << "an expired request was dispatched after the server appeared";
-  EXPECT_EQ(runtime_->received_goal_count(), 0u);
+    << "an expired request was dispatched after the skill layer answered";
+  EXPECT_EQ(skill_layer_->received_intent_count(), 0u);
   EXPECT_EQ(replies_for(goal_id).back()["response"], expired["response"]);
 }
 
 // The original TTL of the command bounds the dispatch, not only the response
 // timeout of the correlation: a goal whose TTL elapsed while the action
 // server was missing must never reach the robot.
-TEST_F(GatewayIntegrationLateNavigation, NavigationWithElapsedTtlIsNeverSent)
+TEST_F(GatewayIntegrationLateSkillLayer, NavigationWithElapsedTtlIsNeverSent)
 {
   // The correlation of this gateway lives far longer than the TTL of the
   // command below, so only the original TTL can stop the deferred dispatch.
@@ -1197,7 +1390,7 @@ TEST_F(GatewayIntegrationLateNavigation, NavigationWithElapsedTtlIsNeverSent)
       {"lease_token", "tok_ttl_nav"},
       {"target", {{"frame_id", "map"}, {"position", {{"x", 0.1}}}}}});
 
-  // The action server does not exist, so the dispatch is deferred. The TTL
+  // The skill layer does not answer, so the dispatch stays deferred. The TTL
   // elapses long before the response timeout of the correlation.
   ASSERT_TRUE(wait_for([&]() { return has_terminal_reply(goal_id); }, 5s))
     << "the deferred request was neither expired nor answered";
@@ -1205,13 +1398,14 @@ TEST_F(GatewayIntegrationLateNavigation, NavigationWithElapsedTtlIsNeverSent)
   EXPECT_EQ(expired["response"]["code"], "EXPIRED");
   EXPECT_TRUE(expired["response"]["terminal"].get<bool>());
   EXPECT_FALSE(expired["response"]["ok"].get<bool>());
-  EXPECT_EQ(runtime_->received_goal_count(), 0u) << "the goal was sent without a server";
+  EXPECT_EQ(skill_layer_->received_intent_count(), 0u)
+    << "the request was dispatched without a skill layer";
 
-  // The server appears only now. The expired request must not be sent.
-  start_runtime_navigation_server();
+  // The skill layer answers only now. The expired request must not be sent.
+  start_skill_layer();
   ASSERT_FALSE(wait_for([&]() { return !reply_with_phase(goal_id, "accepted").is_null(); }, 2s))
-    << "a request with an elapsed TTL was dispatched after the server appeared";
-  EXPECT_EQ(runtime_->received_goal_count(), 0u);
+    << "a request with an elapsed TTL was dispatched after the skill layer answered";
+  EXPECT_EQ(skill_layer_->received_intent_count(), 0u);
   EXPECT_EQ(replies_for(goal_id).back()["response"], expired["response"]);
 }
 

@@ -78,6 +78,15 @@ Vocabulary Vocabulary::from_json(const nlohmann::json & doc)
     if (entry.contains("any_entry_hub")) {
       def.any_entry_hub = entry["any_entry_hub"].get<bool>();
     }
+    // The capability family is required: the vocabulary is the one place that
+    // says which base function a token ends up calling.
+    const auto capability_name = require_string(entry, "capability", "skill '" + def.token + "'");
+    const auto capability = capability_from_string(capability_name);
+    if (!capability) {
+      reject("skill_vocab.invalid",
+        "skill '" + def.token + "' names an unknown capability '" + capability_name + "'");
+    }
+    def.capability = *capability;
     if (!vocab.hub_set_.count(def.entry_hub)) {
       reject("skill_vocab.undeclared_hub",
         "skill '" + def.token + "' enters from undeclared hub '" + def.entry_hub + "'");
@@ -117,6 +126,12 @@ nlohmann::json Vocabulary::planner_document() const
       {"description", def.description},
       {"entry_hub", def.entry_hub},
       {"exit_hub", def.exit_hub},
+      {"capability", std::string(to_string(def.capability))},
+      // The planner needs both: a skill that may start from every hub must
+      // not be presented as if it needed one, and a skill that takes a lease
+      // has to be planned around.
+      {"any_entry_hub", def.any_entry_hub},
+      {"needs_lease", def.needs_lease},
       {"arguments_schema", def.arguments_schema},
     });
   }

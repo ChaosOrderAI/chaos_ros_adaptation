@@ -138,7 +138,10 @@ public:
   /// client does not reacquire on its own.
   std::shared_future<chaos_interfaces::srv::Stop::Response> stop(
     std::optional<std::string> request_id = std::nullopt,
-    std::optional<double> ttl_s = std::nullopt);
+    std::optional<double> ttl_s = std::nullopt,
+    /// Control token to stop with. When it is empty the stop uses the token
+    /// this client acquired.
+    std::optional<std::string> lease_token = std::nullopt);
 
   /// Publish one bounded velocity sample; returns its correlation ID.
   ///
@@ -185,18 +188,25 @@ public:
   std::shared_future<std::shared_ptr<NavigationTask>> navigate(
     const geometry_msgs::msg::PoseStamped & target,
     std::function<void (NavigatePose::Feedback)> feedback_callback = nullptr,
-    std::optional<double> ttl_s = std::nullopt);
+    std::optional<double> ttl_s = std::nullopt,
+    /// Control token to run the goal with. When it is empty the goal uses the
+    /// token this client acquired. A caller that already holds the lease of
+    /// the runtime passes it here, so the runtime sees one lease holder and
+    /// not two.
+    std::optional<std::string> lease_token = std::nullopt);
   /// Send a takeoff goal. The feedback callback behaves like the one of
   /// navigate().
   std::shared_future<std::shared_ptr<FlightTask>> takeoff(
     double altitude_m,
     std::function<void (Flight::Feedback)> feedback_callback = nullptr,
-    std::optional<double> ttl_s = std::nullopt);
+    std::optional<double> ttl_s = std::nullopt,
+    std::optional<std::string> lease_token = std::nullopt);
   /// Send a land goal. The feedback callback behaves like the one of
   /// navigate().
   std::shared_future<std::shared_ptr<FlightTask>> land(
     std::function<void (Flight::Feedback)> feedback_callback = nullptr,
-    std::optional<double> ttl_s = std::nullopt);
+    std::optional<double> ttl_s = std::nullopt,
+    std::optional<std::string> lease_token = std::nullopt);
   /// Send a software-update goal. The feedback callback behaves like the one
   /// of navigate(). The runtime decides whether any bytes are committed;
   /// `result.applied` is the only signal of a commit.

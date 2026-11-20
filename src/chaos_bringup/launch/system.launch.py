@@ -22,14 +22,25 @@ def _start(context):
         LaunchConfiguration('host_id').perform(context), mode=mode or None,
         asset_ids=selected, enable_mqtt=mqtt_enabled, check_files=not dry_run,
     )
+    # The skill arguments carry their own defaults: a caller that drives the
+    # entry point directly does not have to declare them.
+    def skill_argument(name, default=''):
+        return LaunchConfiguration(name, default=default).perform(context)
+
+    iteration_hz = skill_argument('iteration_hz')
     skills = {
-        'enable_agent': parse_bool(LaunchConfiguration('enable_agent').perform(context), 'enable_agent'),
-        'vocabulary_file': LaunchConfiguration('vocabulary_file').perform(context) or None,
-        'initial_hub': LaunchConfiguration('initial_hub').perform(context) or None,
-        'llama_endpoint': LaunchConfiguration('llama_endpoint').perform(context) or None,
-        'task': LaunchConfiguration('task').perform(context) or None,
-        'iteration_hz': (float(LaunchConfiguration('iteration_hz').perform(context))
-                         if LaunchConfiguration('iteration_hz').perform(context) else None),
+        'enable_agent': parse_bool(skill_argument('enable_agent', 'false'), 'enable_agent'),
+        'vocabulary_file': skill_argument('vocabulary_file') or None,
+        'initial_hub': skill_argument('initial_hub') or None,
+        'llama_endpoint': skill_argument('llama_endpoint') or None,
+        'task': skill_argument('task') or None,
+        'iteration_hz': float(iteration_hz) if iteration_hz else None,
+        'intent_topic': skill_argument('intent_topic', 'skill_intent'),
+        'event_topic': skill_argument('event_topic', 'skill_event'),
+        'announcement_topic': skill_argument(
+            'announcement_topic', 'communication/announcement'),
+        'sensor_cloud_topic': skill_argument('sensor_cloud_topic'),
+        'sensor_imu_topic': skill_argument('sensor_imu_topic'),
     }
     return build_launch_actions(plan, dry_run=dry_run, discovery=discovery,
                                 capabilities={'skills': skills})
@@ -51,5 +62,15 @@ def generate_launch_description():
         DeclareLaunchArgument('llama_endpoint', default_value=''),
         DeclareLaunchArgument('task', default_value='', description='Task text handed to the onboard agent'),
         DeclareLaunchArgument('iteration_hz', default_value=''),
+        DeclareLaunchArgument('intent_topic', default_value='skill_intent',
+                              description='Topic the top-level sources publish their skill intents on'),
+        DeclareLaunchArgument('event_topic', default_value='skill_event',
+                              description='Topic the skill layer publishes its lifecycle on'),
+        DeclareLaunchArgument('announcement_topic', default_value='communication/announcement',
+                              description='Generic communication channel the announce skill writes to'),
+        DeclareLaunchArgument('sensor_cloud_topic', default_value='',
+                              description='Optional point cloud stream the observe skill may read'),
+        DeclareLaunchArgument('sensor_imu_topic', default_value='',
+                              description='Optional IMU stream the observe skill may read'),
         OpaqueFunction(function=_start),
     ])

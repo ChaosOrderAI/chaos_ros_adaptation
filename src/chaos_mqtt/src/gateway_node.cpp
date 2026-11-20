@@ -17,6 +17,9 @@ namespace chaos_mqtt
 namespace
 {
 
+/// Seconds between two publications of an intent that was not accepted yet.
+constexpr double kSkillRetryIntervalS = 0.5;
+
 /// Unix milliseconds; the command deadline is an absolute UTC instant and is
 /// never derived from the ROS clock (which may be simulated or paused).
 std::int64_t epoch_ms_now()
@@ -162,6 +165,10 @@ GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
   // observation owns a dedicated action client, so this parameter bounds the
   // number of live action clients and of pending middleware requests.
   declare_parameter<int64_t>("action_slot_capacity", 48);
+  // Upper bound of skill requests that are observed at the same time. The
+  // skill layer runs one skill at a time, so the gateway does not need many
+  // of them; the bound keeps the state of the gateway finite.
+  declare_parameter<int64_t>("skill_request_capacity", 48);
   try {
     asset_ = Json::parse(get_parameter("asset_json").as_string());
   } catch (const std::exception & error) {
@@ -197,6 +204,11 @@ GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
   if (slot_capacity < 1 || slot_capacity > 256) {
     throw std::invalid_argument("action_slot_capacity must be in 1..256");
   }
+  const auto skill_capacity = get_parameter("skill_request_capacity").as_int();
+  if (skill_capacity < 1 || skill_capacity > 4096) {
+    throw std::invalid_argument("skill_request_capacity must be in 1..4096");
+  }
+  skill_request_capacity_ = static_cast<std::size_t>(skill_capacity);
   navigation_pool_.set_capacity(static_cast<std::size_t>(slot_capacity));
   takeoff_pool_.set_capacity(static_cast<std::size_t>(slot_capacity));
   land_pool_.set_capacity(static_cast<std::size_t>(slot_capacity));
@@ -237,6 +249,24 @@ GatewayNode::GatewayNode(const rclcpp::NodeOptions & options)
   state_sub_ = create_subscription<chaos_interfaces::msg::RobotState>(
     "state", 32, [this](chaos_interfaces::msg::RobotState::SharedPtr message) {
       state_callback(message);
+    });
+  // The communication channel of the skill layer is a plain ROS topic. The
+  // gateway encodes it for the wire; the skill layer knows nothing about
+  // the transport.
+  announcement_pub_ = create_publisher<std_msgs::msg::String>("mqtt/announcement", 32);
+  announcement_sub_ = create_subscription<chaos_interfaces::msg::Announcement>(
+    "communication/announcement", 32,
+    [this](chaos_interfaces::msg::Announcement::SharedPtr message) {
+      announcement_callback(message);
+    });
+  // The skill layer is the only caller of the base capabilities. The gateway
+  // keeps the wire duties and hands the capability commands to the skill
+  // layer as intents.
+  skill_intent_pub_ = create_publisher<chaos_interfaces::msg::SkillIntent>(
+    "skill_intent", 32);
+  skill_event_sub_ = create_subscription<chaos_interfaces::msg::SkillEvent>(
+    "skill_event", 32, [this](chaos_interfaces::msg::SkillEvent::SharedPtr message) {
+      skill_event_callback(message);
     });
   describe_client_ = create_client<chaos_interfaces::srv::GetDescription>("description");
   lease_client_ = create_client<chaos_interfaces::srv::ControlLease>("control/lease");
@@ -311,6 +341,36 @@ void GatewayNode::publish_json(
 void GatewayNode::state_callback(const chaos_interfaces::msg::RobotState::SharedPtr message)
 {
   publish_json(state_pub_, state_json(*message));
+}
+
+void GatewayNode::announcement_callback(
+  const chaos_interfaces::msg::Announcement::SharedPtr message)
+{
+  if (!message) {
+    return;
+  }
+  Json value{
+    {"version", 1},
+    {"asset_id", asset_id_},
+    {"request_id", message->request_id},
+    {"source", message->source},
+    {"topic", message->topic},
+    {"timestamp_ms", epoch_ms_now()},
+    {"stamp_sec", message->stamp.sec},
+    {"stamp_nanosec", message->stamp.nanosec},
+  };
+  // The payload is carried as a JSON string, like every other payload of the
+  // wire protocol.
+  Json payload = nlohmann::json::object();
+  try {
+    payload = message->payload_json.empty() ?
+      nlohmann::json::object() : nlohmann::json::parse(message->payload_json);
+  } catch (const std::exception &) {
+    payload = nlohmann::json::object();
+    payload["raw"] = message->payload_json;
+  }
+  value["payload"] = payload;
+  publish_json(announcement_pub_, value);
 }
 
 void GatewayNode::command_callback(const std_msgs::msg::String::SharedPtr message)
@@ -457,6 +517,10 @@ void GatewayNode::dispatch(const Command & command)
       target.z = axes.at("z").get<double>();
     }
     velocity_pub_->publish(request);
+  } else if (name == "navigation.to_pose" || name == "flight.takeoff" ||
+    name == "flight.land")
+  {
+    send_skill(command);
   } else {
     send_action(command);
   }
@@ -528,6 +592,229 @@ void GatewayNode::send_service(
       client->remove_pending_request(inner_request_id);
     } catch (const std::exception &) {
     }
+  }
+}
+
+bool GatewayNode::skill_for_command(
+  const Command & command, std::string & token, Json & arguments, std::string & error) const
+{
+  const auto & name = command.name;
+  const auto & args = command.arguments;
+  if (name == "navigation.to_pose") {
+    token = "navigate_to";
+    const auto & target = args.at("target");
+    arguments = Json{
+      {"frame_id", target.at("frame_id").get<std::string>()},
+      {"x", target.at("position").at("x").get<double>()},
+      {"y", target.at("position").at("y").get<double>()},
+      {"z", target.at("position").at("z").get<double>()},
+      {"qx", target.at("orientation").at("x").get<double>()},
+      {"qy", target.at("orientation").at("y").get<double>()},
+      {"qz", target.at("orientation").at("z").get<double>()},
+      {"qw", target.at("orientation").at("w").get<double>()},
+    };
+    return true;
+  }
+  if (name == "flight.takeoff") {
+    token = "takeoff";
+    arguments = Json{{"altitude_m", args.at("altitude_m").get<double>()}};
+    return true;
+  }
+  if (name == "flight.land") {
+    token = "land";
+    arguments = Json::object();
+    return true;
+  }
+  error = "command '" + name + "' has no skill binding";
+  return false;
+}
+
+void GatewayNode::send_skill(const Command & command)
+{
+  std::string token;
+  Json arguments;
+  std::string error;
+  if (!skill_for_command(command, token, arguments, error)) {
+    service_error(command.request_id, "UNSUPPORTED", error);
+    return;
+  }
+  if (dispatch_expired(command.request_id)) {
+    service_error(
+      command.request_id, "EXPIRED",
+      "command TTL elapsed before the skill layer was reachable");
+    return;
+  }
+
+  chaos_interfaces::msg::SkillIntent intent;
+  intent.token.token = token;
+  intent.token.arguments_json = arguments.dump();
+  intent.token.decided_at = get_clock()->now();
+  intent.token.source = "mqtt:" + asset_id_;
+  intent.request_id = command.request_id;
+  intent.expires_at = deadline_time(command.deadline_ms);
+  // A remote command is not a planning decision: the hub of the planning
+  // layer must not veto it.
+  intent.enforce_hub_precondition = false;
+  // The remote operator holds the lease; the skill layer runs with that
+  // token instead of taking a second one.
+  if (command.arguments.contains("lease_token") &&
+    command.arguments.at("lease_token").is_string())
+  {
+    intent.control_token = command.arguments.at("lease_token").get<std::string>();
+  }
+
+  bool saturated = false;
+  {
+    const std::lock_guard<std::mutex> guard(records_mutex_);
+    if (skill_requests_.size() >= skill_request_capacity_) {
+      // The bound of the observed skill requests is reached: the request is
+      // refused instead of growing the state of the gateway.
+      saturated = true;
+    } else {
+      skill_requests_[command.request_id] = intent;
+      skill_published_at_[command.request_id] = monotonic_now_s();
+    }
+  }
+  if (saturated) {
+    // The error is reported outside of the correlation lock.
+    service_error(command.request_id, "BUSY", "too many concurrent skill requests");
+    return;
+  }
+  skill_intent_pub_->publish(intent);
+}
+
+void GatewayNode::retry_skill_requests()
+{
+  // The dispatch deadline is checked outside of the correlation lock: the
+  // helper takes it itself.
+  std::vector<std::pair<std::string, chaos_interfaces::msg::SkillIntent>> awaiting;
+  {
+    const std::lock_guard<std::mutex> guard(records_mutex_);
+    for (const auto & item : skill_requests_) {
+      if (skill_published_at_.count(item.first) == 0) {
+        // The skill layer already accepted the intent.
+        continue;
+      }
+      awaiting.emplace_back(item.first, item.second);
+    }
+  }
+
+  std::vector<chaos_interfaces::msg::SkillIntent> republish;
+  std::vector<std::string> expired;
+  for (const auto & item : awaiting) {
+    {
+      const std::lock_guard<std::mutex> guard(records_mutex_);
+      // A request whose correlation was retired is never sent to the robot.
+      if (records_.pending(item.first) == nullptr) {
+        continue;
+      }
+    }
+    if (dispatch_expired(item.first)) {
+      expired.push_back(item.first);
+      continue;
+    }
+    const std::lock_guard<std::mutex> guard(records_mutex_);
+    const auto published = skill_published_at_.find(item.first);
+    if (published == skill_published_at_.end()) {
+      continue;
+    }
+    if (monotonic_now_s() - published->second < kSkillRetryIntervalS) {
+      continue;
+    }
+    skill_published_at_[item.first] = monotonic_now_s();
+    republish.push_back(item.second);
+  }
+
+  for (const auto & id : expired) {
+    {
+      const std::lock_guard<std::mutex> guard(records_mutex_);
+      skill_requests_.erase(id);
+      skill_published_at_.erase(id);
+    }
+    service_error(
+      id, "EXPIRED",
+      "command TTL elapsed before the skill layer was reachable");
+  }
+  for (const auto & intent : republish) {
+    // The skill layer remembers the request id and replays the last outcome
+    // instead of running the skill a second time.
+    skill_intent_pub_->publish(intent);
+  }
+}
+
+void GatewayNode::skill_event_callback(
+  const chaos_interfaces::msg::SkillEvent::SharedPtr & message)
+{
+  if (!message) {
+    return;
+  }
+  const auto & request_id = message->request_id;
+
+  Json reply;
+  bool publish_reply = false;
+  Json event_value;
+  bool publish_event = false;
+  bool terminal = false;
+  Json terminal_data;
+  {
+    const std::lock_guard<std::mutex> guard(records_mutex_);
+    Pending * pending = records_.pending(request_id);
+    if (!pending) {
+      // The correlation was already retired (timeout). The skill may still
+      // run on the robot, but the gateway no longer reports it.
+      return;
+    }
+    if (message->phase == "accepted") {
+      pending->accepted = true;
+      // The skill deadline starts when the skill layer accepted the intent.
+      pending->expires_at = monotonic_now_s() + action_timeout_s_;
+      // The request stays in `skill_requests_` until its terminal event: the
+      // capacity of the observed skill requests covers the whole lifetime of
+      // a request, not only its dispatch.
+      skill_published_at_.erase(request_id);
+      reply = response(
+        request_id, pending->command.name, true, "ACCEPTED",
+        "skill accepted; completion arrives on task_events", "accepted",
+        Json{{"skill", message->token}});
+      pending->reply = reply;
+      publish_reply = true;
+    } else if (message->phase == "feedback") {
+      event_value = build_event(request_id, "feedback", Json{
+          {"skill", message->token},
+          {"feedback", Json{
+                {"progress", message->progress},
+                {"hub_state", message->hub_state},
+              }}});
+      publish_event = !event_value.is_null();
+    } else if (message->phase == "succeeded" || message->phase == "failed") {
+      Json data{
+        {"ok", message->success},
+        {"code", message->code},
+        {"message", message->message},
+        {"hub_state", message->hub_state},
+        {"execution_state", "known"},
+        // The skill token replaces the goal id: a skill has no ROS action
+        // goal, and a consumer still needs to know which skill ran.
+        {"skill", message->token},
+      };
+      skill_requests_.erase(request_id);
+      skill_published_at_.erase(request_id);
+      terminal = true;
+      terminal_data = std::move(data);
+    } else {
+      return;
+    }
+  }
+  if (terminal) {
+    // action_done takes the correlation lock itself, so it runs outside.
+    action_done(request_id, terminal_data);
+    return;
+  }
+  if (publish_reply) {
+    publish_json(result_pub_, reply);
+  }
+  if (publish_event) {
+    publish_json(event_pub_, event_value);
   }
 }
 
@@ -738,7 +1025,9 @@ Json GatewayNode::build_action_reply(const Pending & pending, const Json & termi
   // consumer of the event topic. It is absent when the runtime never
   // reported it, for example when the goal timed out before it was accepted.
   Json extra = Json::object();
-  for (const char * key : {"goal_id", "ros_goal_status", "execution_state", "applied"}) {
+  for (const char * key : {"goal_id", "ros_goal_status", "execution_state", "applied", "skill",
+      "hub_state"})
+  {
     if (terminal_event.contains(key)) {
       extra[key] = terminal_event.at(key);
     }
@@ -875,6 +1164,9 @@ void GatewayNode::expire()
   takeoff_pool_.release_inactive(tracked);
   land_pool_.release_inactive(tracked);
   ota_pool_.release_inactive(tracked);
+  // Republish the intents the skill layer did not accept yet. A request that
+  // already timed out is never sent to the robot.
+  retry_skill_requests();
 }
 
 template void GatewayNode::send_service<chaos_interfaces::srv::GetDescription>(

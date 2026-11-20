@@ -7,7 +7,8 @@ string token
 # JSON-encoded arguments of the skill (target pose, altitude, area id...).
 # Empty means the skill takes no arguments.
 string arguments_json
-# Unix UTC time when the decision was produced by the planner.
+# ROS time when the decision was produced by the planner. The acceptance
+# deadlines of a request use Unix UTC; this stamp is an observation.
 builtin_interfaces/Time decided_at
 # Identifier of the producing agent (asset id or "operator").
 string source

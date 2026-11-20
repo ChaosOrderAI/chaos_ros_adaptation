@@ -22,7 +22,7 @@
 - [数据采集、时间同步与离线审计](docs/data-collection.md)
 - [训练数据规范、任务片段与离线导出](docs/training-data.md)
 - [多机协同感知预研路线（尚无实现）](docs/collaborative-perception-preresearch.md)
-- [机载 AI 智能体层：chaos_agent + chaos_skill（开发中）](docs/agent-skill-layer.md)
+- [机载 AI 智能体层：chaos_agent + chaos_skill（开发中）](docs/agent-skill-layer.md)（MQTT 与智能体并列为顶层来源，技能层是唯一汇聚点）
 - [Go2 SLAM 导航链路的开发约束](docs/go2-slam-agents.md)（FAST-LIVO2、SCAN-Planner vendored 来源与改动纪律）
 - [示例资产清单](src/chaos_assets/config/demo.yaml)
 - [无人车型号](src/chaos_assets/models/lingao_vehicle/v1/model.yaml) / [无人机型号](src/chaos_assets/models/dji_m3td/v1/model.yaml) / [机器狗型号](src/chaos_assets/models/unitree_go2/v1/model.yaml)
@@ -227,6 +227,8 @@ ros2 run chaos_mqtt mqtt_transport --check-config /absolute/path/config.json
 框架日常运行使用资产 YAML 生成这份 JSON，统一 launch 管理中间件进程。服务器端 `zkdx` 的设备适配器接入仍需单独完成；源码归并不会自动改变服务器协议。
 
 默认 MQTT 主题为 `robots/<id>/commands`、`responses`、`state`、`task_events`。外层命令沿用原协议 `version/message_id/timestamp_ms/command`；内部命令名按能力生成。状态与任务事件经 `std_msgs/String` 转发，线上的 JSON 外层包含 `data` 字符串；格式和受理/完成区别见架构文档。
+
+**能力命令经技能层下发**：`navigation.to_pose`、`flight.takeoff`、`flight.land` 不再由网关直接调用运行时，而是翻译成技能意图交给 `chaos_skill` 执行——技能层是唯一被允许调用基础功能（通信、传感器、运动、导航）的层，与机载智能体 `chaos_agent` 并列为顶层来源。因此**启用 MQTT 时技能层必须存在**：launch 在未指定 `vocabulary_file` 时用随包发布的词表启动技能层。租约、停止、速度、描述与 OTA 属于控制面，仍由网关直连运行时。分层细节见 [机载 AI 智能体层](docs/agent-skill-layer.md)。
 
 控制服务和动作将 MQTT 截止时间传到 runtime，并在获得执行锁后复检。SDK 默认接受期限为 5 秒，可通过 `Robot(..., command_ttl_s=...)` 或单次调用的 `ttl_s=...` 调整；它限制请求何时可以开始执行，不限制已开始任务的持续时间。动作最终结果同时进入 `responses` 和 `task_events`，在当前进程缓存窗口内重发原 `message_id` 可取回最终响应。状态与普通反馈只保留最新未发送样本，终态和控制响应使用可靠队列。
 

@@ -17,15 +17,30 @@ flowchart TB
     A --> L[chaos_bringup 统一 launch]
     L --> R[每资产 chaos_runtime]
     S[chaos_sdk 本机应用] <--> R
-    subgraph MQTT[chaos_mqtt 单一 ROS 包]
-        T[Rust mqtt_transport 传输与路由]
-        G[原生 C++ gateway 业务协议转换]
-        T <--> G
+
+    subgraph TOP[顶层来源（并行）]
+        direction LR
+        subgraph MQTT[chaos_mqtt 单一 ROS 包]
+            T[Rust mqtt_transport 传输与路由]
+            G[原生 C++ gateway 业务协议转换]
+            T <--> G
+        end
+        AG[chaos_agent 机载规划]
     end
     P[远程平台] <--> T
+
+    G -- SkillIntent --> SK
+    AG -- SkillIntent --> SK
+    SK[chaos_skill 技能层<br/>词表 + 枢纽状态机 + 能力分派] -- SkillEvent --> G
+    SK -- SkillEvent --> AG
+
     L --> T
     L --> G
-    G <--> R
+    L --> SK
+    L --> AG
+    SK -- 通信/传感器/运动/导航 --> R
+    SK -- 通用通信通道 --> T
+    G -- 控制面：租约/停止/速度/描述/OTA --> R
     R --> B[能力与设备适配器]
     B --> V[现有无人车驱动]
     B --> D[现有 DJI 网关 / PSDK]
@@ -50,6 +65,10 @@ flowchart TB
     E2 -.后续格式适配.-> E3[独立训练环境与模型产物]
 ```
 
+顶层来源是**并行**的两个：`chaos_mqtt`（外部通信适配器）与 `chaos_agent`（机载规划）。
+两者都把意图交给技能层，技能层是唯一被允许调用基础功能的层。
+详见[机载 AI 智能体层](agent-skill-layer.md)。
+
 | 包 | 责任 |
 |---|---|
 | `chaos_core` | 共享值对象、错误类型与时间原语；无 ROS 依赖的头文件库，被其他包单向依赖 |
@@ -59,8 +78,10 @@ flowchart TB
 | `chaos_runtime` | 每资产的公共运行时、适配器契约和独立 Go2 ROS 驱动 |
 | `chaos_sdk` | 面向业务程序封装统一接口的原生异步客户端 |
 | `chaos_bt` | 把 SDK 的导航、起飞、降落包装成 BehaviorTree.CPP 节点，由调用方进程驱动行为树 |
-| `chaos_mqtt` | 内置 Rust MQTT / ROS 2 传输与原生 C++ 业务网关，将外部命令、请求编号、结果映射到统一 ROS 接口 |
+| `chaos_mqtt` | 内置 Rust MQTT / ROS 2 传输与原生 C++ 业务网关，将外部命令、请求编号、结果映射到统一 ROS 接口；能力命令交给技能层，不直接调用运行时 |
 | `chaos_sensors` | 模拟传感器、标准流健康诊断、可发现的传感器目录 |
+| `chaos_skill` | 技能词表、枢纽状态机与能力分派；顶层来源的唯一汇聚点，唯一调用基础功能的层 |
+| `chaos_agent` | 机载规划层：把技能词表翻译成模型决定，作为顶层来源之一把意图交给技能层 |
 | `chaos_data` | 原生 rosbag2_cpp 录制、chrony 时间质量准入、异常分段、磁盘保护、离线审计及任务级训练数据导出 |
 
 十个包的构建产物中，除 `chaos_mqtt/transport/`（导入的 Rust 实现）与 `chaos_bringup` 的 launch 胶水外，业务逻辑均为 C++17 实现。`src/chaos_benchmarks` 是领域微基准包，不是生产入口，也不参与运行。
@@ -80,6 +101,8 @@ flowchart TB
 | `chaos_sensors` | `chaos_core` | 是 |
 | `chaos_sdk` | `chaos_interfaces` | 否（客户端库） |
 | `chaos_mqtt` | `chaos_interfaces` | 是（网关节点） |
+| `chaos_skill` | `chaos_core`、`chaos_interfaces`、`chaos_sdk` | 是（技能服务器节点） |
+| `chaos_agent` | `chaos_core`、`chaos_interfaces` | 是（智能体节点） |
 | `chaos_data` | `chaos_core`、`chaos_interfaces`、`chaos_assets` | 是（采集器、审计、导出） |
 | `chaos_bringup` | `chaos_assets`、`chaos_mqtt`（按包索引定位可执行文件） | 只做 launch 胶水 |
 

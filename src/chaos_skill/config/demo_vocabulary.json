@@ -6,6 +6,7 @@
       "description": "Lift off to the given altitude",
       "entry_hub": "idle",
       "exit_hub": "airborne",
+      "capability": "motion",
       "needs_lease": true,
       "arguments_schema": {"altitude_m": {"type": "number", "description": "target altitude in metres"}}
     },
@@ -14,6 +15,7 @@
       "description": "Descend and touch down",
       "entry_hub": "airborne",
       "exit_hub": "idle",
+      "capability": "motion",
       "needs_lease": true,
       "arguments_schema": {}
     },
@@ -22,6 +24,7 @@
       "description": "Move to the given base-frame pose",
       "entry_hub": "idle",
       "exit_hub": "idle",
+      "capability": "navigation",
       "needs_lease": true,
       "arguments_schema": {
         "x": {"type": "number", "description": "metres forward"},
@@ -34,15 +37,46 @@
       "description": "Immediately stop all motion and release the lease",
       "entry_hub": "idle",
       "exit_hub": "idle",
-      "needs_lease": false,
+      "capability": "motion",
+      "needs_lease": true,
       "any_entry_hub": true,
       "arguments_schema": {}
+    },
+    {
+      "token": "observe",
+      "description": "Read the robot state and the newest sample of the configured sensor streams",
+      "entry_hub": "idle",
+      "exit_hub": "idle",
+      "capability": "sensor",
+      "needs_lease": false,
+      "any_entry_hub": true,
+      "arguments_schema": {
+        "streams": {
+          "type": "array",
+          "description": "sensor streams to read; empty means every configured stream",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    {
+      "token": "announce",
+      "description": "Send a message on the external communication channel",
+      "entry_hub": "idle",
+      "exit_hub": "idle",
+      "capability": "communication",
+      "needs_lease": false,
+      "any_entry_hub": true,
+      "arguments_schema": {
+        "topic": {"type": "string", "description": "logical topic of the announcement", "default": "status"},
+        "payload": {"type": "object", "description": "announcement payload"}
+      }
     },
     {
       "token": "hold",
       "description": "Remain in the current hub for one step",
       "entry_hub": "idle",
       "exit_hub": "idle",
+      "capability": "motion",
       "needs_lease": false,
       "any_entry_hub": true,
       "arguments_schema": {}

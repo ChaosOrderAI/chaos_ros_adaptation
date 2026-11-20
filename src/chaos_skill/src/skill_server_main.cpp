@@ -1,10 +1,14 @@
-// chaos_skill_server: one ExecuteSkill action server per asset.
+// chaos_skill_server: one skill server per asset.
 //
-// Loads the versioned skill vocabulary for the asset, creates a
-// chaos_sdk::Robot client against the runtime, and serializes incoming skill
-// requests through the hub-state Executor. An agent or an operator talks to it
-// through the ExecuteSkill action and the SkillRequest service; the server
-// owns the hub bookkeeping and the lease lifecycle.
+// The server is the single funnel of the skill layer. The top-level sources
+// are peers above it: the onboard agent and the external communication
+// adapter both publish a SkillIntent, and the server executes it through the
+// one hub-state Executor. The Executor is the only place where the skill
+// layer reaches the platform, so every skill ends up in the same lease,
+// precondition and hub bookkeeping.
+//
+// The ExecuteSkill action stays as the local facade for callers that want a
+// request/response with feedback: a behaviour tree, a tool, an operator.
 
 #include <chrono>
 #include <memory>
@@ -20,6 +24,8 @@
 #include "chaos_interfaces/srv/skill_request.hpp"
 #include "chaos_sdk/robot.hpp"
 #include "chaos_skill/executor.hpp"
+#include "chaos_skill/intent_ingress.hpp"
+#include "chaos_skill/server_ports.hpp"
 #include "chaos_skill/vocabulary.hpp"
 
 namespace
@@ -42,6 +48,14 @@ public:
     // Navigation frame for NavigatePose goals; defaults to <asset_id>/map,
     // matching the runtime's per-asset frame convention.
     declare_parameter("navigation_frame", std::string{});
+    // The ingress the top-level sources publish their intents on.
+    declare_parameter("intent_topic", std::string{"skill_intent"});
+    declare_parameter("event_topic", std::string{"skill_event"});
+    // The generic communication channel the "announce" skill writes to.
+    declare_parameter("announcement_topic", std::string{"communication/announcement"});
+    // Optional sensor streams the "observe" skill may read.
+    declare_parameter("sensor_cloud_topic", std::string{});
+    declare_parameter("sensor_imu_topic", std::string{});
 
     const auto asset_id = get_parameter("asset_id").as_string();
     const auto vocab_json = get_parameter("vocabulary_json").as_string();
@@ -67,8 +81,16 @@ public:
     robot_ = chaos_sdk::Robot::create_standalone(
       asset_id,
       ns.empty() ? std::nullopt : std::optional<std::string>(ns));
+
+    chaos_skill::ServerPortsOptions port_options;
+    port_options.announcement_topic =
+      get_parameter("announcement_topic").as_string();
+    port_options.cloud_topic = get_parameter("sensor_cloud_topic").as_string();
+    port_options.imu_topic = get_parameter("sensor_imu_topic").as_string();
+    ports_ = std::make_shared<chaos_skill::ServerPorts>(this, port_options);
+
     executor_ = std::make_unique<chaos_skill::Executor>(
-      robot_, vocab, initial_hub, navigation_frame);
+      robot_, vocab, initial_hub, navigation_frame, ports_);
 
     action_ = rclcpp_action::create_server<ExecuteSkill>(
       this, "execute_skill",
@@ -88,17 +110,44 @@ public:
       asset_id.c_str(), executor_->current_hub().c_str());
   }
 
+  /// Start the ingress. It runs after the node exists as a shared pointer,
+  /// because the ingress subscribes with it.
+  void start()
+  {
+    chaos_skill::IntentIngressOptions options;
+    options.intent_topic = get_parameter("intent_topic").as_string();
+    options.event_topic = get_parameter("event_topic").as_string();
+    ingress_ = std::make_unique<chaos_skill::IntentIngress>(
+      shared_from_this(), *executor_, options);
+    ingress_->start();
+    RCLCPP_INFO(get_logger(), "skill ingress listening on %s",
+      options.intent_topic.c_str());
+  }
+
+  ~SkillServer() override
+  {
+    if (ingress_) {
+      ingress_->stop();
+    }
+  }
+
 private:
   rclcpp_action::GoalResponse on_goal(
     const rclcpp_action::GoalUUID & /*uuid*/,
     const ExecuteSkill::Goal::ConstSharedPtr & goal)
   {
+    if (chaos_skill::deadline_passed(goal->expires_at)) {
+      RCLCPP_WARN(get_logger(), "rejecting skill %s: the request expired",
+        goal->token.token.c_str());
+      return rclcpp_action::GoalResponse::REJECT;
+    }
     if (executor_->busy()) {
       RCLCPP_WARN(get_logger(), "rejecting skill %s: busy", goal->token.token.c_str());
       return rclcpp_action::GoalResponse::REJECT;
     }
     if (const auto err = executor_->vocabulary().check_entry(
-          goal->token.token, executor_->current_hub())) {
+          goal->token.token, executor_->current_hub()))
+    {
       RCLCPP_WARN(get_logger(), "rejecting skill %s: %s",
         goal->token.token.c_str(), err->c_str());
       return rclcpp_action::GoalResponse::REJECT;
@@ -137,6 +186,9 @@ private:
       }
     }
 
+    chaos_skill::SkillOrigin origin;
+    origin.source = goal->token.source;
+
     const auto outcome = executor_->execute(
       goal->token.token, args,
       [this, handle, &feedback](const chaos_skill::SkillFeedback & fb) {
@@ -147,7 +199,8 @@ private:
         feedback->progress = fb.progress;
         feedback->code = fb.code;
         handle->publish_feedback(feedback);
-      });
+      },
+      origin);
 
     if (!handle->is_active()) {
       return;
@@ -167,6 +220,12 @@ private:
     const SkillRequest::Request::SharedPtr request,
     const SkillRequest::Response::SharedPtr response)
   {
+    if (chaos_skill::deadline_passed(request->expires_at)) {
+      response->accepted = false;
+      response->code = "skill.expired";
+      response->message = "the request expired before it was accepted";
+      return;
+    }
     if (executor_->busy()) {
       response->accepted = false;
       response->code = "skill.busy";
@@ -174,7 +233,8 @@ private:
       return;
     }
     if (const auto err = executor_->vocabulary().check_entry(
-          request->token.token, executor_->current_hub())) {
+          request->token.token, executor_->current_hub()))
+    {
       response->accepted = false;
       response->code = "skill.hub_mismatch";
       response->message = *err;
@@ -184,7 +244,9 @@ private:
   }
 
   std::shared_ptr<chaos_sdk::Robot> robot_;
+  std::shared_ptr<chaos_skill::ServerPorts> ports_;
   std::unique_ptr<chaos_skill::Executor> executor_;
+  std::unique_ptr<chaos_skill::IntentIngress> ingress_;
   rclcpp_action::Server<ExecuteSkill>::SharedPtr action_;
   rclcpp::Service<SkillRequest>::SharedPtr service_;
 };
@@ -195,6 +257,7 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<SkillServer>();
+  node->start();
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;

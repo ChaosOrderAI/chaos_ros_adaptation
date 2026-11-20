@@ -171,6 +171,11 @@ nlohmann::json build_adapter_config(
     topic_mapping("chaos_state", asset_id, namespace_, "mqtt/state", "state", 0, 32, "volatile"),
     topic_mapping("chaos_task_events", asset_id, namespace_, "mqtt/task_events", "task_events", 1,
       32, "volatile"),
+    // The communication channel of the skill layer leaves the machine on this
+    // mapping. The skill layer publishes a typed message; the gateway encodes
+    // it for the wire.
+    topic_mapping("chaos_announcement", asset_id, namespace_, "mqtt/announcement", "announcement",
+      1, 32, "volatile"),
   });
   const auto data_collection = asset.find("data_collection");
   if (data_collection != asset.end() && data_collection->is_object() &&
