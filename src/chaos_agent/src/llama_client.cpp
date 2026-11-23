@@ -39,7 +39,10 @@ LlamaClient::Response LlamaClient::chat(
     {"model", "gemma-4-e4b"},
     {"messages", nlohmann::json::array({
         {{"role", "system"}, {"content", system_prompt}},
-        {{"role", "user"}, {"content", user_content}},
+        // Chat-completions requires content to be a string. The planner snapshot
+        // is an object; an object is rejected by a spec-compliant server.
+        {{"role", "user"}, {"content", user_content.is_string() ?
+            user_content.get<std::string>() : user_content.dump()}},
       })},
     {"stream", false},
   };

@@ -1,7 +1,10 @@
 #include "chaos_skill/executor.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
+#include <future>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -20,6 +23,166 @@ namespace
 {
 
 constexpr std::chrono::seconds kLeaseDuration{10};
+/// Renew well inside the lease, so a slow lease response still lands before it expires.
+constexpr std::chrono::seconds kLeaseRenewAfter{3};
+constexpr std::chrono::milliseconds kCancelPoll{200};
+/// chaos_sdk::validate_ttl rejects anything above this.
+constexpr double kSdkTtlMaxS = 30.0;
+
+struct WaitFlags
+{
+  bool cancel_requested = false;
+  std::string fail_code;
+  std::string fail_message;
+};
+
+struct StartTtl
+{
+  bool expired = false;
+  std::optional<double> seconds;
+};
+
+/// Remaining start TTL for a goal. A deadline the caller set is clamped to the
+/// SDK maximum and never extended; zero means the caller set none.
+StartTtl start_ttl(std::int64_t deadline_ns)
+{
+  StartTtl ttl;
+  if (deadline_ns <= 0) {
+    return ttl;
+  }
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::system_clock::now().time_since_epoch()).count();
+  const double remaining = static_cast<double>(deadline_ns - now) / 1e9;
+  if (!(remaining > 0.0)) {
+    ttl.expired = true;
+    return ttl;
+  }
+  ttl.seconds = std::min(remaining, kSdkTtlMaxS);
+  return ttl;
+}
+
+template<typename Future, typename IsCancelled, typename Renew, typename OnCancel>
+void poll_until_ready(
+  Future & future, bool renew_lease, IsCancelled is_cancelled, Renew renew, OnCancel on_cancel,
+  WaitFlags & flags)
+{
+  auto next_renew = std::chrono::steady_clock::now() + kLeaseRenewAfter;
+  bool cancel_sent = false;
+  while (future.wait_for(kCancelPoll) != std::future_status::ready) {
+    if (!cancel_sent && is_cancelled()) {
+      cancel_sent = true;
+      flags.cancel_requested = true;
+      try {
+        on_cancel();
+      } catch (const std::exception &) {
+      }
+    }
+    if (!renew_lease || std::chrono::steady_clock::now() < next_renew) {
+      continue;
+    }
+    std::string code;
+    std::string message;
+    if (!renew(code, message)) {
+      flags.fail_code = code;
+      flags.fail_message = message;
+      renew_lease = false;
+      if (!cancel_sent) {
+        cancel_sent = true;
+        try {
+          on_cancel();
+        } catch (const std::exception &) {
+        }
+      }
+    }
+    next_renew = std::chrono::steady_clock::now() + kLeaseRenewAfter;
+  }
+}
+
+template<typename Task>
+SkillOutcome consume_action(
+  std::shared_future<std::shared_ptr<Task>> acceptance,
+  bool renew_lease,
+  const std::string & rejected_message,
+  const std::function<bool()> & is_cancelled,
+  const std::function<bool(std::string &, std::string &)> & renew)
+{
+  SkillOutcome outcome;
+  WaitFlags accept_flags;
+  poll_until_ready(acceptance, renew_lease, is_cancelled, renew, [] {}, accept_flags);
+
+  std::shared_ptr<Task> task;
+  try {
+    task = acceptance.get();
+  } catch (const std::exception & error) {
+    outcome.code = "skill.internal_error";
+    outcome.message = error.what();
+    return outcome;
+  }
+  if (!task) {
+    outcome.code = "skill.goal_rejected";
+    outcome.message = rejected_message;
+    return outcome;
+  }
+
+  auto cancel_task = [&task]() {
+    try {
+      task->cancel();
+    } catch (const std::exception &) {
+    }
+  };
+  if (accept_flags.cancel_requested || is_cancelled()) {
+    cancel_task();
+    outcome.code = "skill.cancelled";
+    outcome.message = "the skill was cancelled";
+    return outcome;
+  }
+  if (!accept_flags.fail_code.empty()) {
+    cancel_task();
+    outcome.code = accept_flags.fail_code;
+    outcome.message = accept_flags.fail_message;
+    return outcome;
+  }
+
+  auto result_future = task->result();
+  if (!result_future.valid()) {
+    outcome.code = "skill.internal_error";
+    outcome.message = "the action result is unavailable";
+    return outcome;
+  }
+  WaitFlags result_flags;
+  poll_until_ready(result_future, renew_lease, is_cancelled, renew, cancel_task, result_flags);
+
+  try {
+    const auto result = result_future.get();
+    if (!result_flags.fail_code.empty()) {
+      outcome.code = result_flags.fail_code;
+      outcome.message = result_flags.fail_message;
+      return outcome;
+    }
+    if (result_flags.cancel_requested ||
+      result.code == rclcpp_action::ResultCode::CANCELED)
+    {
+      outcome.code = "skill.cancelled";
+      outcome.message = "the skill was cancelled";
+      return outcome;
+    }
+    if (!result.result) {
+      outcome.code = "skill.internal_error";
+      outcome.message = "the action returned no result";
+      return outcome;
+    }
+    outcome.success =
+      result.code == rclcpp_action::ResultCode::SUCCEEDED && result.result->success;
+    outcome.code = result.result->code;
+    outcome.message = result.result->message;
+    return outcome;
+  } catch (const std::exception & error) {
+    outcome.code = result_flags.fail_code.empty() ? std::string("skill.internal_error") :
+      result_flags.fail_code;
+    outcome.message = result_flags.fail_code.empty() ? error.what() : result_flags.fail_message;
+    return outcome;
+  }
+}
 
 template<typename T>
 T arg(const nlohmann::json & args, const char * key)
@@ -73,7 +236,7 @@ nlohmann::json state_json(const chaos_interfaces::msg::RobotState & state)
 /// vocabulary can never drift away from the dispatch.
 std::optional<Capability> capability_of(const std::string & token)
 {
-  if (token == "takeoff" || token == "land" || token == "stop") {
+  if (token == "takeoff" || token == "land" || token == "stop" || token == "hold") {
     return Capability::Motion;
   }
   if (token == "navigate_to") {
@@ -154,16 +317,55 @@ bool Executor::ensure_lease(std::string & code, std::string & message)
       return true;
     }
   }
-  auto future = robot_->acquire("chaos_skill", kLeaseDuration.count());
-  const auto response = future.get();
-  if (!response.success) {
-    code = response.code;
-    message = response.message;
+  try {
+    auto future = robot_->acquire("chaos_skill", kLeaseDuration.count());
+    const auto response = future.get();
+    if (!response.success) {
+      code = response.code;
+      message = response.message;
+      return false;
+    }
+  } catch (const chaos::Rejected & error) {
+    code = error.code();
+    message = error.message();
+    return false;
+  } catch (const std::exception & error) {
+    // acquire() stores a TimeoutError in the future. Leaving it uncaught would
+    // escape a detached action thread and abort the process.
+    code = "skill.lease_failed";
+    message = error.what();
     return false;
   }
   const std::lock_guard<std::mutex> guard(state_mutex_);
   lease_acquired_ = true;
   return true;
+}
+
+bool Executor::renew_lease(std::string & code, std::string & message)
+{
+  try {
+    const auto response = robot_->renew(static_cast<double>(kLeaseDuration.count())).get();
+    if (!response.success) {
+      code = response.code.empty() ? "skill.lease_failed" : response.code;
+      message = response.message;
+      return false;
+    }
+    return true;
+  } catch (const chaos::Rejected & error) {
+    code = error.code();
+    message = error.message();
+    return false;
+  } catch (const std::exception & error) {
+    code = "skill.lease_failed";
+    message = error.what();
+    return false;
+  }
+}
+
+bool Executor::cancellation_requested() const
+{
+  const std::lock_guard<std::mutex> guard(state_mutex_);
+  return cancel_requested_;
 }
 
 void Executor::release_lease()
@@ -246,18 +448,25 @@ SkillOutcome Executor::execute(
   // The runtime admits one lease holder, so the skill layer must not take a
   // second one, and it must not release the lease of the caller either.
   const bool owns_lease = origin.control_token.empty();
+  const auto ttl = start_ttl(origin.deadline_ns);
+  if (ttl.expired) {
+    outcome.code = "skill.expired";
+    outcome.message = "the request expired before the goal was sent";
+    return outcome;
+  }
   if (owns_lease && def->needs_lease && !ensure_lease(outcome.code, outcome.message)) {
     return outcome;
   }
   const std::string control_token = origin.control_token;
+  const bool renew = owns_lease && def->needs_lease;
 
   try {
     if (token == "navigate_to") {
-      outcome = run_navigate(arguments, on_feedback, control_token);
+      outcome = run_navigate(arguments, on_feedback, control_token, ttl.seconds, renew);
     } else if (token == "takeoff") {
-      outcome = run_takeoff(arguments, on_feedback, control_token);
+      outcome = run_takeoff(arguments, on_feedback, control_token, ttl.seconds, renew);
     } else if (token == "land") {
-      outcome = run_land(on_feedback, control_token);
+      outcome = run_land(on_feedback, control_token, ttl.seconds, renew);
     } else if (token == "hold") {
       outcome = run_hold(on_feedback);
     } else if (token == "stop") {
@@ -276,9 +485,15 @@ SkillOutcome Executor::execute(
   }
 
   if (outcome.success) {
-    if (auto hub = vocab_.exit_hub(token, entry_hub)) {
-      const std::lock_guard<std::mutex> guard(state_mutex_);
-      hub_ = *hub;
+    // A direct command is allowed to skip the hub precondition, but that must
+    // not record the vocabulary's exit hub: the asset never entered through
+    // the declared hub, so the declared exit would be a lie.
+    const bool entry_was_legal = !vocab_.check_entry(token, entry_hub).has_value();
+    if (origin.enforce_hub || entry_was_legal) {
+      if (auto hub = vocab_.exit_hub(token, entry_hub)) {
+        const std::lock_guard<std::mutex> guard(state_mutex_);
+        hub_ = *hub;
+      }
     }
     outcome.hub_state = current_hub();
   } else {
@@ -292,7 +507,8 @@ SkillOutcome Executor::execute(
 
 SkillOutcome Executor::run_navigate(
   const nlohmann::json & args, const FeedbackFn & on_feedback,
-  const std::string & control_token)
+  const std::string & control_token, const std::optional<double> & goal_ttl,
+  bool renew)
 {
   SkillOutcome outcome;
   outcome.hub_state = current_hub();
@@ -326,25 +542,20 @@ SkillOutcome Executor::run_navigate(
         on_feedback({current_hub(), fb.progress, "navigate_to"});
       }
     },
-    std::nullopt,
-    control_token.empty() ? std::nullopt : std::optional<std::string>(control_token)).get();
-
-  if (!acceptance) {
-    outcome.code = "skill.goal_rejected";
-    outcome.message = "navigate goal was rejected";
-    return outcome;
-  }
-  const auto result = acceptance->result().get();
-  outcome.success = result.code == rclcpp_action::ResultCode::SUCCEEDED &&
-    result.result->success;
-  outcome.code = result.result->code;
-  outcome.message = result.result->message;
+    goal_ttl,
+    control_token.empty() ? std::nullopt : std::optional<std::string>(control_token));
+  outcome = consume_action<chaos_sdk::Robot::NavigationTask>(
+    std::move(acceptance), renew, "navigate goal was rejected",
+    [this]() {return cancellation_requested();},
+    [this](std::string & code, std::string & message) {return renew_lease(code, message);});
+  outcome.hub_state = current_hub();
   return outcome;
 }
 
 SkillOutcome Executor::run_takeoff(
   const nlohmann::json & args, const FeedbackFn & on_feedback,
-  const std::string & control_token)
+  const std::string & control_token, const std::optional<double> & goal_ttl,
+  bool renew)
 {
   SkillOutcome outcome;
   outcome.hub_state = current_hub();
@@ -357,24 +568,19 @@ SkillOutcome Executor::run_takeoff(
         on_feedback({current_hub(), fb.progress, "takeoff"});
       }
     },
-    std::nullopt,
-    control_token.empty() ? std::nullopt : std::optional<std::string>(control_token)).get();
-
-  if (!acceptance) {
-    outcome.code = "skill.goal_rejected";
-    outcome.message = "takeoff goal was rejected";
-    return outcome;
-  }
-  const auto result = acceptance->result().get();
-  outcome.success = result.code == rclcpp_action::ResultCode::SUCCEEDED &&
-    result.result->success;
-  outcome.code = result.result->code;
-  outcome.message = result.result->message;
+    goal_ttl,
+    control_token.empty() ? std::nullopt : std::optional<std::string>(control_token));
+  outcome = consume_action<chaos_sdk::Robot::FlightTask>(
+    std::move(acceptance), renew, "takeoff goal was rejected",
+    [this]() {return cancellation_requested();},
+    [this](std::string & code, std::string & message) {return renew_lease(code, message);});
+  outcome.hub_state = current_hub();
   return outcome;
 }
 
 SkillOutcome Executor::run_land(
-  const FeedbackFn & on_feedback, const std::string & control_token)
+  const FeedbackFn & on_feedback, const std::string & control_token,
+  const std::optional<double> & goal_ttl, bool renew)
 {
   SkillOutcome outcome;
   outcome.hub_state = current_hub();
@@ -385,19 +591,13 @@ SkillOutcome Executor::run_land(
         on_feedback({current_hub(), fb.progress, "land"});
       }
     },
-    std::nullopt,
-    control_token.empty() ? std::nullopt : std::optional<std::string>(control_token)).get();
-
-  if (!acceptance) {
-    outcome.code = "skill.goal_rejected";
-    outcome.message = "land goal was rejected";
-    return outcome;
-  }
-  const auto result = acceptance->result().get();
-  outcome.success = result.code == rclcpp_action::ResultCode::SUCCEEDED &&
-    result.result->success;
-  outcome.code = result.result->code;
-  outcome.message = result.result->message;
+    goal_ttl,
+    control_token.empty() ? std::nullopt : std::optional<std::string>(control_token));
+  outcome = consume_action<chaos_sdk::Robot::FlightTask>(
+    std::move(acceptance), renew, "land goal was rejected",
+    [this]() {return cancellation_requested();},
+    [this](std::string & code, std::string & message) {return renew_lease(code, message);});
+  outcome.hub_state = current_hub();
   return outcome;
 }
 

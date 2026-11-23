@@ -29,6 +29,9 @@ namespace chaos_skill
 /// that the request may be accepted at any time.
 bool deadline_passed(const builtin_interfaces::msg::Time & deadline);
 
+/// Absolute Unix nanoseconds of a deadline, or zero when the deadline is unset.
+std::int64_t deadline_to_ns(const builtin_interfaces::msg::Time & deadline);
+
 /// The topics and the bookkeeping limits of one skill ingress.
 struct IntentIngressOptions
 {

@@ -221,7 +221,10 @@ nlohmann::json vocabulary()
        "arguments_schema": {}},
       {"token": "announce", "entry_hub": "idle", "exit_hub": "idle",
        "capability": "communication", "needs_lease": false, "any_entry_hub": true,
-       "arguments_schema": {"topic": {"type": "string"}}}
+       "arguments_schema": {"topic": {"type": "string"}}},
+      {"token": "hold", "entry_hub": "idle", "exit_hub": "idle",
+       "capability": "motion", "needs_lease": false, "any_entry_hub": true,
+       "arguments_schema": {}}
     ]
   })json");
 }
@@ -516,6 +519,46 @@ TEST_F(SkillLayer, AnExpiredIntentIsRefused)
   EXPECT_EQ(events.front().code, "skill.expired");
   EXPECT_EQ(ingress.executed(), 0u);
   ingress.stop();
+}
+
+TEST_F(SkillLayer, HoldSucceedsWithoutALease)
+{
+  auto skill = make_executor();
+
+  const auto outcome = skill->execute("hold", nlohmann::json::object());
+
+  EXPECT_TRUE(outcome.success) << outcome.message;
+  EXPECT_EQ(outcome.code, "");
+  EXPECT_EQ(outcome.hub_state, "idle");
+  EXPECT_EQ(asset_->lease_acquires_.load(), 0);
+}
+
+TEST_F(SkillLayer, ADirectCommandDoesNotClaimAnIllegalExitHub)
+{
+  auto skill = make_executor(nullptr, "airborne");
+  chaos_skill::SkillOrigin origin;
+  origin.enforce_hub = false;
+
+  const auto outcome = skill->execute(
+    "navigate_to", {{"x", 1.0}, {"y", 0.0}}, nullptr, origin);
+
+  EXPECT_TRUE(outcome.success) << outcome.message;
+  EXPECT_EQ(outcome.hub_state, "airborne");
+  EXPECT_EQ(skill->current_hub(), "airborne");
+}
+
+TEST_F(SkillLayer, AnExpiredOriginIsNotDispatched)
+{
+  auto skill = make_executor();
+  chaos_skill::SkillOrigin origin;
+  origin.deadline_ns = 1;
+
+  const auto outcome = skill->execute("takeoff", {{"altitude_m", 1.0}}, nullptr, origin);
+
+  EXPECT_FALSE(outcome.success);
+  EXPECT_EQ(outcome.code, "skill.expired");
+  EXPECT_EQ(asset_->lease_acquires_.load(), 0);
+  EXPECT_EQ(skill->current_hub(), "idle");
 }
 
 }  // namespace

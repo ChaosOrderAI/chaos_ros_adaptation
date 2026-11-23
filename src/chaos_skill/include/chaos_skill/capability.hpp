@@ -66,6 +66,11 @@ struct SkillOrigin
   /// lease of its own, and it never releases it: the lease belongs to the
   /// caller. The runtime still admits one lease holder at a time.
   std::string control_token;
+  /// Absolute Unix UTC deadline for starting the underlying goal, in
+  /// nanoseconds. Zero means the caller set no transport deadline, and the
+  /// SDK's own start TTL applies. A deadline the caller did set is never
+  /// extended.
+  std::int64_t deadline_ns = 0;
 };
 
 /// The base capabilities the executor may invoke besides the SDK robot.

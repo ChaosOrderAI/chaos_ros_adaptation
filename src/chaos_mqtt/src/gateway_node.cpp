@@ -631,6 +631,16 @@ bool GatewayNode::skill_for_command(
 
 void GatewayNode::send_skill(const Command & command)
 {
+  // The runtime rejects a landing whose altitude is not zero. Dropping the
+  // field here and sending a zero goal would turn that rejection into a landing.
+  if (command.name == "flight.land") {
+    const double altitude = command.arguments.value("altitude_m", 0.0);
+    if (!std::isfinite(altitude) || altitude != 0.0) {
+      service_error(
+        command.request_id, "INVALID_ARGUMENT", "Landing altitude_m must be zero");
+      return;
+    }
+  }
   std::string token;
   Json arguments;
   std::string error;
@@ -761,7 +771,11 @@ void GatewayNode::skill_event_callback(
     Pending * pending = records_.pending(request_id);
     if (!pending) {
       // The correlation was already retired (timeout). The skill may still
-      // run on the robot, but the gateway no longer reports it.
+      // run on the robot, but the gateway no longer reports it. Drop the
+      // bookkeeping too: the terminal event that would have erased it will
+      // not be applied.
+      skill_requests_.erase(request_id);
+      skill_published_at_.erase(request_id);
       return;
     }
     if (message->phase == "accepted") {
@@ -1071,6 +1085,8 @@ void GatewayNode::service_error(const std::string & request_id, const std::strin
     const std::lock_guard<std::mutex> guard(records_mutex_);
     Pending * pending = records_.pending(request_id);
     if (!pending) {
+      skill_requests_.erase(request_id);
+      skill_published_at_.erase(request_id);
       return;
     }
     if (pending->accepted) {
@@ -1085,12 +1101,20 @@ void GatewayNode::service_error(const std::string & request_id, const std::strin
       }
       reply = build_action_reply(*pending, terminal_event);
       goal_ids_.erase(request_id);
+      // A timed-out skill request is finished here and never sees its terminal
+      // SkillEvent, which is the only other place that erases this map. Leaving
+      // the id in it counts the request forever and eventually refuses every
+      // later skill command.
+      skill_requests_.erase(request_id);
+      skill_published_at_.erase(request_id);
       records_.finish(request_id, reply, terminal_event);
     } else {
       reply = response(
         request_id, pending->command.name, false, code, message, "result",
         Json{{"execution_state", "unknown"}});
       goal_ids_.erase(request_id);
+      skill_requests_.erase(request_id);
+      skill_published_at_.erase(request_id);
       records_.finish(request_id, reply);
     }
   }

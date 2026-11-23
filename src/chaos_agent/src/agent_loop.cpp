@@ -1,5 +1,6 @@
 #include "chaos_agent/agent_loop.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <utility>
 
@@ -140,8 +141,24 @@ void AgentLoop::on_event(const chaos_interfaces::msg::SkillEvent::ConstSharedPtr
   {
     const std::lock_guard<std::mutex> guard(mutex_);
     terminal_[event->request_id] = *event;
+    terminal_order_.push_back(event->request_id);
     while (terminal_.size() > kTerminalHistory) {
-      terminal_.erase(terminal_.begin());
+      // Map order is lexicographic, not arrival order, and the request this
+      // loop is waiting on must survive either way.
+      std::string drop;
+      for (const auto & id : terminal_order_) {
+        if (id != outstanding_) {
+          drop = id;
+          break;
+        }
+      }
+      if (drop.empty()) {
+        break;
+      }
+      terminal_.erase(drop);
+      terminal_order_.erase(
+        std::remove(terminal_order_.begin(), terminal_order_.end(), drop),
+        terminal_order_.end());
     }
   }
   signal_.notify_all();
@@ -158,6 +175,9 @@ std::optional<chaos_interfaces::msg::SkillEvent> AgentLoop::await_terminal(
   }
   const auto event = terminal_[request_id];
   terminal_.erase(request_id);
+  terminal_order_.erase(
+    std::remove(terminal_order_.begin(), terminal_order_.end(), request_id),
+    terminal_order_.end());
   return event;
 }
 
@@ -262,20 +282,30 @@ bool AgentLoop::run_once()
   }
 
   // One intent at a time: the skill layer runs one skill at a time, so a
-  // second intent would only be refused as busy.
-  if (!outstanding_.empty()) {
-    const auto event = await_terminal(outstanding_, kSkillResultTimeout);
+  // second intent would only be refused as busy. `outstanding_` is also read
+  // by the event callback, so it is only touched under the mutex.
+  std::string waiting;
+  {
+    const std::lock_guard<std::mutex> guard(mutex_);
+    waiting = outstanding_;
+  }
+  if (!waiting.empty()) {
+    const auto event = await_terminal(waiting, kSkillResultTimeout);
     if (event) {
       adopt(*event);
+      const std::lock_guard<std::mutex> guard(mutex_);
       outstanding_.clear();
       outstanding_waits_ = 0;
       return true;
     }
+    const std::lock_guard<std::mutex> guard(mutex_);
     if (++outstanding_waits_ >= kMaxOutstandingWaits) {
-      // The outcome never arrived. The skill may still be running, so the
-      // loop gives the observation up instead of piling another intent on
-      // top of it.
-      outstanding_.clear();
+      // The outcome never arrived. The skill may still be running, so this
+      // request stays outstanding: clearing it would publish a second intent
+      // on the next iteration.
+      RCLCPP_WARN(node_->get_logger(),
+        "skill %s still has no terminal event; not sending another intent",
+        waiting.c_str());
       outstanding_waits_ = 0;
     }
     return true;
@@ -324,17 +354,26 @@ bool AgentLoop::run_once()
   // vocabulary binds them.
   intent.enforce_hub_precondition = true;
 
+  {
+    // Protect this id from eviction before the publish, so a burst of other
+    // sources' events cannot drop it before await_terminal looks.
+    const std::lock_guard<std::mutex> guard(mutex_);
+    outstanding_ = intent.request_id;
+    outstanding_waits_ = 0;
+  }
   intent_pub_->publish(intent);
 
   const auto event = await_terminal(intent.request_id, kSkillResultTimeout);
   if (!event) {
     // The outcome did not arrive in time. The skill may still be running, so
     // the loop waits for it in the next iteration instead of sending a
-    // second intent.
-    outstanding_ = intent.request_id;
-    outstanding_waits_ = 0;
+    // second intent. `outstanding_` stays set.
     RCLCPP_WARN(node_->get_logger(), "skill %s produced no terminal event", token.c_str());
     return true;
+  }
+  {
+    const std::lock_guard<std::mutex> guard(mutex_);
+    outstanding_.clear();
   }
   adopt(*event);
   RCLCPP_INFO(node_->get_logger(), "skill %s -> %s (hub=%s, code=%s)",

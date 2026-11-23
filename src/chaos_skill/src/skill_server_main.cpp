@@ -188,19 +188,30 @@ private:
 
     chaos_skill::SkillOrigin origin;
     origin.source = goal->token.source;
+    origin.deadline_ns = chaos_skill::deadline_to_ns(goal->expires_at);
 
-    const auto outcome = executor_->execute(
-      goal->token.token, args,
-      [this, handle, &feedback](const chaos_skill::SkillFeedback & fb) {
-        if (!handle->is_active()) {
-          return;
-        }
-        feedback->current_hub = fb.current_hub;
-        feedback->progress = fb.progress;
-        feedback->code = fb.code;
-        handle->publish_feedback(feedback);
-      },
-      origin);
+    chaos_skill::SkillOutcome outcome;
+    try {
+      // `feedback` is captured by value: the SDK invokes this callback on
+      // another thread, possibly after run_goal has returned.
+      outcome = executor_->execute(
+        goal->token.token, args,
+        [this, handle, feedback](const chaos_skill::SkillFeedback & fb) {
+          if (!handle->is_active()) {
+            return;
+          }
+          feedback->current_hub = fb.current_hub;
+          feedback->progress = fb.progress;
+          feedback->code = fb.code;
+          handle->publish_feedback(feedback);
+        },
+        origin);
+    } catch (const std::exception & error) {
+      outcome.success = false;
+      outcome.code = "skill.internal_error";
+      outcome.message = error.what();
+      outcome.hub_state = executor_->current_hub();
+    }
 
     if (!handle->is_active()) {
       return;
@@ -240,7 +251,36 @@ private:
       response->message = *err;
       return;
     }
+
+    nlohmann::json args = nlohmann::json::object();
+    if (!request->token.arguments_json.empty()) {
+      try {
+        args = nlohmann::json::parse(request->token.arguments_json);
+      } catch (const std::exception & error) {
+        response->accepted = false;
+        response->code = "skill.args_invalid";
+        response->message = error.what();
+        return;
+      }
+    }
+
+    chaos_skill::SkillOrigin origin;
+    origin.source = request->token.source;
+    origin.deadline_ns = chaos_skill::deadline_to_ns(request->expires_at);
+    const auto token = request->token.token;
+    // The service only reports acceptance. The skill itself runs off this
+    // callback: blocking the node executor would stall every other subscription.
+    std::thread([this, token, args, origin] {
+      try {
+        executor_->execute(token, args, nullptr, origin);
+      } catch (const std::exception & error) {
+        RCLCPP_ERROR(get_logger(), "skill_request %s failed: %s",
+          token.c_str(), error.what());
+      }
+    }).detach();
     response->accepted = true;
+    response->code = "ACCEPTED";
+    response->message = "skill accepted";
   }
 
   std::shared_ptr<chaos_sdk::Robot> robot_;

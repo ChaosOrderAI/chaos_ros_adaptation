@@ -21,6 +21,15 @@ bool deadline_passed(const builtin_interfaces::msg::Time & deadline)
   return now > limit;
 }
 
+std::int64_t deadline_to_ns(const builtin_interfaces::msg::Time & deadline)
+{
+  if (deadline.sec == 0 && deadline.nanosec == 0) {
+    return 0;
+  }
+  return static_cast<std::int64_t>(deadline.sec) * 1000000000LL +
+    static_cast<std::int64_t>(deadline.nanosec);
+}
+
 namespace
 {
 
@@ -72,10 +81,16 @@ void IntentIngress::start()
 
 void IntentIngress::stop()
 {
-  if (!running_.exchange(false)) {
-    return;
+  {
+    // The worker waits on `signal_` with `mutex_` held and rechecks `running_`
+    // under that lock. Clearing the flag without the lock loses the wakeup and
+    // the join hangs.
+    const std::lock_guard<std::mutex> guard(mutex_);
+    if (!running_.exchange(false)) {
+      return;
+    }
+    signal_.notify_all();
   }
-  signal_.notify_all();
   if (worker_.joinable()) {
     worker_.join();
   }
@@ -265,6 +280,20 @@ void IntentIngress::execute(const chaos_interfaces::msg::SkillIntent & intent)
     }
   }
 
+  // The deadline was checked when the intent was queued. It can pass while
+  // the intent waits behind another skill, and the transport has by then
+  // already told the operator the command expired.
+  if (deadline_passed(intent.expires_at)) {
+    auto event = base_event(intent, "failed");
+    event.code = "skill.expired";
+    event.message = "the intent expired before it was accepted";
+    event.hub_state = executor_.current_hub();
+    finish(intent.request_id, event);
+    publish(event);
+    refused_.fetch_add(1);
+    return;
+  }
+
   auto accepted = base_event(intent, "accepted");
   accepted.hub_state = executor_.current_hub();
   publish(accepted);
@@ -274,10 +303,13 @@ void IntentIngress::execute(const chaos_interfaces::msg::SkillIntent & intent)
   origin.source = intent.token.source;
   origin.enforce_hub = intent.enforce_hub_precondition;
   origin.control_token = intent.control_token;
+  origin.deadline_ns = deadline_to_ns(intent.expires_at);
 
+  // Copy the intent into the callback. The SDK runs feedback later, on a
+  // dispatcher thread, and that call can outlive this stack frame.
   const auto outcome = executor_.execute(
     intent.token.token, args,
-    [this, &intent](const SkillFeedback & feedback) {
+    [this, intent](const SkillFeedback & feedback) {
       auto event = base_event(intent, "feedback");
       event.hub_state = feedback.current_hub;
       event.progress = feedback.progress;

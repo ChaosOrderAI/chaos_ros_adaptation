@@ -52,7 +52,7 @@ struct SkillFeedback
 /// motion and navigation go through the SDK robot, sensors and communication
 /// go through the CapabilityPorts. It never talks to a broker or a driver.
 ///
-/// A skill with `needs_lease` acquires a short lease before dispatch and
+/// A skill with `needs_lease` acquires a lease before dispatch, renews it until the goal finishes, and
 /// releases it when the SDK goal reaches a terminal state. A skill that fails
 /// to reach its exit hub leaves the asset in the hub it actually stopped in
 /// (which for motion skills is the entry hub after a controlled stop).
@@ -116,17 +116,24 @@ public:
 private:
   SkillOutcome run_navigate(
     const nlohmann::json & args, const FeedbackFn & on_feedback,
-    const std::string & control_token);
+    const std::string & control_token, const std::optional<double> & goal_ttl,
+    bool renew);
   SkillOutcome run_takeoff(
     const nlohmann::json & args, const FeedbackFn & on_feedback,
-    const std::string & control_token);
-  SkillOutcome run_land(const FeedbackFn & on_feedback, const std::string & control_token);
+    const std::string & control_token, const std::optional<double> & goal_ttl,
+    bool renew);
+  SkillOutcome run_land(
+    const FeedbackFn & on_feedback, const std::string & control_token,
+    const std::optional<double> & goal_ttl, bool renew);
   SkillOutcome run_hold(const FeedbackFn & on_feedback);
   SkillOutcome run_stop_motion(const FeedbackFn & on_feedback, const std::string & control_token);
   SkillOutcome run_observe(const nlohmann::json & args);
   SkillOutcome run_announce(const nlohmann::json & args, const SkillOrigin & origin);
 
   bool ensure_lease(std::string & code, std::string & message);
+  /// Extend the lease this executor acquired. A caller's lease is never renewed.
+  bool renew_lease(std::string & code, std::string & message);
+  bool cancellation_requested() const;
   void release_lease();
 
   std::shared_ptr<chaos_sdk::Robot> robot_;

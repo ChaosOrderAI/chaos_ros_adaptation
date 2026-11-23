@@ -3,6 +3,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -100,6 +101,9 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable signal_;
   std::map<std::string, chaos_interfaces::msg::SkillEvent> terminal_;
+  /// Insertion order of `terminal_`. Eviction drops the oldest event that is
+  /// not the request the loop is waiting on; map order is not that order.
+  std::deque<std::string> terminal_order_;
   /// The request whose outcome did not arrive in time. The skill may still be
   /// running, so the loop waits for it instead of sending a second intent.
   std::string outstanding_;
