@@ -34,7 +34,7 @@
     },
     {
       "token": "stop",
-      "description": "Immediately stop all motion and release the lease",
+      "description": "Stop motion now. If another skill is running, cancel it and stop; this token is not rejected as busy",
       "entry_hub": "idle",
       "exit_hub": "idle",
       "capability": "motion",

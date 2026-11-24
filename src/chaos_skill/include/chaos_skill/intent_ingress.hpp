@@ -60,6 +60,10 @@ struct IntentIngressOptions
 ///
 /// The ingress never decides what a skill means; the vocabulary and the
 /// executor own that. It only decides whether an intent may start.
+///
+/// "stop" may start while another skill is running. It is not queued behind
+/// that skill and it is not refused as busy: a thread beside the worker
+/// cancels the running skill and issues the platform stop.
 class IntentIngress
 {
 public:
@@ -87,6 +91,9 @@ private:
   void on_intent(const chaos_interfaces::msg::SkillIntent::ConstSharedPtr & intent);
   void run();
   void execute(const chaos_interfaces::msg::SkillIntent & intent);
+  /// Run one intent beside the worker. The previous interruption is joined
+  /// first, so two stops cannot both sit in the SDK client.
+  void interrupt(chaos_interfaces::msg::SkillIntent intent);
   void publish(const chaos_interfaces::msg::SkillEvent & event);
   /// Record the terminal event of a request and release its pending slot.
   void finish(const std::string & request_id, const chaos_interfaces::msg::SkillEvent & event);
@@ -100,6 +107,8 @@ private:
   rclcpp::Subscription<chaos_interfaces::msg::SkillIntent>::SharedPtr subscription_;
   rclcpp::Publisher<chaos_interfaces::msg::SkillEvent>::SharedPtr publisher_;
   std::thread worker_;
+  /// The stop that is interrupting the skill the worker is inside.
+  std::thread interrupt_thread_;
   std::mutex mutex_;
   std::condition_variable signal_;
   std::deque<chaos_interfaces::msg::SkillIntent> queue_;

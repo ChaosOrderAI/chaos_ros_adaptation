@@ -388,6 +388,7 @@ void Executor::release_reservation()
 {
   const std::lock_guard<std::mutex> guard(state_mutex_);
   busy_ = false;
+  active_lease_token_.clear();
 }
 
 SkillOutcome Executor::execute(
@@ -406,16 +407,39 @@ SkillOutcome Executor::execute(
 
   // One skill runs at a time. The reservation is taken before the lease and
   // before the dispatch, so two callers can never both pass the check.
+  // "stop" is the exception: it cancels the skill that holds the reservation
+  // and stops on that skill's lease, instead of waiting behind it.
+  bool interrupting = false;
+  std::string held_token;
   {
     const std::lock_guard<std::mutex> guard(state_mutex_);
     outcome.hub_state = hub_;
     if (busy_) {
-      outcome.code = "skill.busy";
-      outcome.message = "another skill is already running";
+      if (token != "stop") {
+        outcome.code = "skill.busy";
+        outcome.message = "another skill is already running";
+        return outcome;
+      }
+      cancel_requested_ = true;
+      interrupting = true;
+      held_token = active_lease_token_;
+    } else {
+      busy_ = true;
+      cancel_requested_ = false;
+      active_lease_token_ = origin.control_token;
+    }
+  }
+  if (interrupting) {
+    // Do not take the reservation and do not write the exit hub. The skill
+    // that is still running owns both; it leaves on the cancel path.
+    try {
+      return run_stop_motion(on_feedback, held_token);
+    } catch (const std::exception & error) {
+      outcome.code = "skill.stop_failed";
+      outcome.message = error.what();
+      outcome.hub_state = current_hub();
       return outcome;
     }
-    busy_ = true;
-    cancel_requested_ = false;
   }
   const ReservationGuard reservation(this);
 

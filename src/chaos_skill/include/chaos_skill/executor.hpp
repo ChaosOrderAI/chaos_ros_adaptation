@@ -59,9 +59,11 @@ struct SkillFeedback
 ///
 /// Thread safety: one Executor serves one robot and runs one skill at a time.
 /// A call that arrives while another skill runs is rejected with
-/// "skill.busy" instead of waiting. The hub, the busy flag and the lease
-/// bookkeeping are guarded by one mutex, so a reader never observes a
-/// half-updated hub; the long SDK calls run outside that mutex.
+/// "skill.busy" instead of waiting, except "stop": that token cancels the
+/// running skill and issues the platform stop on the lease the skill already
+/// holds. The hub, the busy flag and the lease bookkeeping are guarded by one
+/// mutex, so a reader never observes a half-updated hub; the long SDK calls
+/// run outside that mutex.
 class Executor
 {
 public:
@@ -145,6 +147,9 @@ private:
   bool busy_ = false;
   bool cancel_requested_ = false;
   bool lease_acquired_ = false;
+  /// Lease token the running skill was given by its caller. Empty when this
+  /// executor acquired the lease itself; the SDK client then holds the token.
+  std::string active_lease_token_;
 };
 
 }  // namespace chaos_skill

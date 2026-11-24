@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <utility>
 
 namespace chaos_agent
@@ -196,6 +197,15 @@ void AgentLoop::adopt(const chaos_interfaces::msg::SkillEvent & event)
     {"code", event.code},
     {"message", event.message},
   };
+  // observe reports the pose and the sensor stamps here. Dropping the payload
+  // made the next decision look like the skill had returned nothing.
+  if (!event.payload_json.empty()) {
+    try {
+      last_result_["payload"] = nlohmann::json::parse(event.payload_json);
+    } catch (const std::exception &) {
+      last_result_["payload"] = event.payload_json;
+    }
+  }
 }
 
 nlohmann::json AgentLoop::build_user_content() const
@@ -218,6 +228,24 @@ nlohmann::json AgentLoop::build_user_content() const
           {"x", state->pose.pose.position.x},
           {"y", state->pose.pose.position.y},
           {"z", state->pose.pose.position.z},
+          {"qx", state->pose.pose.orientation.x},
+          {"qy", state->pose.pose.orientation.y},
+          {"qz", state->pose.pose.orientation.z},
+          {"qw", state->pose.pose.orientation.w},
+          // navigate_to takes a yaw. The quaternion alone leaves the planner to
+          // re-derive the one number the skill actually consumes.
+          {"yaw", std::atan2(
+              2.0 * (state->pose.pose.orientation.w * state->pose.pose.orientation.z +
+              state->pose.pose.orientation.x * state->pose.pose.orientation.y),
+              1.0 - 2.0 * (state->pose.pose.orientation.y * state->pose.pose.orientation.y +
+              state->pose.pose.orientation.z * state->pose.pose.orientation.z))},
+        }},
+      {"twist", {
+          {"frame_id", state->twist.header.frame_id},
+          {"linear_x", state->twist.twist.linear.x},
+          {"linear_y", state->twist.twist.linear.y},
+          {"linear_z", state->twist.twist.linear.z},
+          {"angular_z", state->twist.twist.angular.z},
         }},
     };
   } else {

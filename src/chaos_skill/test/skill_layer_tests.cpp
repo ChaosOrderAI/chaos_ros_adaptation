@@ -22,6 +22,7 @@
 #include "chaos_interfaces/msg/skill_event.hpp"
 #include "chaos_interfaces/msg/skill_intent.hpp"
 #include "chaos_interfaces/srv/control_lease.hpp"
+#include "chaos_interfaces/srv/stop.hpp"
 #include "chaos_interfaces/srv/get_description.hpp"
 #include "chaos_sdk/robot.hpp"
 #include "chaos_skill/executor.hpp"
@@ -110,7 +111,44 @@ public:
         result->success = true;
         result->code = "OK";
         result->message = "arrived";
-        handle->succeed(result);
+        if (!hold_navigation_.load()) {
+          handle->succeed(result);
+          return;
+        }
+        // The goal callback has to return, or this single-threaded executor
+        // never observes the cancel. The wait lives on its own thread.
+        if (navigation_wait_.joinable()) {
+          navigation_wait_.join();
+        }
+        navigation_wait_ = std::thread([this, handle, result]() {
+          navigation_entered_.store(true);
+          while (rclcpp::ok() && hold_navigation_.load() && !handle->is_canceling()) {
+            std::this_thread::sleep_for(20ms);
+          }
+          if (handle->is_canceling()) {
+            result->success = false;
+            result->code = "CANCELED";
+            result->message = "cancelled";
+            handle->canceled(result);
+            return;
+          }
+          handle->succeed(result);
+        });
+      });
+
+    stop_ = create_service<chaos_interfaces::srv::Stop>(
+      "motion/stop",
+      [this](
+        const std::shared_ptr<chaos_interfaces::srv::Stop::Request> request,
+        std::shared_ptr<chaos_interfaces::srv::Stop::Response> response) {
+        {
+          const std::lock_guard<std::mutex> guard(mutex_);
+          last_stop_lease_ = request->lease_token;
+        }
+        ++stops_;
+        response->success = true;
+        response->code = "OK";
+        response->message = "stopped";
       });
 
     takeoff_ = rclcpp_action::create_server<chaos_interfaces::action::Flight>(
@@ -153,8 +191,29 @@ public:
       });
   }
 
+  ~MockAsset() override
+  {
+    hold_navigation_.store(false);
+    if (navigation_wait_.joinable()) {
+      navigation_wait_.join();
+    }
+  }
+
   std::atomic<int> lease_acquires_{0};
   std::atomic<int> lease_releases_{0};
+  std::atomic<int> stops_{0};
+  /// When set, a navigation goal waits until it is cleared or the goal is cancelled.
+  std::atomic<bool> hold_navigation_{false};
+  std::atomic<bool> navigation_entered_{false};
+
+  /// Let a held navigation goal finish, and wait until its thread has left.
+  void release_navigation()
+  {
+    hold_navigation_.store(false);
+    if (navigation_wait_.joinable()) {
+      navigation_wait_.join();
+    }
+  }
 
   std::string last_flight_lease()
   {
@@ -192,6 +251,9 @@ private:
   rclcpp::Publisher<chaos_interfaces::msg::RobotState>::SharedPtr state_pub_;
   rclcpp::TimerBase::SharedPtr state_timer_;
   rclcpp_action::Server<chaos_interfaces::action::NavigatePose>::SharedPtr navigation_;
+  rclcpp::Service<chaos_interfaces::srv::Stop>::SharedPtr stop_;
+  std::thread navigation_wait_;
+  std::string last_stop_lease_;
   rclcpp_action::Server<chaos_interfaces::action::Flight>::SharedPtr takeoff_;
   rclcpp_action::Server<chaos_interfaces::action::Flight>::SharedPtr land_;
   std::mutex mutex_;
@@ -224,6 +286,9 @@ nlohmann::json vocabulary()
        "arguments_schema": {"topic": {"type": "string"}}},
       {"token": "hold", "entry_hub": "idle", "exit_hub": "idle",
        "capability": "motion", "needs_lease": false, "any_entry_hub": true,
+       "arguments_schema": {}},
+      {"token": "stop", "entry_hub": "idle", "exit_hub": "idle",
+       "capability": "motion", "needs_lease": true, "any_entry_hub": true,
        "arguments_schema": {}}
     ]
   })json");
@@ -254,6 +319,9 @@ protected:
 
   void TearDown() override
   {
+    if (asset_) {
+      asset_->release_navigation();
+    }
     if (robot_) {
       robot_->close();
     }
@@ -559,6 +627,109 @@ TEST_F(SkillLayer, AnExpiredOriginIsNotDispatched)
   EXPECT_EQ(outcome.code, "skill.expired");
   EXPECT_EQ(asset_->lease_acquires_.load(), 0);
   EXPECT_EQ(skill->current_hub(), "idle");
+}
+
+TEST_F(SkillLayer, StopCancelsTheSkillThatIsAlreadyRunning)
+{
+  asset_->hold_navigation_.store(true);
+  auto skill = make_executor();
+
+  chaos_skill::SkillOutcome navigation;
+  std::thread runner([&]() {
+    navigation = skill->execute("navigate_to", {{"x", 1.0}, {"y", 0.0}});
+  });
+  for (int i = 0; i < 100 && !asset_->navigation_entered_.load(); ++i) {
+    std::this_thread::sleep_for(20ms);
+  }
+  ASSERT_TRUE(asset_->navigation_entered_.load());
+
+  const auto stopped = skill->execute("stop", nlohmann::json::object());
+  runner.join();
+
+  EXPECT_TRUE(stopped.success) << stopped.message;
+  EXPECT_FALSE(navigation.success);
+  EXPECT_EQ(navigation.code, "skill.cancelled");
+  EXPECT_GE(asset_->stops_.load(), 1);
+  EXPECT_EQ(skill->current_hub(), "idle");
+}
+
+TEST_F(SkillLayer, AStopIntentIsNotRefusedWhileASkillIsRunning)
+{
+  asset_->hold_navigation_.store(true);
+  auto skill = make_executor();
+  chaos_skill::IntentIngress ingress(node_, *skill);
+  ingress.start();
+
+  auto events = std::vector<chaos_interfaces::msg::SkillEvent>();
+  std::mutex mutex;
+  std::condition_variable signal;
+  auto sub = node_->create_subscription<chaos_interfaces::msg::SkillEvent>(
+    "skill_event", 10,
+    [&](chaos_interfaces::msg::SkillEvent::ConstSharedPtr message) {
+      {
+        const std::lock_guard<std::mutex> guard(mutex);
+        events.push_back(*message);
+      }
+      signal.notify_all();
+    });
+
+  auto publisher = node_->create_publisher<chaos_interfaces::msg::SkillIntent>("skill_intent", 10);
+  auto navigate = chaos_interfaces::msg::SkillIntent();
+  navigate.token.token = "navigate_to";
+  navigate.token.arguments_json = R"({"x": 1.0, "y": 0.0})";
+  navigate.request_id = "req-nav";
+  navigate.enforce_hub_precondition = true;
+  publisher->publish(navigate);
+
+  for (int i = 0; i < 100 && !asset_->navigation_entered_.load(); ++i) {
+    std::this_thread::sleep_for(20ms);
+  }
+  ASSERT_TRUE(asset_->navigation_entered_.load());
+
+  auto stop = chaos_interfaces::msg::SkillIntent();
+  stop.token.token = "stop";
+  stop.request_id = "req-stop";
+  stop.enforce_hub_precondition = false;
+  publisher->publish(stop);
+
+  std::unique_lock<std::mutex> lock(mutex);
+  ASSERT_TRUE(signal.wait_for(lock, 10s, [&]() {
+    bool stop_done = false;
+    bool navigation_done = false;
+    for (const auto & event : events) {
+      if (event.request_id == "req-stop" &&
+        (event.phase == "succeeded" || event.phase == "failed"))
+      {
+        stop_done = true;
+      }
+      if (event.request_id == "req-nav" &&
+        (event.phase == "succeeded" || event.phase == "failed"))
+      {
+        navigation_done = true;
+      }
+    }
+    return stop_done && navigation_done;
+  }));
+  lock.unlock();
+
+  for (const auto & event : events) {
+    if (event.request_id == "req-stop") {
+      EXPECT_NE(event.code, "skill.busy");
+    }
+  }
+  bool stop_succeeded = false;
+  bool navigation_cancelled = false;
+  for (const auto & event : events) {
+    if (event.request_id == "req-stop" && event.phase == "succeeded") {
+      stop_succeeded = true;
+    }
+    if (event.request_id == "req-nav" && event.code == "skill.cancelled") {
+      navigation_cancelled = true;
+    }
+  }
+  EXPECT_TRUE(stop_succeeded);
+  EXPECT_TRUE(navigation_cancelled);
+  ingress.stop();
 }
 
 }  // namespace

@@ -94,6 +94,17 @@ void IntentIngress::stop()
   if (worker_.joinable()) {
     worker_.join();
   }
+  // The interruption calls into the executor and the publisher. Join it before
+  // either is torn down, and after the worker: a stop is what lets a skill
+  // the worker is inside return.
+  std::thread interruption;
+  {
+    const std::lock_guard<std::mutex> guard(mutex_);
+    interruption = std::move(interrupt_thread_);
+  }
+  if (interruption.joinable()) {
+    interruption.join();
+  }
   // The queued intents never ran, so their sources get a terminal event
   // instead of waiting for their own timeout.
   std::deque<chaos_interfaces::msg::SkillIntent> abandoned;
@@ -201,6 +212,22 @@ void IntentIngress::on_intent(
     }
   }
   if (executor_.busy()) {
+    // stop is the one token that has to run while the worker is inside another
+    // skill. Queuing it would leave it behind that skill, and refusing it
+    // leaves the motion running. The callback itself must not wait on the SDK.
+    if (intent->token.token == "stop") {
+      {
+        const std::lock_guard<std::mutex> guard(mutex_);
+        if (!intent->request_id.empty() && pending_.count(intent->request_id) != 0) {
+          return;
+        }
+        if (!intent->request_id.empty()) {
+          pending_.insert(intent->request_id);
+        }
+      }
+      interrupt(*intent);
+      return;
+    }
     auto event = base_event(*intent, "failed");
     event.code = "skill.busy";
     event.message = "another skill is already running";
@@ -259,6 +286,31 @@ void IntentIngress::run()
       publish(event);
       release(intent.request_id);
     }
+  }
+}
+
+void IntentIngress::interrupt(chaos_interfaces::msg::SkillIntent intent)
+{
+  std::thread next([this, intent = std::move(intent)]() {
+    try {
+      execute(intent);
+    } catch (const std::exception & error) {
+      auto event = base_event(intent, "failed");
+      event.code = "skill.internal_error";
+      event.message = error.what();
+      event.hub_state = executor_.current_hub();
+      publish(event);
+      release(intent.request_id);
+    }
+  });
+  std::thread previous;
+  {
+    const std::lock_guard<std::mutex> guard(mutex_);
+    previous = std::move(interrupt_thread_);
+    interrupt_thread_ = std::move(next);
+  }
+  if (previous.joinable()) {
+    previous.join();
   }
 }
 
