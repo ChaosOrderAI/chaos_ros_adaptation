@@ -4,9 +4,10 @@
   <name>chaos_time_sync</name>
   <version>0.1.0</version>
   <description>
-    Minimal host-side client for the InfiniteSense SimpleSensorSync board:
+    Host-side client for the InfiniteSense SimpleSensorSync board:
     PTP-like clock exchange over UDP, trigger and IMU stream decoding, and
-    diagnostics. Deliberately independent of the vendor SDK (GPL-3.0, broken
+    diagnostics, plus trigger-to-frame pairing for externally triggered
+    cameras. Deliberately independent of the vendor SDK (GPL-3.0, broken
     colcon build): only the published JSON protocol is reimplemented here.
   </description>
   <maintainer email="yunze@example.com">yunze</maintainer>
@@ -18,6 +19,7 @@
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>diagnostic_msgs</depend>
+  <depend>image_transport</depend>
   <depend>chaos_interfaces</depend>
   <depend>nlohmann_json</depend>
 

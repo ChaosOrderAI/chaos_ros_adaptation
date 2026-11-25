@@ -39,7 +39,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 
-namespace chaos_thermal_fusion
+namespace chaos_sensors
 {
 
 class At600SplitNode : public rclcpp::Node
@@ -321,13 +321,13 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr visible_pub_;
 };
 
-}  // namespace chaos_thermal_fusion
+}  // namespace chaos_sensors
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   try {
-    rclcpp::spin(std::make_shared<chaos_thermal_fusion::At600SplitNode>());
+    rclcpp::spin(std::make_shared<chaos_sensors::At600SplitNode>());
   } catch (const std::exception & err) {
     RCLCPP_FATAL(rclcpp::get_logger("at600_split_node"), "%s", err.what());
     rclcpp::shutdown();

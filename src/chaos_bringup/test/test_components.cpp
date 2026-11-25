@@ -451,7 +451,7 @@ TEST(Components, ABoardTriggerCameraGetsATriggerPairProcess) {
       chaos::bringup::time_sync_processes(item);
   ASSERT_EQ(processes.size(), 1u);
   const auto& pair = processes.at(0);
-  EXPECT_EQ(pair.package, "chaos_camera_trigger");
+  EXPECT_EQ(pair.package, "chaos_time_sync");
   EXPECT_EQ(pair.executable, "trigger_pair_node");
   EXPECT_EQ(pair.name, "trigger_pair");
   EXPECT_EQ(pair.node_namespace, "/robots/unit/sensors/front_camera");

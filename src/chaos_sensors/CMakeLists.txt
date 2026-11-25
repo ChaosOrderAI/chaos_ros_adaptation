@@ -8,6 +8,9 @@ find_package(sensor_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(image_transport REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc features2d calib3d imgcodecs)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,14 +50,25 @@ target_link_libraries(mock_sensor PRIVATE chaos_sensors_ros)
 add_executable(sensor_monitor src/sensor_monitor_main.cpp)
 target_link_libraries(sensor_monitor PRIVATE chaos_sensors_ros)
 
+foreach(thermal_target at600_split_node thermal_fusion_node thermal_register_calib)
+  add_executable(${thermal_target} src/${thermal_target}.cpp)
+  target_include_directories(${thermal_target} PRIVATE ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(${thermal_target} ${OpenCV_LIBS})
+  ament_target_dependencies(${thermal_target} rclcpp sensor_msgs cv_bridge)
+endforeach()
+ament_target_dependencies(thermal_fusion_node image_transport)
+ament_target_dependencies(thermal_register_calib image_transport)
+
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS chaos_sensors_health chaos_sensors_config chaos_sensors_ros
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
-install(TARGETS mock_sensor sensor_monitor
+install(TARGETS mock_sensor sensor_monitor at600_split_node thermal_fusion_node
+  thermal_register_calib
   DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
 ament_export_dependencies(chaos_core rclcpp sensor_msgs diagnostic_msgs std_msgs nlohmann_json)

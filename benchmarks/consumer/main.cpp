@@ -6,7 +6,7 @@
 #include "chaos_assets/yaml.hpp"
 #include "chaos_bringup/planner.hpp"
 #include "chaos_sdk/robot.hpp"
-#include "chaos_bt/nodes.hpp"
+#include "chaos_sdk/bt/nodes.hpp"
 #include "chaos_mqtt/protocol.hpp"
 #include "chaos_data/export.hpp"
 #include "chaos_data/ros_message.hpp"
@@ -30,7 +30,7 @@ int main() {
   if (!reply.is_object()) return 5;
   auto * volatile export_entry = &chaos::data::exportDataset;
   auto * volatile sdk_entry = &chaos_sdk::Robot::create_standalone;
-  auto * volatile bt_entry = &chaos_bt::register_nodes;
+  auto * volatile bt_entry = &chaos_sdk::bt::register_nodes;
   (void)export_entry;
   (void)sdk_entry;
   (void)bt_entry;

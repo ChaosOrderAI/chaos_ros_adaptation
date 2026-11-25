@@ -22,7 +22,7 @@ assets:
         frame_id: vehicle_001_ir_camera_link
         driver:
           mode: node
-          package: chaos_thermal_fusion
+          package: chaos_sensors
           executable: at600_split_node
           parameters:
             device: /dev/v4l/by-id/usb-IRay_AT600-video-index0

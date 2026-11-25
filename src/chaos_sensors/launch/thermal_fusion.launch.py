@@ -18,7 +18,7 @@ def generate_launch_description():
         DeclareLaunchArgument('alpha', default_value='0.6'),
         DeclareLaunchArgument('colormap', default_value='inferno'),
         Node(
-            package='chaos_thermal_fusion',
+            package='chaos_sensors',
             executable='at600_split_node',
             name='at600_split_node',
             parameters=[{
@@ -29,7 +29,7 @@ def generate_launch_description():
             output='screen',
         ),
         Node(
-            package='chaos_thermal_fusion',
+            package='chaos_sensors',
             executable='thermal_fusion_node',
             name='thermal_fusion_node',
             parameters=[{

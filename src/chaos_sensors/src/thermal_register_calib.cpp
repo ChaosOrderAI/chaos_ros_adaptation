@@ -5,12 +5,12 @@
 // writes it as a ROS 2 parameter file that thermal_fusion_node can consume
 // directly:
 //
-//   ros2 run chaos_thermal_fusion thermal_register_calib --ros-args \
+//   ros2 run chaos_sensors thermal_register_calib --ros-args \
 //     -p thermal_topic:=/thermal/image_raw \
 //     -p visible_topic:=/visible/image_raw \
 //     -p output_file:=/tmp/thermal_homography.yaml
 //
-//   ros2 run chaos_thermal_fusion thermal_fusion_node --ros-args \
+//   ros2 run chaos_sensors thermal_fusion_node --ros-args \
 //     --params-file /tmp/thermal_homography.yaml
 //
 // With the AT600's own halves the calibration should come back close to the
@@ -35,7 +35,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 
-namespace chaos_thermal_fusion
+namespace chaos_sensors
 {
 
 class ThermalRegisterCalib : public rclcpp::Node
@@ -284,12 +284,12 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
 };
 
-}  // namespace chaos_thermal_fusion
+}  // namespace chaos_sensors
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<chaos_thermal_fusion::ThermalRegisterCalib>());
+  rclcpp::spin(std::make_shared<chaos_sensors::ThermalRegisterCalib>());
   rclcpp::shutdown();
   return 0;
 }

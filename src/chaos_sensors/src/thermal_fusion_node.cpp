@@ -30,7 +30,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 
-namespace chaos_thermal_fusion
+namespace chaos_sensors
 {
 
 namespace
@@ -332,12 +332,12 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
 };
 
-}  // namespace chaos_thermal_fusion
+}  // namespace chaos_sensors
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<chaos_thermal_fusion::ThermalFusionNode>());
+  rclcpp::spin(std::make_shared<chaos_sensors::ThermalFusionNode>());
   rclcpp::shutdown();
   return 0;
 }

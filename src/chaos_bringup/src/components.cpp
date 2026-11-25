@@ -410,7 +410,7 @@ void preflight(const LaunchPlan& plan, const PreflightOptions& options) {
         if (sensor->at("kind").get_ref<const std::string&>() == "camera" &&
           time_sync->at("source").get_ref<const std::string&>() == "board_trigger")
         {
-          dependencies.insert({"chaos_camera_trigger", "trigger_pair_node"});
+          dependencies.insert({"chaos_time_sync", "trigger_pair_node"});
         }
       }
     }
@@ -684,7 +684,7 @@ std::vector<ProcessSpec> time_sync_processes(const Json& item) {
 
     ProcessSpec spec;
     spec.label = "Camera trigger " + asset_id + "/" + sensor_id;
-    spec.package = "chaos_camera_trigger";
+    spec.package = "chaos_time_sync";
     spec.executable = "trigger_pair_node";
     spec.name = "trigger_pair";
     spec.node_namespace = ns;

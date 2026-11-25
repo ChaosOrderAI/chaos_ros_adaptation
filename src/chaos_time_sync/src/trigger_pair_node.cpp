@@ -40,7 +40,7 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 
-namespace chaos_camera_trigger
+namespace chaos_time_sync
 {
 
 namespace
@@ -264,7 +264,7 @@ private:
     diagnostic_msgs::msg::DiagnosticArray array;
     array.header.stamp = now();
     diagnostic_msgs::msg::DiagnosticStatus status;
-    status.name = "chaos_camera_trigger: pairing";
+    status.name = "chaos_time_sync: pairing";
     status.hardware_id = image_topic_;
     std::string message = "paired";
     uint8_t level = diagnostic_msgs::msg::DiagnosticStatus::OK;
@@ -342,13 +342,13 @@ private:
   rclcpp::TimerBase::SharedPtr diag_timer_;
 };
 
-}  // namespace chaos_camera_trigger
+}  // namespace chaos_time_sync
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   try {
-    rclcpp::spin(std::make_shared<chaos_camera_trigger::TriggerPairNode>());
+    rclcpp::spin(std::make_shared<chaos_time_sync::TriggerPairNode>());
   } catch (const std::exception & err) {
     RCLCPP_FATAL(rclcpp::get_logger("trigger_pair"), "%s", err.what());
     rclcpp::shutdown();

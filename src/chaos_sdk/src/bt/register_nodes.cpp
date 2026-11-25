@@ -1,9 +1,9 @@
-#include "chaos_bt/nodes.hpp"
+#include "chaos_sdk/bt/nodes.hpp"
 
 #include <stdexcept>
 #include <utility>
 
-namespace chaos_bt
+namespace chaos_sdk::bt
 {
 
 void register_nodes(
@@ -29,4 +29,4 @@ void register_nodes(
     });
 }
 
-}  // namespace chaos_bt
+}  // namespace chaos_sdk::bt

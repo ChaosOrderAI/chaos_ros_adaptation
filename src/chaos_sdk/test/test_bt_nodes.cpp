@@ -13,7 +13,7 @@
 #include <behaviortree_cpp/action_node.h>
 #include <behaviortree_cpp/bt_factory.h>
 
-#include "chaos_bt/nodes.hpp"
+#include "chaos_sdk/bt/nodes.hpp"
 #include "chaos_sdk/robot.hpp"
 #include "controlled_action_server.hpp"
 
@@ -34,12 +34,12 @@ protected:
 
   void SetUp() override
   {
-    server_ = std::make_unique<chaos_bt::test::ActionServer>();
+    server_ = std::make_unique<chaos_sdk::bt::test::ActionServer>();
     robot_ = std::make_shared<chaos_sdk::Robot>(server_->node(), "test");
     auto lease = robot_->acquire("operator", 5.0);
     ASSERT_EQ(std::future_status::ready, lease.wait_for(5s));
     ASSERT_TRUE(lease.get().success);
-    chaos_bt::register_nodes(factory_, robot_);
+    chaos_sdk::bt::register_nodes(factory_, robot_);
   }
 
   void TearDown() override
@@ -56,7 +56,7 @@ protected:
     return std::move(tree_);
   }
 
-  std::unique_ptr<chaos_bt::test::ActionServer> server_;
+  std::unique_ptr<chaos_sdk::bt::test::ActionServer> server_;
   std::shared_ptr<chaos_sdk::Robot> robot_;
   BT::BehaviorTreeFactory factory_;
   BT::Tree tree_;
@@ -335,7 +335,7 @@ TEST_F(NodeTest, AMissingLeaseIsAConfigurationError)
   // instead of claiming that the remote action failed.
   auto robot = std::make_shared<chaos_sdk::Robot>(server_->node(), "no_lease");
   BT::BehaviorTreeFactory factory;
-  chaos_bt::register_nodes(factory, robot);
+  chaos_sdk::bt::register_nodes(factory, robot);
   auto tree = factory.createTreeFromText(
     R"(<root BTCPP_format="4"><BehaviorTree ID="Main"><Navigate frame_id="map" )"
     R"(x="0" y="0" z="0" yaw="0"/></BehaviorTree></root>)");

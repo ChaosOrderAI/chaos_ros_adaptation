@@ -19,7 +19,7 @@
 #include "chaos_interfaces/action/navigate_pose.hpp"
 #include "chaos_interfaces/srv/control_lease.hpp"
 
-namespace chaos_bt
+namespace chaos_sdk::bt
 {
 namespace test
 {
@@ -252,4 +252,4 @@ private:
 };
 
 }  // namespace test
-}  // namespace chaos_bt
+}  // namespace chaos_sdk::bt

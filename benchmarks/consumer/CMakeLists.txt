@@ -10,7 +10,6 @@ find_package(chaos_core REQUIRED)
 find_package(chaos_runtime REQUIRED)
 find_package(chaos_sensors REQUIRED)
 find_package(chaos_data REQUIRED)
-find_package(chaos_bt REQUIRED)
 
 add_executable(consumer main.cpp)
 target_compile_features(consumer PRIVATE cxx_std_17)
@@ -25,5 +24,5 @@ target_link_libraries(consumer PRIVATE
   chaos_assets::chaos_assets_core
   chaos_bringup::chaos_bringup_core
   chaos_sdk::chaos_sdk
-  chaos_bt::chaos_bt
+  chaos_sdk::chaos_sdk_bt
   chaos_mqtt::chaos_mqtt_core)
