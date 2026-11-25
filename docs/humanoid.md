@@ -103,7 +103,7 @@ ros2 launch chaos_bringup system.launch.py \
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source install-humanoid/local_setup.bash
+source install-humanoid/local_setup.bash   # 目录清理后先按上文 build-humanoid 命令重建
 colcon test --base-paths src --packages-select chaos_assets chaos_runtime chaos_bringup \
   --build-base build-humanoid --install-base install-humanoid
 colcon test-result --test-result-base build-humanoid --verbose

@@ -186,7 +186,7 @@ python3 scripts/check_go2_locomotion.py --output generated/pcd0_go2/locomotion_v
 
 ```bash
 python3 scripts/prepare_pcd_go2.py /home/yunze/0.pcd \
-  --model-root work/multi-model-team/simplify-20261031/model-cache \
+  --model-root ~/.cache/chaos/mujoco \
   --output generated/pcd0_go2 --spawn-xy 18 33
 python3 scripts/prepare_pcd_gpu.py --scene-dir generated/pcd0_go2 --voxel 0
 python3 scripts/prepare_pcd_normals.py --scene-dir generated/pcd0_go2
@@ -197,7 +197,7 @@ GPU 准备工具需要系统 NumPy/SciPy；查看器使用 MuJoCo、GLFW、PyOpe
 启动脚本默认准备并使用全部点，不会按帧率自动降低点数。
 
 生成 XML 包含本机模型和网格的绝对路径。移动工作区后应重新生成。
-物理模块构建方式见 [MuJoCo 说明](mujoco.md)，本机使用 `build-sim` / `install-sim`。
+物理模块构建方式见 [MuJoCo 说明](mujoco.md)，可用 `build-sim` / `install-sim` 变体；目录清理后按 [MuJoCo 说明](mujoco.md) 重建。
 
 ## 运行验证和关节动作
 

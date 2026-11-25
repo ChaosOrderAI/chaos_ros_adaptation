@@ -83,6 +83,31 @@ ros2 launch chaos_bringup system.launch.py \
 
 attach 模式只启动监测节点，不另开厂商进程、不转发或转换原始消息：必须填写已有话题的绝对名称，并保证 Domain、消息类型、QoS 和 frame 与声明一致。若需要给外部话题改名，应在其原驱动中设置重映射。Livox CustomMsg 不会通过改名变成 PointCloud2，使用该类型的算法需要保留原始通道或显式转换。
 
+## AT600 热成像拆分与融合
+
+IRay AT600 暴露唯一 UVC 模式：512x192 YUYV @ 25 fps，左半热成像、右半可见光，出厂已配准同一光轴。`chaos_sensors` 提供三个节点：
+
+| 可执行 | 作用 |
+|---|---|
+| `at600_split_node` | 取 YUYV 的 Y 平面按 `split_ratio` 切分，发布 `thermal/image_raw` 与 `visible/image_raw`（均 mono8）。资产传感器按 `driver: {package: chaos_sensors, executable: at600_split_node}` 声明，纳入统一 launch（示例见 [at600_ir_camera.example.yaml](../src/chaos_assets/config/at600_ir_camera.example.yaml)）。 |
+| `thermal_register_calib` | 独立安装的可见光相机与热成像不像素对齐时，估计可见→热成像单应（SIFT+RANSAC）并写出 ROS 2 参数文件。 |
+| `thermal_fusion_node` | 融合任意两路 Image 到 `thermal/image_fused`（bgr8），`mode:=blend\|detail\|side_by_side\|thermal_color`，可选 `homography` 先配准可见光。 |
+
+```bash
+ros2 launch chaos_sensors thermal_fusion.launch.py
+# mode:=blend|detail|side_by_side|thermal_color  alpha:=0.6  colormap:=inferno
+
+# 独立可见光相机先标定再融合（AT600 两半是模块自身配准的，homography: [] 即仅缩放）
+ros2 run chaos_sensors thermal_register_calib --ros-args \
+  -p thermal_topic:=/thermal/image_raw -p visible_topic:=/hikvision/image_raw \
+  -p output_file:=/tmp/thermal_homography.yaml -p preview_file:=/tmp/thermal_registration.png
+ros2 run chaos_sensors thermal_fusion_node --ros-args \
+  --params-file /tmp/thermal_homography.yaml \
+  -p thermal_topic:=/thermal/image_raw -p visible_topic:=/hikvision/image_raw -p mode:=detail
+```
+
+单应只处理平面场景的旋转/平移/缩放，大基线视差下退化；相机重新安装后需重标（参数文件按节点名 `thermal_fusion_node` 取键，节点改名时给标定节点传 `node_name`）。热归一化默认 2%/98% 分位拉伸，`thermal_min`/`thermal_max` 同时设置时改用固定范围。边界：AT600 无外触发，进不了同步板硬件触发链，时间戳来自 V4L2 缓冲（CLOCK_MONOTONIC）映射主机 UTC。
+
 ## 公共数据接口
 
 | 消息 | 用途 |

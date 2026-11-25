@@ -8,7 +8,8 @@ Usage: scripts/validate_humble.sh [--smoke]
 
 Run from a clean terminal on Ubuntu 22.04 with ROS 2 Humble installed.
 The script sources /opt/ros/humble/setup.bash, builds all packages from src
-except chaos_bt (it needs BehaviorTree.CPP 4.x, which Humble does not ship),
+except the chaos_sdk BT library (BehaviorTree.CPP 4.x, which Humble does not
+ship; built with CHAOS_SDK_WITH_BT=OFF),
 runs the Python tests and chaos_mqtt CTest tests, and preserves their output
 in build-humble/, install-humble/, and log-humble/.
 
@@ -119,12 +120,11 @@ unset ROS_AUTOMATIC_DISCOVERY_RANGE ROS_STATIC_PEERS ROS_DISCOVERY_SERVER
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 
 printf 'Building all src packages for Ubuntu 22.04 / ROS 2 Humble.\n'
-# chaos_bt needs BehaviorTree.CPP 4.x. Humble ships behaviortree_cpp_v3 (3.8)
-# instead, so the package is Jazzy only and is skipped by this build.
+# The BehaviorTree.CPP node library needs the 4.x API. Humble ships
+# behaviortree_cpp_v3 (3.8) instead, so this build turns the SDK gate off.
 colcon --log-base log-humble build --base-paths src \
     --build-base build-humble --install-base install-humble --symlink-install \
-    --packages-skip chaos_bt \
-    --cmake-args -DBUILD_TESTING=ON
+    --cmake-args -DBUILD_TESTING=ON -DCHAOS_SDK_WITH_BT=OFF
 
 set +u
 # Source only the newly built packages; the underlay was explicitly selected.

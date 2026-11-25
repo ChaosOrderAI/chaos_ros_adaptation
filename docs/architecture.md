@@ -76,15 +76,14 @@ flowchart TB
 | `chaos_bringup` | 根据解析结果组合本机启动图，设置资产命名空间并选择后端 |
 | `chaos_interfaces` | 定义机器人状态、能力和控制的 ROS 消息、服务等契约 |
 | `chaos_runtime` | 每资产的公共运行时、适配器契约和独立 Go2 ROS 驱动 |
-| `chaos_sdk` | 面向业务程序封装统一接口的原生异步客户端 |
-| `chaos_bt` | 把 SDK 的导航、起飞、降落包装成 BehaviorTree.CPP 节点，由调用方进程驱动行为树 |
+| `chaos_sdk` | 面向业务程序封装统一接口的原生异步客户端；含可选 BehaviorTree.CPP 节点库 `chaos_sdk_bt`（`CHAOS_SDK_WITH_BT` 默认 ON，Humble 构建 OFF） |
 | `chaos_mqtt` | 内置 Rust MQTT / ROS 2 传输与原生 C++ 业务网关，将外部命令、请求编号、结果映射到统一 ROS 接口；能力命令交给技能层，不直接调用运行时 |
 | `chaos_sensors` | 模拟传感器、标准流健康诊断、可发现的传感器目录 |
 | `chaos_skill` | 技能词表、枢纽状态机与能力分派；顶层来源的唯一汇聚点，唯一调用基础功能的层 |
 | `chaos_agent` | 机载规划层：把技能词表翻译成模型决定，作为顶层来源之一把意图交给技能层 |
 | `chaos_data` | 原生 rosbag2_cpp 录制、chrony 时间质量准入、异常分段、磁盘保护、离线审计及任务级训练数据导出 |
 
-十个包的构建产物中，除 `chaos_mqtt/transport/`（导入的 Rust 实现）与 `chaos_bringup` 的 launch 胶水外，业务逻辑均为 C++17 实现。`src/chaos_benchmarks` 是领域微基准包，不是生产入口，也不参与运行。
+九个包的构建产物中，除 `chaos_mqtt/transport/`（导入的 Rust 实现）与 `chaos_bringup` 的 launch 胶水外，业务逻辑均为 C++17 实现。`src/chaos_benchmarks` 是领域微基准包，不是生产入口，也不参与运行。
 
 设备协议、消息转换和 SDK 调用入口各有一个归属。对现有驱动的补丁应围绕适配所需接口进行，避免将资产管理和远程平台业务塞入硬件 SDK。
 

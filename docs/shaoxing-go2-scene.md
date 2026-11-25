@@ -45,7 +45,7 @@ GPU 属性包含位置/颜色 384 MB、法向 288 MB、半径 96 MB，合计约 
 
 ```bash
 python3 scripts/prepare_pcd_go2.py /home/yunze/绍兴全图.pcd \
-  --model-root work/multi-model-team/simplify-20261031/model-cache \
+  --model-root ~/.cache/chaos/mujoco \
   --output generated/shaoxing_go2 --spawn-xy 0 77 \
   --gpu-only --merge-collision-boxes
 python3 scripts/prepare_pcd_gpu.py --scene-dir generated/shaoxing_go2 --voxel 0

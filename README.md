@@ -29,7 +29,7 @@
 
 ## 开发环境构建与启动
 
-工作空间包含 **chaos_* 生产包 + Go2 SLAM 导航包**，业务运行时全部为原生 C++17 实现（Python 仅保留 launch 胶水、薄绑定、第三方 Xacro 桥接及工具/测试脚本）。SLAM 部分由 `fast_livo2`(FAST-LIVO2 Jazzy 移植)、`go2_slam_backend`、`go2_terrain_planner`、`go2_perception`、`scan_planner` 系列、`livox_ros_driver2`、`go2_bringup` 组成,见 [Go2 SLAM 约束](docs/go2-slam-agents.md)。
+工作空间包含 **chaos_* 生产包 + Go2 SLAM 导航包**，业务运行时全部为原生 C++17 实现（Python 仅保留 launch 胶水、薄绑定、第三方 Xacro 桥接及工具/测试脚本）。SLAM 部分由 `fast_livo2`(FAST-LIVO2 Jazzy 移植)、`go2_slam_backend`、`go2_terrain_planner`、`scan_planner` 系列、`livox_ros_driver2`、`go2_bringup` 组成,见 [Go2 SLAM 约束](docs/go2-slam-agents.md)。
 
 运行时依赖 ROS 2 Jazzy、colcon、ament_cmake/ament_cmake_python、rclcpp、geometry_msgs、std_msgs、sensor_msgs、nav_msgs、diagnostic_msgs、tf2_ros、action_msgs、rosidl_default_generators、rosbag2_cpp、rosbag2_storage、rosbag2_transport、rosidl_typesupport_introspection_cpp、nlohmann_json、yaml-cpp、Boost 头文件、OpenSSL。`chaos_mqtt` 内置的 Rust 传输还需 Rust/Cargo 与 `build-essential`、`cmake`、`pkg-config`、`libclang-dev`。模型导入使用 robot_state_publisher、urdfdom；Xacro 模型另需 xacro。现有厂商程序无需参与 mock 构建。
 
@@ -96,11 +96,13 @@ src/
   chaos_assets/       型号版本、实例清单、配置校验与解析
   chaos_bringup/      统一 launch 规划器与 launch 胶水
   chaos_runtime/      每资产运行时、后端适配契约与 Go2 驱动
-  chaos_sdk/          原生 C++ 异步客户端（薄 Python 绑定）
-  chaos_bt/           BehaviorTree.CPP 节点：导航、起飞、降落的适配器
+  chaos_sdk/          原生 C++ 异步客户端（薄 Python 绑定）与可选 BehaviorTree.CPP 节点
   chaos_mqtt/         一个 ROS 包，统一构建与安装原生 C++ 网关和 Rust 传输
     transport/        完整 Rust 传输源码及 Cargo 锁文件（导入的第三方实现，不在本轮修改范围）
-  chaos_sensors/      模拟传感器、数据新鲜度诊断与传感器目录
+  chaos_skill/        技能词表、枢纽状态机与能力分派（顶层来源唯一汇聚点）
+  chaos_agent/        机载规划层：本地模型决定翻译成技能意图
+  chaos_sensors/      模拟传感器、数据新鲜度诊断、传感器目录与 AT600 热成像拆分/融合
+  chaos_time_sync/    同步板 UDP 校时/触发客户端与相机触发帧配对
   chaos_data/         原生 rosbag2 采集、时间质量门控、审计与离线训练数据导出
   chaos_sim/          可选 MuJoCo Go2 / T2 物理仿真；点云/3DGS 几何代理、独立关节控制与标准 ROS 观测
   chaos_benchmarks/   领域微基准（非生产入口，不参与运行）
@@ -260,7 +262,7 @@ source install/local_setup.bash
 
 # 单元测试：按包选择，避免把未参与本次构建的包算进来
 colcon test --packages-select chaos_core chaos_interfaces chaos_assets \
-  chaos_bringup chaos_runtime chaos_sensors chaos_sdk chaos_bt chaos_mqtt chaos_data \
+  chaos_bringup chaos_runtime chaos_sensors chaos_sdk chaos_mqtt chaos_data \
   --build-base build --install-base install
 colcon test-result --test-result-base build --verbose
 
