@@ -1,5 +1,4 @@
 // Deterministic synthetic telemetry for integration tests, not a physics
-// simulator. Port of chaos_runtime/adapters/mock.py.
 #pragma once
 
 #include <array>

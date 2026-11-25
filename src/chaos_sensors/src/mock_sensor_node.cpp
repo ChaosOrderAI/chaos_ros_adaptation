@@ -1,5 +1,5 @@
 // Native mock_sensor node: synthetic sensor messages for integration tests.
-// Port of chaos_sensors/mock.py. The images, intrinsics, point cloud and
+// The images, intrinsics, point cloud and
 // ranges are deliberately synthetic and are not calibration data.
 //
 // Sampling follows the ROS clock, so pausing /clock pauses synthetic

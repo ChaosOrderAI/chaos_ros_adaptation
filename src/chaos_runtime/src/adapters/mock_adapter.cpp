@@ -1,4 +1,3 @@
-// Port of chaos_runtime/adapters/mock.py.
 #include "chaos_runtime/adapters/mock_adapter.hpp"
 
 #include <algorithm>

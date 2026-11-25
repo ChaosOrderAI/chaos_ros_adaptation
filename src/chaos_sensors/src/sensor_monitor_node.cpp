@@ -1,5 +1,5 @@
 // Native sensor_monitor node: per-stream metadata health without touching
-// robot control or readiness. Port of chaos_sensors/monitor.py.
+// robot control or readiness.
 //
 // The monitor only observes message headers: it never converts, re-frames or
 // republishes sensor data, and it never influences the runtime readiness.

@@ -1,6 +1,5 @@
 // Go2 transport safety and telemetry conversion, independent of ROS and the
-// vendor SDK. Port of chaos_runtime/go2_driver_core.py (the ROS-free part;
-// fill_odometry stays with the ROS wrapper in a later batch).
+// vendor SDK.
 //
 // Threading contract, mirroring the Python core: DDS callbacks cache state
 // through acceptState; one control thread owns all SDK writes through step.

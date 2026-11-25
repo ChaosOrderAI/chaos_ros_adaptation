@@ -1,5 +1,5 @@
 // Clock-gated collection supervisor; native rosbag handles all sensor payloads.
-// Port of chaos_data/recorder.py CollectionController. No ROS dependency:
+// No ROS dependency:
 // publishing and process lifetime are the collector node's only ROS concerns.
 //
 // Rotate subscriptions after clock loss so latched messages are reacquired.

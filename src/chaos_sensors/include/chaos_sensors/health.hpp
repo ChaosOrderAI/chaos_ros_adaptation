@@ -1,5 +1,4 @@
 // Metadata-only freshness checks, with injectable clocks and no ROS
-// dependency. Port of chaos_sensors/health.py.
 //
 // These checks cannot detect a driver that assigns a new timestamp to cached
 // hardware data. Drivers must preserve the measurement timestamp for that

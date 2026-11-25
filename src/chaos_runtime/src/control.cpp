@@ -1,6 +1,5 @@
-// Port of chaos_runtime/control.py. Behavior, error codes, and validation
-// order are the compatibility contract; keep them in sync with the Python
-// oracle in Git history until the Python implementation is retired.
+// Behavior, error codes, and validation order are the compatibility
+// contract carried over from the retired Python implementation.
 #include "chaos_runtime/control.hpp"
 
 #include <cerrno>

@@ -1,5 +1,3 @@
-// Port of chaos_runtime/node.py (RobotRuntime). The Python file is the
-// behavior oracle; keep ordering and failure semantics in sync with it.
 #include "chaos_runtime/coordinator.hpp"
 
 #include <cmath>

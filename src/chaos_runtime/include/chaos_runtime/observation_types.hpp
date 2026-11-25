@@ -1,12 +1,8 @@
 // Typed observation payloads shared by the runtime coordinator and the
 // ROS-free observation service.
 //
-// STAGING CONSTRAINT (chunk 1): CommandResultView and StateView are copied
-// here verbatim from coordinator.hpp so that the observation core can be
-// built without the coordinator. Until chunk 2 removes the originals and
-// includes this header, no translation unit may include both headers: the
-// definitions would be ambiguous. Chunk 2 leaves exactly one canonical
-// definition of each type.
+// This header is the single canonical definition site of these types;
+// coordinator.hpp includes it rather than duplicating them.
 #pragma once
 
 #include <cstdint>

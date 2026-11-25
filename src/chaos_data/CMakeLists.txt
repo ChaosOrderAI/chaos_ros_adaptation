@@ -123,8 +123,6 @@ target_link_libraries(chaos_data_audit_cli PRIVATE
   chaos_data_file_io
   nlohmann_json::nlohmann_json)
 install(PROGRAMS $<TARGET_FILE:chaos_data_audit_cli>
-  DESTINATION lib/${PROJECT_NAME} RENAME audit)
-install(PROGRAMS $<TARGET_FILE:chaos_data_audit_cli>
   DESTINATION lib/${PROJECT_NAME} RENAME data_audit)
 
 # Native ROS message reading layer. The data plane uses the deserialization
