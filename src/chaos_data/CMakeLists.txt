@@ -100,7 +100,7 @@ install(TARGETS chaos_data_recorder_worker
   RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 # Production entry points. The installed names keep the original console
-# scripts: collector, audit, data_audit and data_export.
+# scripts: collector, data_audit and data_export.
 add_executable(chaos_data_collector_cli src/collector_main.cpp)
 target_compile_features(chaos_data_collector_cli PRIVATE cxx_std_17)
 target_link_libraries(chaos_data_collector_cli PRIVATE

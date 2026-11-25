@@ -42,7 +42,7 @@ def run():
     with tempfile.TemporaryDirectory(prefix='chaos-data-smoke-') as directory:
         root = Path(directory)
         share = Path(get_package_share_directory('chaos_assets'))
-        audit_executable = Path(get_package_prefix('chaos_data')) / 'lib/chaos_data/audit'
+        audit_executable = Path(get_package_prefix('chaos_data')) / 'lib/chaos_data/data_audit'
         assert audit_executable.is_file(), f'the native audit is not installed: {audit_executable}'
         data = yaml.safe_load((share / 'config/data_collection.demo.yaml').read_text())
         data['hosts'] = {'smoke': {'ros_domain_id': 192}}

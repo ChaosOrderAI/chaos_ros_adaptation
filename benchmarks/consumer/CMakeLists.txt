@@ -13,6 +13,13 @@ find_package(chaos_data REQUIRED)
 
 add_executable(consumer main.cpp)
 target_compile_features(consumer PRIVATE cxx_std_17)
+# The BT library only exists when chaos_sdk was installed with its default
+# CHAOS_SDK_WITH_BT=ON; turn this off to check a gate-off install prefix.
+option(CONSUMER_WITH_BT "Also link the chaos_sdk BT library" ON)
+if(CONSUMER_WITH_BT)
+  target_link_libraries(consumer PRIVATE chaos_sdk::chaos_sdk_bt)
+  target_compile_definitions(consumer PRIVATE CONSUMER_WITH_BT=1)
+endif()
 target_link_libraries(consumer PRIVATE
   chaos_core::chaos_core
   chaos_runtime::chaos_control
@@ -24,5 +31,4 @@ target_link_libraries(consumer PRIVATE
   chaos_assets::chaos_assets_core
   chaos_bringup::chaos_bringup_core
   chaos_sdk::chaos_sdk
-  chaos_sdk::chaos_sdk_bt
   chaos_mqtt::chaos_mqtt_core)

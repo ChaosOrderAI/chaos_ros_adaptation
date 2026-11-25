@@ -54,10 +54,13 @@ foreach(thermal_target at600_split_node thermal_fusion_node thermal_register_cal
   add_executable(${thermal_target} src/${thermal_target}.cpp)
   target_include_directories(${thermal_target} PRIVATE ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(${thermal_target} ${OpenCV_LIBS})
-  ament_target_dependencies(${thermal_target} rclcpp sensor_msgs cv_bridge)
+  set(_thermal_deps rclcpp sensor_msgs cv_bridge)
+  if(NOT thermal_target STREQUAL at600_split_node)
+    # the fusion/calibration nodes consume image_transport publishers
+    list(APPEND _thermal_deps image_transport)
+  endif()
+  ament_target_dependencies(${thermal_target} ${_thermal_deps})
 endforeach()
-ament_target_dependencies(thermal_fusion_node image_transport)
-ament_target_dependencies(thermal_register_calib image_transport)
 
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS chaos_sensors_health chaos_sensors_config chaos_sensors_ros

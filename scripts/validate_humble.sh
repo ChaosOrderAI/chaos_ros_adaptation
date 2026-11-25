@@ -8,9 +8,9 @@ Usage: scripts/validate_humble.sh [--smoke]
 
 Run from a clean terminal on Ubuntu 22.04 with ROS 2 Humble installed.
 The script sources /opt/ros/humble/setup.bash, builds all packages from src
-except the chaos_sdk BT library (BehaviorTree.CPP 4.x, which Humble does not
-ship; built with CHAOS_SDK_WITH_BT=OFF),
-runs the Python tests and chaos_mqtt CTest tests, and preserves their output
+(the chaos_sdk BT library is built with CHAOS_SDK_WITH_BT=OFF because Humble
+does not ship BehaviorTree.CPP 4.x), runs the Python tests and chaos_mqtt
+CTest tests, and preserves their output
 in build-humble/, install-humble/, and log-humble/.
 
   --smoke  Also run all seven existing mock integration tests, including the

@@ -109,7 +109,12 @@ if(CHAOS_SDK_WITH_BT)
     RUNTIME DESTINATION bin)
 endif()
 install(TARGETS _chaos_sdk DESTINATION ${PYTHON_INSTALL_DIR}/${PROJECT_NAME})
-install(DIRECTORY include/ DESTINATION include)
+if(CHAOS_SDK_WITH_BT)
+  install(DIRECTORY include/ DESTINATION include)
+else()
+  # Gate off: don't ship the BT header without its library.
+  install(DIRECTORY include/ DESTINATION include PATTERN "bt" EXCLUDE)
+endif()
 
 ament_export_targets(export_chaos_sdk HAS_LIBRARY_TARGET)
 ament_export_dependencies(rclcpp rclcpp_action std_msgs builtin_interfaces

@@ -8,7 +8,7 @@
 chaos_ros_adaptation/
 ├── README.md                 # 文档枢纽：构建命令、依赖清单、能力边界、docs 索引
 ├── .gitignore                # build-*/install-*/log-* 多前缀通配 + generated/ + AI 工具本地状态
-├── src/                      # 21 个 ROS 包：chaos_* 生产包 16 + Go2 SLAM 链路 5
+├── src/                      # 21 个 ROS 包：chaos_* 生产包 14 + Go2 SLAM 链路 7
 ├── scripts/                  # 38 个脚本：冒烟测试 / 场景工具链 / 构建 / 车队编排
 ├── docs/                     # 33 篇文档（含 file-structure.md）
 ├── benchmarks/               # Python→C++ 迁移性能验收 + 下游 CMake 消费方检查
