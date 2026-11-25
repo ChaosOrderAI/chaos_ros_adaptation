@@ -15,4 +15,5 @@ Apache-2.0 (merged from first-party packages):
   config/, launch/, docs/         (from the same packages)
 
 The Apache-2.0 portions keep their original copyright and license; the full
-license text is in LICENSE.
+license text is in LICENSE. The proprietary portions are listed in
+LICENSE.PROPRIETARY.

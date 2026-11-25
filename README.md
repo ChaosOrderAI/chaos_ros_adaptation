@@ -56,9 +56,9 @@ source /opt/ros/jazzy/setup.bash
 ./scripts/build_slam.sh
 
 # 或手动:全新构建目录 build-<tag> / install-<tag> / log-<tag>
-# 传感器 vendor 树在 chaos_sensors 包内，colcon 不会下钻包目录，
-# 所以 vendor 根要作为第二个 base path
-colcon --log-base log build --base-paths src src/chaos_sensors/vendor \
+# 树内的 Livox vendor 在 chaos_sensors 包目录里，colcon 不会下钻包目录，
+# 所以它的目录要作为第二个 base path；Orbbec 是独立工作区，不能进主构建
+colcon --log-base log build --base-paths src src/chaos_sensors/vendor/livox_ros_driver2 \
   --build-base build --install-base install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 

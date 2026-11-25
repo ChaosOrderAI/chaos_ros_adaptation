@@ -13,7 +13,7 @@ def generate_launch_description():
         DeclareLaunchArgument('exposure_offset_us', default_value='0'),
         DeclareLaunchArgument('missing_trigger', default_value='arrival'),
         Node(
-            package='chaos_camera_trigger',
+            package='chaos_sensors',
             executable='trigger_pair_node',
             name='trigger_pair',
             parameters=[{

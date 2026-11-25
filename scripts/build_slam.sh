@@ -31,10 +31,11 @@ elif [[ -f "${HOME}/.local/lib/liblivox_lidar_sdk_shared.so" ]]; then
   sdk_prefix="${HOME}/.local"
 fi
 
-# Vendored drivers live inside the chaos_sensors package tree; colcon does
-# not descend into a package directory, so the vendor root is an explicit
-# second base path.
-build_args=(--base-paths src src/chaos_sensors/vendor --build-base build --install-base install)
+# The in-tree Livox vendor lives inside the chaos_sensors package tree;
+# colcon does not descend into a package directory, so its own directory is an
+# explicit second base path. Other vendor trees (Orbbec) are separate
+# workspaces and must not leak into the main build.
+build_args=(--base-paths src src/chaos_sensors/vendor/livox_ros_driver2 --build-base build --install-base install)
 cmake_args=(-DCMAKE_BUILD_TYPE=Release)
 
 if [[ -n "${sdk_prefix}" ]]; then

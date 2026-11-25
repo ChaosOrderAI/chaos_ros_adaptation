@@ -1,0 +1,23 @@
+chaos_sensors — Proprietary portions
+
+Copyright (c) Chaos maintainers. All rights reserved.
+
+The following files are proprietary and are NOT covered by the Apache-2.0
+license in LICENSE:
+
+  src/health.cpp
+  src/mock_sensor_main.cpp
+  src/mock_sensor_node.cpp
+  src/sensor_config.cpp
+  src/sensor_monitor_main.cpp
+  src/sensor_monitor_node.cpp
+  include/chaos_sensors/health.hpp
+  include/chaos_sensors/mock_sensor_node.hpp
+  include/chaos_sensors/ros_stamp.hpp
+  include/chaos_sensors/sensor_config.hpp
+  include/chaos_sensors/sensor_monitor_node.hpp
+  include/chaos_sensors/stream_qos.hpp
+
+Redistribution and use require the written permission of the copyright
+holder. Terms are defined by the project owner; this file records the
+license split only and grants no rights beyond that.

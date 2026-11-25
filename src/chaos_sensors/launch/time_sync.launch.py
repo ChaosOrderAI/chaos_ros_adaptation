@@ -12,7 +12,7 @@ def generate_launch_description():
         DeclareLaunchArgument('trigger_topic', default_value='board/trigger'),
         DeclareLaunchArgument('imu_topic', default_value='board/imu'),
         Node(
-            package='chaos_time_sync',
+            package='chaos_sensors',
             executable='chaos_time_sync_node',
             name='chaos_time_sync',
             parameters=[{
