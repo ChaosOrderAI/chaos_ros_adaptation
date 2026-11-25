@@ -1,0 +1,17 @@
+chaos_time_sync:
+  ros__parameters:
+    # InfiniteSense V4 sync board, Ethernet link (W5500). The board has no
+    # RTC: its UTC comes from this host through the PTP-like exchange, so the
+    # host must run chrony/NTP.
+    board_ip: 192.168.10.188
+    board_port: 8888
+    local_port: 0              # 0 = ephemeral source port
+    ptp_period_ms: 100         # vendor SDK uses ~100 ms (~9 Hz)
+    publish_imu: true
+    imu_topic: board/imu
+    trigger_topic: board/trigger
+    diagnostics_topic: board/diagnostics
+    trigger_frame_id: board
+    imu_frame_id: board_imu
+    stale_after_ms: 2000
+    clock_warn_us: 1000000     # warn when board and host clocks differ > 1 s

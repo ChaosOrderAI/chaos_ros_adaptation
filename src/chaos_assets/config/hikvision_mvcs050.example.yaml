@@ -1,0 +1,90 @@
+# Hikrobot MV-CS050-10GC (5 MP GigE Vision colour camera) on a vehicle.
+#
+# Driver: camera_aravis2 (GenICam over Aravis), package ros-jazzy-camera-aravis2
+# — already installed on the Jetson. Note that ros-jazzy-camera-ros is a
+# libcamera/V4L2 node and does NOT talk to GigE Vision cameras.
+#
+# The vendor MVS-based ROS driver can replace it one-for-one: keep kind and
+# streams, swap package/executable/parameters. The stream interface below is
+# the driver-agnostic part.
+#
+# External trigger: board CAM1 PWM -> camera Line0 (rising edge). GenICam
+# features are set through dotted parameter names (the driver evaluates
+# 'AcquisitionControl.<Feature>' etc. itself).
+#
+# Alternative without the sync board: if the camera's GenICam tree exposes
+# PtpEnable, hardware PTP to the host is possible; set
+# TransportLayerControl.PtpEnable: true and drop the trigger parameters.
+schema_version: 1
+hosts:
+  onboard:
+    ros_domain_id: 61
+    # InfiniteSense SimpleSensorSync V4 board. Its presence is the explicit
+    # switch that makes the launcher start chaos_time_sync_node on this host.
+    board:
+      ip: 192.168.123.188    # board on the sensor LAN; replace with its configured address
+      port: 8888
+      ptp_period_ms: 100
+assets:
+  - id: vehicle_001
+    host: onboard
+    mode: real
+    model_file: package://chaos_assets/models/lingao_vehicle/v1/model.yaml
+    sensors:
+      front_camera:
+        kind: camera
+        enabled: true
+        frame_id: vehicle_001_front_camera_link
+        driver:
+          mode: node
+          package: camera_aravis2
+          executable: camera_driver_gv
+          parameters:
+            # Camera selector: the Aravis device id, i.e. "<vendor>-<model>-<serial>"
+            # as printed by `camera_finder`. REPLACE before a real start.
+            guid: REPLACE_WITH_MVCS050_GUID
+            frame_id: vehicle_001_front_camera_optical_frame
+            stream_names: [vis]
+            # Absolute path: plain parameters are not package:// resolved.
+            # Generate once with a calibration tool and copy it to the target.
+            camera_info_urls: [file:///opt/chaos/hik/mvcs050_camera_info.yaml]
+            verbose: false
+            TransportLayerControl.PtpEnable: false
+            TransportLayerControl.GevSCPSPacketSize: 9000
+            ImageFormatControl.Width: 2448
+            ImageFormatControl.Height: 2048
+            # BayerRG8 straight from the sensor. A single-element list follows
+            # the driver's format-preference interface; downstream image_proc
+            # debayers, or set Mono8/rgb8 conversion in the driver.
+            ImageFormatControl.PixelFormat: [BayerRG8]
+            AcquisitionControl.TriggerMode: 'On'
+            AcquisitionControl.TriggerSource: 'Line0'
+            AcquisitionControl.TriggerActivation: 'RisingEdge'
+            AcquisitionControl.ExposureAuto: 'Off'
+            AcquisitionControl.ExposureTime: 5000.0
+        # camera_aravis2 derives topic names from the node name and stream
+        # name; the launcher forces the node name to `driver`, so confirm the
+        # exact prefix with `ros2 topic list` at first bring-up and adjust here.
+        streams:
+          image:
+            type: sensor_msgs/msg/Image
+            topic: vis/image_raw
+            frame_id: vehicle_001_front_camera_optical_frame
+            rate_hz: 10.0
+            monitor: false
+          camera_info:
+            type: sensor_msgs/msg/CameraInfo
+            topic: vis/camera_info
+            frame_id: vehicle_001_front_camera_optical_frame
+            rate_hz: 10.0
+        time_sync:
+          # CAM_1 PWM triggers the sensor on Line0; the frame is stamped with
+          # the board's trigger edge, so max_age_ms bounds frame<->trigger
+          # pairing (a dropped frame must not inherit the next trigger).
+          source: board_trigger
+          board_channel: CAM_1
+          trigger_hz: 10.0
+          max_age_ms: 80.0
+          clock_domain: host_utc
+        # Mounting extrinsics are intentionally absent: add `transform` with
+        # measured xyz/rpy once the camera is bolted down.

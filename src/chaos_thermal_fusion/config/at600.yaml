@@ -1,0 +1,41 @@
+at600_split_node:
+  ros__parameters:
+    device: /dev/v4l/by-id/usb-IRay_AT600-video-index0
+    width: 512
+    height: 192
+    fps: 25
+    split_ratio: 0.5
+    thermal_topic: thermal/image_raw
+    visible_topic: visible/image_raw
+    thermal_frame_id: thermal_frame
+    visible_frame_id: camera_front
+    publish_visible: true
+    buffer_count: 4
+    # v4l2 = kernel buffer timestamp (uvcvideo: CLOCK_MONOTONIC), arrival = node
+    # time at dequeue. The module has no external trigger, so v4l2 is the best
+    # exposure proxy available; exposure_offset_us shifts it once measured.
+    stamp_source: v4l2
+    exposure_offset_us: 0
+
+thermal_fusion_node:
+  ros__parameters:
+    thermal_topic: thermal/image_raw
+    visible_topic: visible/image_raw
+    output_topic: thermal/image_fused
+    output_frame_id: thermal_frame
+    mode: blend            # blend | detail | side_by_side | thermal_color
+    alpha: 0.6             # thermal weight in blend mode
+    colormap: inferno      # inferno | jet | hot | bone | rainbow | turbo | magma
+    thermal_min: 0.0       # 0/0 = auto percentile stretch
+    thermal_max: 0.0
+    auto_low_percentile: 2.0
+    auto_high_percentile: 98.0
+    clahe_clip_limit: 2.0
+    clahe_grid: 8
+    detail_gain: 1.0
+    align_to: thermal      # thermal | visible
+    publish_rate_hz: 25.0
+    # Row-major visible -> thermal homography from thermal_register_calib.
+    # Empty = no warp (use align_to resize only). The AT600's own halves are
+    # already registered, so leave it empty for them.
+    homography: []

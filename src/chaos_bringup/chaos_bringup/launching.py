@@ -24,6 +24,7 @@ from .drivers import driver_processes
 from .planning import component_asset, plan_summary, preflight, snapshot_parameter_files
 from .sensors import sensor_processes
 from .skills import default_vocabulary_file, skill_processes
+from .time_sync import time_sync_processes
 
 
 def parse_bool(value, name):
@@ -139,6 +140,12 @@ def build_launch_actions(plan, *, dry_run=False, discovery='LOCALHOST', capabili
             actions.append(RegisterEventHandler(OnProcessExit(target_action=child, on_exit=_on_exit(label))))
             actions.append(child)
         for label, child in sensor_processes(node_asset, environment, sensor_parameter_files):
+            actions.append(RegisterEventHandler(OnProcessExit(target_action=child, on_exit=_on_exit(label))))
+            actions.append(child)
+        # The sync board client (one per host) and the per-camera trigger
+        # pairing run next to the drivers they stamp. Both are derived from the
+        # plan item, so a mock plan or a host without a board starts neither.
+        for label, child in time_sync_processes(item, environment):
             actions.append(RegisterEventHandler(OnProcessExit(target_action=child, on_exit=_on_exit(label))))
             actions.append(child)
         for label, child in collection_processes(node_asset, environment):

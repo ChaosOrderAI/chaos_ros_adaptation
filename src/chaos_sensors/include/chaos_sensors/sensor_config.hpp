@@ -46,6 +46,20 @@ struct StreamConfig {
   bool monitor = true;
 };
 
+// Where a sensor's message stamps come from. The inventory normalizes the
+// block; the monitor re-validates it at its trust boundary.
+struct TimeSyncConfig {
+  bool present = false;
+  std::string source;        // board_trigger | device_timestamp | host_arrival
+  std::string board_channel; // CAM_1..CAM_4 | IMU_2 | LIDAR_1 | LIDAR_2 | none
+  std::string clock_domain;  // host_utc | board | device
+  std::string requires;      // none | gps_sync | ptp
+  std::string image_stream;  // stream paired with the trigger (board_trigger cameras)
+  double trigger_hz = 0.0;   // 0 = not declared
+  double max_age_ms = 50.0;
+  int64_t exposure_offset_us = 0;
+};
+
 struct SensorConfig {
   std::string id;
   std::string kind;
@@ -53,6 +67,7 @@ struct SensorConfig {
   std::string frame_id;
   bool enabled = true;
   std::string driver_mode;
+  TimeSyncConfig time_sync;
   std::map<std::string, StreamConfig> streams;
 };
 

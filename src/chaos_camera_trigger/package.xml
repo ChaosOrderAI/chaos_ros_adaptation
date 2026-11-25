@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>chaos_camera_trigger</name>
+  <version>0.1.0</version>
+  <description>
+    Pair frames from an externally triggered camera with the sync board's
+    trigger edges and republish them stamped with the trigger time. Driver
+    agnostic: it consumes whatever image topic the camera driver produces, so
+    the Hikvision driver choice (camera_ros/Aravis or MVS) stays open.
+  </description>
+  <maintainer email="yunze@example.com">yunze</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>image_transport</depend>
+  <depend>chaos_interfaces</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

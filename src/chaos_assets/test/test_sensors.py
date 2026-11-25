@@ -375,3 +375,135 @@ def test_sensors_demo_resolves_after_install(tmp_path, monkeypatch):
     sensors = assets[0]['sensors']
     assert set(sensors) == {'front_camera', 'lidar', 'body_imu'}
     assert sum(len(sensor['streams']) for sensor in sensors.values()) == 5
+
+
+def camera_with_time_sync(**time_sync):
+    return {
+        'kind': 'camera', 'driver': {'mode': 'mock'},
+        'streams': {'image': {'type': 'sensor_msgs/msg/Image', 'topic': 'image_raw'}},
+        'time_sync': time_sync,
+    }
+
+
+def test_time_sync_normalizes_defaults(tmp_path):
+    asset = load_inventory(write_assets(tmp_path, {'front_camera': camera_with_time_sync(
+        source='board_trigger', board_channel='CAM_1', trigger_hz=10)})).assets[0]
+    assert asset['sensors']['front_camera']['time_sync'] == {
+        'source': 'board_trigger', 'board_channel': 'CAM_1', 'clock_domain': 'host_utc',
+        'requires': 'none', 'max_age_ms': 50.0, 'exposure_offset_us': 0, 'trigger_hz': 10.0,
+        'image_stream': 'image',
+    }
+
+
+def test_time_sync_device_timestamp_defaults_to_device_clock(tmp_path):
+    asset = load_inventory(write_assets(tmp_path, {'lidar': {
+        'kind': 'lidar', 'driver': {'mode': 'mock'},
+        'streams': {'points': {'type': 'sensor_msgs/msg/PointCloud2', 'topic': 'points'}},
+        'time_sync': {'source': 'device_timestamp', 'board_channel': 'LIDAR_1', 'requires': 'gps_sync'},
+    }})).assets[0]
+    ts = asset['sensors']['lidar']['time_sync']
+    assert ts['clock_domain'] == 'device'
+    assert ts['requires'] == 'gps_sync'
+    assert ts['board_channel'] == 'LIDAR_1'
+    assert 'trigger_hz' not in ts
+
+
+@pytest.mark.parametrize('time_sync, match', [
+    ({'source': 'board_trigger'}, 'CAM_n or IMU_2'),
+    ({'source': 'board_trigger', 'board_channel': 'LIDAR_1'}, 'CAM_n or IMU_2'),
+    ({'source': 'host_arrival', 'board_channel': 'CAM_1'}, 'cannot claim'),
+    ({'source': 'device_timestamp', 'board_channel': 'CAM_1'}, 'LIDAR_n'),
+    ({'source': 'gps'}, 'expected board_trigger'),
+    ({'source': 'board_trigger', 'board_channel': 'CAM_9'}, 'unknown sync board channel'),
+    ({'source': 'board_trigger', 'board_channel': 'CAM_1', 'clock_domain': 'utc'}, 'clock_domain'),
+    ({'source': 'board_trigger', 'board_channel': 'CAM_1', 'requires': 'ntp'}, 'requires'),
+    ({'source': 'board_trigger', 'board_channel': 'CAM_1', 'extra': 1}, 'unknown fields'),
+    ({'source': 'board_trigger', 'board_channel': 'CAM_1', 'max_age_ms': 0}, 'positive finite'),
+    ({'source': 'board_trigger', 'board_channel': 'CAM_1', 'exposure_offset_us': 2000000}, 'expected integer'),
+])
+def test_time_sync_rejects_invalid(tmp_path, time_sync, match):
+    with pytest.raises(ConfigurationError, match=match):
+        load_inventory(write_assets(tmp_path, {'front_camera': camera_with_time_sync(**time_sync)}))
+
+
+def real_camera(**time_sync):
+    return {
+        'kind': 'camera',
+        'driver': {'mode': 'node', 'package': 'camera_aravis2',
+                   'executable': 'camera_driver_gv'},
+        'streams': {'image': {'type': 'sensor_msgs/msg/Image', 'topic': 'image_raw'}},
+        'time_sync': time_sync,
+    }
+
+
+def test_real_board_trigger_requires_host_board(tmp_path):
+    sensor = real_camera(source='board_trigger', board_channel='CAM_1')
+    with pytest.raises(ConfigurationError, match="no 'board' block"):
+        load_inventory(write_assets(tmp_path, {'front_camera': sensor}, mode='real'))
+    path = write_assets(tmp_path, {'front_camera': sensor}, mode='real',
+                        mutate=lambda d: d['hosts']['dev'].update(board={'ip': '192.168.123.188'}))
+    asset = load_inventory(path).assets[0]
+    assert asset['sensors']['front_camera']['time_sync']['source'] == 'board_trigger'
+
+
+def test_mock_board_trigger_needs_no_host_board(tmp_path):
+    sensor = camera_with_time_sync(source='board_trigger', board_channel='CAM_1')
+    assert load_inventory(write_assets(tmp_path, {'front_camera': sensor})).assets[0]
+
+
+def test_real_device_timestamp_needs_no_host_board(tmp_path):
+    sensor = real_camera(source='device_timestamp')
+    assert load_inventory(write_assets(tmp_path, {'front_camera': sensor}, mode='real')).assets[0]
+
+
+def test_board_trigger_camera_needs_image_stream(tmp_path):
+    sensor = {
+        'kind': 'camera', 'driver': {'mode': 'mock'},
+        'streams': {'info': {'type': 'sensor_msgs/msg/CameraInfo', 'topic': 'camera_info'}},
+        'time_sync': {'source': 'board_trigger', 'board_channel': 'CAM_1'},
+    }
+    with pytest.raises(ConfigurationError, match='Image stream'):
+        load_inventory(write_assets(tmp_path, {'front_camera': sensor}))
+
+
+def test_board_trigger_camera_selects_the_named_image_stream(tmp_path):
+    sensor = camera_with_time_sync(source='board_trigger', board_channel='CAM_1',
+                                   image_stream='thermal')
+    sensor['streams'] = {
+        'thermal': {'type': 'sensor_msgs/msg/Image', 'topic': 'thermal/image_raw'},
+        'visible': {'type': 'sensor_msgs/msg/Image', 'topic': 'visible/image_raw'},
+    }
+    ts = load_inventory(write_assets(tmp_path, {'front_camera': sensor})).assets[0][
+        'sensors']['front_camera']['time_sync']
+    assert ts['image_stream'] == 'thermal'
+
+
+def test_board_trigger_camera_with_several_image_streams_needs_a_selector(tmp_path):
+    sensor = camera_with_time_sync(source='board_trigger', board_channel='CAM_1')
+    sensor['streams'] = {
+        'thermal': {'type': 'sensor_msgs/msg/Image', 'topic': 'thermal/image_raw'},
+        'visible': {'type': 'sensor_msgs/msg/Image', 'topic': 'visible/image_raw'},
+    }
+    with pytest.raises(ConfigurationError, match='name the one to pair'):
+        load_inventory(write_assets(tmp_path, {'front_camera': sensor}))
+
+
+def test_board_trigger_camera_rejects_a_non_image_selector(tmp_path):
+    sensor = camera_with_time_sync(source='board_trigger', board_channel='CAM_1',
+                                   image_stream='camera_info')
+    sensor['streams'] = {
+        'image': {'type': 'sensor_msgs/msg/Image', 'topic': 'image_raw'},
+        'camera_info': {'type': 'sensor_msgs/msg/CameraInfo', 'topic': 'camera_info'},
+    }
+    with pytest.raises(ConfigurationError, match='not an Image stream'):
+        load_inventory(write_assets(tmp_path, {'front_camera': sensor}))
+
+
+@pytest.mark.parametrize('time_sync, match', [
+    ({'source': 'host_arrival', 'clock_domain': 'board'}, 'host UTC'),
+    ({'source': 'board_trigger', 'board_channel': 'CAM_1', 'clock_domain': 'device'},
+     'board/host clock'),
+])
+def test_time_sync_rejects_contradictory_clock_domain(tmp_path, time_sync, match):
+    with pytest.raises(ConfigurationError, match=match):
+        load_inventory(write_assets(tmp_path, {'front_camera': camera_with_time_sync(**time_sync)}))

@@ -313,4 +313,10 @@ PYBIND11_MODULE(_chaos_bringup_core, module) {
         return specs(chaos::bringup::collection_processes(from_python(asset)));
       },
       py::arg("asset"));
+  module.def(
+      "time_sync_processes",
+      [specs](const py::object& item) {
+        return specs(chaos::bringup::time_sync_processes(from_python(item)));
+      },
+      py::arg("item"));
 }

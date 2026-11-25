@@ -169,3 +169,67 @@ def test_gemini335_template_can_run_as_mock_without_orbbec_binary(capabilities):
         (package, executable)) or True
     launching.build_launch_actions(plan, capabilities=capabilities)
     assert all(package != 'orbbec_camera' for package, _ in dependencies)
+
+
+def board_inventory(tmp_path, *, mode='real'):
+    sensor = {
+        'kind': 'camera',
+        'driver': {'mode': 'node', 'package': 'vendor_camera', 'executable': 'camera_node'},
+        'streams': {
+            'image': {'type': 'sensor_msgs/msg/Image', 'topic': 'image_raw'},
+            'camera_info': {'type': 'sensor_msgs/msg/CameraInfo', 'topic': 'camera_info'},
+        },
+        'time_sync': {'source': 'board_trigger', 'board_channel': 'CAM_1', 'trigger_hz': 10},
+    }
+    data = {
+        'schema_version': 1,
+        'hosts': {'local': {'ros_domain_id': 87, 'board': {'ip': '192.168.123.188'}}},
+        'assets': [{'id': 'robot_a', 'host': 'local', 'mode': mode,
+                    'model_file': str(ASSETS / 'models/lingao_vehicle/v1/model.yaml'),
+                    'sensors': {'front': sensor}}],
+    }
+    path = tmp_path / 'board.yaml'
+    path.write_text(yaml.safe_dump(data))
+    return prepare_plan(path, 'local')
+
+
+def _recorded_specs(monkeypatch):
+    from launch.actions import ExecuteProcess
+    import chaos_bringup.nodes as nodes_module
+
+    recorded = []
+
+    def record(spec, environment, **kwargs):
+        recorded.append(spec)
+        # OnProcessExit needs an ExecuteLocal; a real child is never started
+        # because the test only builds the launch description.
+        return ExecuteProcess(cmd=['true'])
+
+    monkeypatch.setattr(nodes_module, 'node_action', record)
+    return recorded
+
+
+def test_real_board_plan_starts_client_and_pairing(tmp_path, capabilities, monkeypatch):
+    recorded = _recorded_specs(monkeypatch)
+    dependencies = []
+    capabilities['executable_available'] = lambda package, executable: dependencies.append(
+        (package, executable)) or True
+    launching.build_launch_actions(board_inventory(tmp_path), capabilities=capabilities)
+    labels = [spec['label'] for spec in recorded]
+    assert 'Time sync board local' in labels
+    assert 'Camera trigger robot_a/front' in labels
+    assert ('chaos_time_sync', 'chaos_time_sync_node') in dependencies
+    assert ('chaos_camera_trigger', 'trigger_pair_node') in dependencies
+
+
+def test_mock_board_plan_starts_no_time_sync(tmp_path, capabilities, monkeypatch):
+    recorded = _recorded_specs(monkeypatch)
+    dependencies = []
+    capabilities['executable_available'] = lambda package, executable: dependencies.append(
+        (package, executable)) or True
+    launching.build_launch_actions(board_inventory(tmp_path, mode='mock'), capabilities=capabilities)
+    labels = [spec['label'] for spec in recorded]
+    assert all('Time sync board' not in label and 'Camera trigger' not in label
+               for label in labels)
+    assert ('chaos_time_sync', 'chaos_time_sync_node') not in dependencies
+    assert ('chaos_camera_trigger', 'trigger_pair_node') not in dependencies

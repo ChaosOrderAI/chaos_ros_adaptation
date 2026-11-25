@@ -171,6 +171,10 @@ Json sensor_summary(const Json& asset) {
     entry["kind"] = sensor->at("kind");
     entry["mode"] = sensor->at("driver").at("mode");
     entry["namespace"] = sensor->at("namespace");
+    auto time_sync = sensor->find("time_sync");
+    if (time_sync != sensor->end()) {
+      entry["time_sync"] = *time_sync;
+    }
     Json streams = Json::object();
     for (auto it = sensor->at("streams").begin(); it != sensor->at("streams").end(); ++it) {
       Json stream = Json::object();
@@ -221,6 +225,10 @@ Json plan_summary(const LaunchPlan& plan) {
     entry["ros_domain_id"] = asset.at("ros_domain_id");
     entry["capabilities"] = asset.at("capabilities");
     entry["mqtt"] = !item.at("mqtt").is_null();
+    const auto board = item.find("board");
+    entry["board"] = (board != item.end() && !board->is_null()) ? *board : Json();
+    entry["board_owner"] =
+        item.contains("board_owner") ? item.at("board_owner") : Json(false);
     entry["sensors"] = sensor_summary(asset);
     entry["description"] = description_summary(asset);
     entry["data_collection"] = collection_summary(asset);
@@ -389,6 +397,21 @@ void preflight(const LaunchPlan& plan, const PreflightOptions& options) {
       }
       if (sensor->find("transform") != sensor->end()) {
         dependencies.insert({"tf2_ros", "static_transform_publisher"});
+      }
+    }
+    const auto board = item.find("board");
+    if (board != item.end() && !board->is_null()) {
+      if (item.contains("board_owner") && item.at("board_owner").get<bool>()) {
+        dependencies.insert({"chaos_time_sync", "chaos_time_sync_node"});
+      }
+      for (const Json* sensor : sensors) {
+        const auto time_sync = sensor->find("time_sync");
+        if (time_sync == sensor->end()) continue;
+        if (sensor->at("kind").get_ref<const std::string&>() == "camera" &&
+          time_sync->at("source").get_ref<const std::string&>() == "board_trigger")
+        {
+          dependencies.insert({"chaos_camera_trigger", "trigger_pair_node"});
+        }
       }
     }
     if (enabled_description(asset) != nullptr) {
@@ -587,6 +610,107 @@ std::vector<ProcessSpec> sensor_processes(const Json& asset, const Json& paramet
     // the nested document of an asset with null values, and the monitor
     // parses the document itself.
     entry["asset_json"] = asset.dump();
+    parameters.push_back(entry);
+    spec.parameters = parameters;
+    result.push_back(spec);
+  }
+  return result;
+}
+
+std::vector<ProcessSpec> time_sync_processes(const Json& item) {
+  std::vector<ProcessSpec> result;
+  if (!item.contains("asset")) return result;
+  const Json& asset = item.at("asset");
+  if (asset.at("mode").get_ref<const std::string&>() != "real") return result;
+  const auto board = item.find("board");
+  if (board == item.end() || board->is_null()) return result;
+
+  const std::string asset_id = asset.at("id").get_ref<const std::string&>();
+  const std::string host = asset.at("host").get_ref<const std::string&>();
+
+  const bool owner = item.contains("board_owner") && item.at("board_owner").get<bool>();
+  if (owner) {
+    // One client per host: the board's UTC comes from this process, so a
+    // second one on the same host would fight over the same UDP peer.
+    ProcessSpec spec;
+    spec.label = "Time sync board " + host;
+    spec.package = "chaos_time_sync";
+    spec.executable = "chaos_time_sync_node";
+    spec.name = "chaos_time_sync";
+    spec.node_namespace = "/";
+    Json entry = Json::object();
+    entry["board_ip"] = board->at("ip");
+    entry["board_port"] = board->at("port");
+    entry["local_port"] = board->at("local_port");
+    entry["ptp_period_ms"] = board->at("ptp_period_ms");
+    entry["publish_imu"] = board->at("publish_imu");
+    // Absolute topics: the pairing processes live in sensor namespaces and
+    // must reach the same board streams.
+    entry["trigger_topic"] = "/board/trigger";
+    entry["imu_topic"] = "/board/imu";
+    entry["diagnostics_topic"] = "/board/diagnostics";
+    Json parameters = Json::array();
+    parameters.push_back(entry);
+    spec.parameters = parameters;
+    result.push_back(spec);
+  }
+
+  for (const Json* sensor : enabled_sensors(asset)) {
+    if (sensor->at("kind").get_ref<const std::string&>() != "camera") continue;
+    const auto time_sync = sensor->find("time_sync");
+    if (time_sync == sensor->end()) continue;
+    if (time_sync->at("source").get_ref<const std::string&>() != "board_trigger") continue;
+
+    const Json& streams = sensor->at("streams");
+    const Json* image = nullptr;
+    const Json* info = nullptr;
+    // The declaration names the stream to pair when a camera has more than
+    // one; otherwise fall back to the only Image stream.
+    const auto selected = time_sync->find("image_stream");
+    if (selected != time_sync->end()) {
+      const std::string& name = selected->get_ref<const std::string&>();
+      const auto stream = streams.find(name);
+      if (stream != streams.end()) image = &stream.value();
+    }
+    for (auto it = streams.begin(); it != streams.end(); ++it) {
+      const std::string& type = it.value().at("type").get_ref<const std::string&>();
+      if (info == nullptr && type == "sensor_msgs/msg/CameraInfo") info = &it.value();
+      if (image == nullptr && type == "sensor_msgs/msg/Image") image = &it.value();
+    }
+    if (image == nullptr) continue;  // load-time validation rejects this
+
+    const std::string sensor_id = sensor->at("id").get_ref<const std::string&>();
+    const std::string ns = sensor->at("namespace").get_ref<const std::string&>();
+
+    ProcessSpec spec;
+    spec.label = "Camera trigger " + asset_id + "/" + sensor_id;
+    spec.package = "chaos_camera_trigger";
+    spec.executable = "trigger_pair_node";
+    spec.name = "trigger_pair";
+    spec.node_namespace = ns;
+    Json entry = Json::object();
+    entry["trigger_topic"] = "/board/trigger";
+    entry["image_topic"] = image->at("topic");
+    entry["image_output_topic"] = ns + "/image_synced";
+    entry["diagnostics_topic"] = ns + "/diagnostics";
+    entry["board_channel"] = time_sync->at("board_channel");
+    entry["max_age_ms"] = time_sync->at("max_age_ms");
+    entry["exposure_offset_us"] = time_sync->at("exposure_offset_us");
+    const auto trigger_hz = time_sync->find("trigger_hz");
+    entry["expected_period_ms"] =
+        (trigger_hz != time_sync->end() && trigger_hz->get<double>() > 0.0)
+            ? Json(1000.0 / trigger_hz->get<double>())
+            : Json(0.0);
+    if (info != nullptr) {
+      entry["publish_camera_info"] = true;
+      entry["camera_info_topic"] = info->at("topic");
+      entry["camera_info_output_topic"] = ns + "/camera_info_synced";
+    } else {
+      entry["publish_camera_info"] = false;
+      entry["camera_info_topic"] = "";
+      entry["camera_info_output_topic"] = "";
+    }
+    Json parameters = Json::array();
     parameters.push_back(entry);
     spec.parameters = parameters;
     result.push_back(spec);

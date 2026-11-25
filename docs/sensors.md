@@ -4,6 +4,8 @@
 
 Gemini 335 的官方 C++ 驱动源码、固定版本和部署步骤见 [奥比中光接入](orbbec-driver.md)。本层同样允许接入其他提供标准消息的 ROS 2 驱动。
 
+现成的接入示例都在 `chaos_assets/config/`：`orbbec_gemini335.example.yaml`（RGB + 深度 + IMU）、`at600_ir_camera.example.yaml`（IRay AT600 热成像 + 可见光）、`livox_mid360s.example.yaml`（Mid-360S 点云 + IMU）、`hikvision_mvcs050.example.yaml`（海康 5 MP 千兆网相机）、`realsense_d435.example.yaml`（D435 彩色 + 深度 + IMU）。
+
 ## 配置与启动
 
 型号文件和资产实例均可包含 `sensors` 映射，按传感器 ID 合并。同一驱动可以提供多条流，例如 Gemini 335 的 RGB、深度和 IMU，或 Livox 的点云与 IMU。无需为每条流重复启动设备驱动。
@@ -20,6 +22,38 @@ Gemini 335 的官方 C++ 驱动源码、固定版本和部署步骤见 [奥比�
 | `driver.remappings` | ROS 话题重映射，禁止覆盖 namespace 或节点名 |
 | `streams` | 流 ID 到接口声明的映射，包含 type/topic/frame_id/qos/rate_hz/timeout_s/monitor |
 | `transform` | 可选的安装外参，parent + xyz（米）+ rpy（弧度） |
+| `time_sync` | 可选的时间来源声明，见下节 |
+
+### time_sync 时间来源
+
+`sensors.<id>.time_sync` 声明这一路消息的时间戳从哪里来，供驱动、监测和下游对齐共同参考：
+
+| 字段 | 取值 | 含义 |
+|---|---|---|
+| `source` | `board_trigger` / `device_timestamp` / `host_arrival` | 同步板 PWM 触发、设备自带时间戳、主机到达时间 |
+| `board_channel` | `CAM_1..CAM_4` / `IMU_2` / `LIDAR_1` / `LIDAR_2` / `none` | 涉及的物理通道 |
+| `trigger_hz` | 0.01–1000，可选 | 期望触发频率 |
+| `max_age_ms` | 0.01–10000，默认 50 | 触发到帧的最大允许间隔（配对超时） |
+| `exposure_offset_us` | −1000000..1000000，默认 0 | 时间戳补偿（如曝光中点） |
+| `clock_domain` | `host_utc` / `board` / `device` | 时间戳所在时钟域，默认按 source 推导 |
+| `requires` | `none` / `gps_sync` / `ptp` | 该路依赖的同步前提，供预检和诊断使用 |
+| `image_stream` | 流 ID，可选 | `board_trigger` 相机有多条 Image 流时指定参与配对的那一条 |
+
+`time_sync` 本身仍不启动进程；启动开关是 host 级的 `board` 块。real 模式下每台主机启动一个 `chaos_time_sync_node`（根 namespace，发布 `/board/trigger`、`/board/imu`、`/board/diagnostics`），并为每个 `source: board_trigger` 的相机派生一个 `trigger_pair_node`（在传感器 namespace 下订阅原始 Image/CameraInfo，发布 `<sensor namespace>/image_synced`、`camera_info_synced`、`diagnostics`）。mock 资产与 `--mode mock` 不启动二者。注意 `sensor_monitor` 仍监测原始 `streams.topic`，采集也默认只录原始话题；需要同步帧时应在 `data_collection.topics` 中显式加入 `image_synced`/`camera_info_synced`/`board/imu`。
+
+约束：`board_trigger` 必须配 `CAM_n` 或 `IMU_2`；带多条 Image 流的 `board_trigger` 相机必须用 `image_stream` 指明配对流（只有一条时可省略，加载器会自动写入）；`device_timestamp` 只允许 `none` 或 `LIDAR_n`；`host_arrival` 不允许声明通道。`board_trigger` 表示硬件触发链，`clock_domain` 通常是 `host_utc`（板卡时钟由主机 UTC 校准）；`host_arrival` 是最低精度选项，仅在设备既不能触发也没有可信时间戳时使用。声明会出现在 `sensors/description` 中（不含驱动参数），不改变驱动的实际行为——驱动仍须按声明实现。
+
+### hosts.<id>.board 同步板
+
+| 字段 | 默认 | 含义 |
+|---|---|---|
+| `ip` | 必填 | 板卡 IPv4 地址（按字面量校验） |
+| `port` | `8888` | 板卡 UDP 端口 |
+| `local_port` | `0` | 本机源端口，0 表示临时端口 |
+| `ptp_period_ms` | `100` | 类 PTP 校时周期（毫秒） |
+| `publish_imu` | `true` | 是否发布板载 IMU |
+
+配置了 `board` 才表示这台主机有同步板。real 资产的传感器若声明 `source: board_trigger`、`requires: gps_sync/ptp`、`clock_domain: board` 或 `board_channel: LIDAR_n`，加载时会要求该主机必须有 `board` 块，否则报错；mock 资产不要求。`source: board_trigger` 的相机必须至少声明一条 `sensor_msgs/msg/Image` 流。同一主机上的多个资产共享一个板卡客户端，只有第一个被选中的 real 资产承载该进程。
 
 传感器 namespace 固定为 `<asset namespace>/sensors/<sensor_id>`，受管驱动节点名固定为 `driver`。相对流话题和重映射目标按此 namespace 展开；绝对话题保持原样。`frame_id` 不受 ROS namespace 自动隔离，需要独立设置。
 

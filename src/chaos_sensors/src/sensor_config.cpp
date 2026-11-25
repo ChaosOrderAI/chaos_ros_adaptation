@@ -149,6 +149,38 @@ SensorConfig parseSensor(const std::string & sensor_id,
     fail(where, "driver.mode must be a string");
   }
   config.driver_mode = mode->get<std::string>();
+  auto time_sync = sensor.find("time_sync");
+  if (time_sync != sensor.end()) {
+    const std::string ts_where = where + ".time_sync";
+    if (!time_sync->is_object()) {
+      fail(ts_where, "time_sync must be an object");
+    }
+    config.time_sync.present = true;
+    config.time_sync.source = requireNonEmptyString(*time_sync, "source", ts_where);
+    config.time_sync.board_channel =
+      requireNonEmptyString(*time_sync, "board_channel", ts_where);
+    config.time_sync.clock_domain =
+      requireNonEmptyString(*time_sync, "clock_domain", ts_where);
+    config.time_sync.requires = requireNonEmptyString(*time_sync, "requires", ts_where);
+    auto image_stream = time_sync->find("image_stream");
+    if (image_stream != time_sync->end()) {
+      if (!image_stream->is_string() || image_stream->get<std::string>().empty()) {
+        fail(ts_where, "image_stream must be a nonempty string");
+      }
+      config.time_sync.image_stream = image_stream->get<std::string>();
+    }
+    config.time_sync.trigger_hz =
+      requireRange(*time_sync, "trigger_hz", 0.0, 0.01, 1000.0, ts_where);
+    config.time_sync.max_age_ms =
+      requireRange(*time_sync, "max_age_ms", 50.0, 0.01, 10000.0, ts_where);
+    auto offset = time_sync->find("exposure_offset_us");
+    if (offset != time_sync->end()) {
+      if (offset->is_boolean() || !offset->is_number_integer()) {
+        fail(ts_where, "exposure_offset_us must be an integer");
+      }
+      config.time_sync.exposure_offset_us = offset->get<int64_t>();
+    }
+  }
   config.streams = parseStreams(sensor, where);
   return config;
 }
@@ -214,6 +246,23 @@ std::string publicDescription(const std::string & asset_id,
     entry["namespace"] = sensor.name_space;
     entry["frame_id"] = sensor.frame_id;
     entry["driver"] = {{"mode", sensor.driver_mode}};
+    if (sensor.time_sync.present) {
+      nlohmann::json time_sync = {
+        {"source", sensor.time_sync.source},
+        {"board_channel", sensor.time_sync.board_channel},
+        {"clock_domain", sensor.time_sync.clock_domain},
+        {"requires", sensor.time_sync.requires},
+        {"max_age_ms", sensor.time_sync.max_age_ms},
+        {"exposure_offset_us", sensor.time_sync.exposure_offset_us},
+      };
+      if (sensor.time_sync.trigger_hz > 0.0) {
+        time_sync["trigger_hz"] = sensor.time_sync.trigger_hz;
+      }
+      if (!sensor.time_sync.image_stream.empty()) {
+        time_sync["image_stream"] = sensor.time_sync.image_stream;
+      }
+      entry["time_sync"] = std::move(time_sync);
+    }
     nlohmann::json streams = nlohmann::json::object();
     for (const auto & [stream_id, stream] : sensor.streams) {
       streams[stream_id] = {

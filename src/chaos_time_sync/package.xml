@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>chaos_time_sync</name>
+  <version>0.1.0</version>
+  <description>
+    Minimal host-side client for the InfiniteSense SimpleSensorSync board:
+    PTP-like clock exchange over UDP, trigger and IMU stream decoding, and
+    diagnostics. Deliberately independent of the vendor SDK (GPL-3.0, broken
+    colcon build): only the published JSON protocol is reimplemented here.
+  </description>
+  <maintainer email="yunze@example.com">yunze</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>chaos_interfaces</depend>
+  <depend>nlohmann_json</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

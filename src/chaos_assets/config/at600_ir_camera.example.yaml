@@ -1,0 +1,60 @@
+# IRay AT600 thermal + visible module on a vehicle.
+#
+# The module exposes a single UVC mode: 512x192 YUYV at 25 fps, with the
+# thermal image on the left half and a visible-light image on the right half,
+# factory-registered to the same optical axis. at600_split_node publishes both
+# halves as separate Image streams under this sensor's namespace.
+#
+# Inspect without hardware: edge.launch.py dry_run:=true
+schema_version: 1
+hosts:
+  onboard:
+    ros_domain_id: 61
+assets:
+  - id: vehicle_001
+    host: onboard
+    mode: real
+    model_file: package://chaos_assets/models/lingao_vehicle/v1/model.yaml
+    sensors:
+      ir_camera:
+        kind: camera
+        enabled: true
+        frame_id: vehicle_001_ir_camera_link
+        driver:
+          mode: node
+          package: chaos_thermal_fusion
+          executable: at600_split_node
+          parameters:
+            device: /dev/v4l/by-id/usb-IRay_AT600-video-index0
+            width: 512
+            height: 192
+            fps: 25
+            split_ratio: 0.5
+            publish_visible: true
+            # Keep the message frame_ids equal to the stream declarations
+            # below; the driver does not add a namespace to them.
+            thermal_frame_id: vehicle_001_ir_camera_thermal_optical_frame
+            visible_frame_id: vehicle_001_ir_camera_visible_optical_frame
+        # Both halves are 256x192 mono8 at 25 Hz. Monitoring is off by default:
+        # diagnostic subscribers would deserialize every thermal frame.
+        streams:
+          thermal:
+            type: sensor_msgs/msg/Image
+            topic: thermal/image_raw
+            frame_id: vehicle_001_ir_camera_thermal_optical_frame
+            rate_hz: 25.0
+            monitor: false
+          visible:
+            type: sensor_msgs/msg/Image
+            topic: visible/image_raw
+            frame_id: vehicle_001_ir_camera_visible_optical_frame
+            rate_hz: 25.0
+            monitor: false
+        time_sync:
+          # The module has no external trigger input; the driver stamps each
+          # frame from the V4L2 buffer timestamp mapped onto the host UTC clock.
+          source: device_timestamp
+          clock_domain: host_utc
+          exposure_offset_us: 0
+        # Mounting extrinsics are intentionally absent: add `transform` with
+        # measured xyz/rpy once the module is bolted down.

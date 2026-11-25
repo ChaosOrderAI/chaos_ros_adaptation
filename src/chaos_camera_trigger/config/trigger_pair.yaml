@@ -1,0 +1,18 @@
+trigger_pair:
+  ros__parameters:
+    # Inputs
+    trigger_topic: board/trigger          # chaos_interfaces/BoardTrigger from chaos_time_sync
+    image_topic: image_raw                # whatever the camera driver publishes
+    camera_info_topic: camera_info
+    publish_camera_info: true             # false when the driver publishes no CameraInfo
+    # Outputs
+    image_output_topic: image_synced
+    camera_info_output_topic: camera_info_synced
+    diagnostics_topic: diagnostics
+    # Pairing
+    board_channel: CAM_1                  # IMU_2 or CAM_1..CAM_4
+    max_age_ms: 80.0                      # must stay below the trigger period
+    exposure_offset_us: 0                 # e.g. half the exposure time
+    missing_trigger: drop                 # drop | arrival | last
+    expected_period_ms: 100.0             # 0 disables trigger-gap counting
+    frame_id: ""                          # empty keeps the driver's frame_id

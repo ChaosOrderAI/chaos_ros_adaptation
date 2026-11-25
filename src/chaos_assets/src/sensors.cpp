@@ -31,9 +31,13 @@ const std::map<std::string, std::set<std::string>> kPrimaryTypes = {
     {"imu", {"sensor_msgs/msg/Imu"}},
 };
 
-const std::vector<std::string> kSensorFields = {"kind", "enabled", "frame_id", "driver", "streams", "transform"};
+const std::vector<std::string> kSensorFields = {"kind", "enabled", "frame_id", "driver", "streams",
+                                                "transform", "time_sync"};
 const std::vector<std::string> kDriverFields = {"mode", "package", "executable", "parameters",
                                                 "parameter_files", "remappings"};
+const std::vector<std::string> kTimeSyncFields = {"source", "board_channel", "trigger_hz", "max_age_ms",
+                                                  "exposure_offset_us", "clock_domain", "requires",
+                                                  "image_stream"};
 const std::vector<std::string> kStreamFields = {"type", "topic", "frame_id", "qos", "rate_hz",
                                                 "timeout_s", "monitor"};
 
@@ -108,6 +112,10 @@ Json declarations(const Json& value, const std::string& base_path, const std::st
     if (transform != declaration.end()) {
       record(transform.value(), prefix + ".transform", {"parent", "xyz", "rpy"});
     }
+    auto time_sync = declaration.find("time_sync");
+    if (time_sync != declaration.end()) {
+      record(time_sync.value(), prefix + ".time_sync", kTimeSyncFields);
+    }
   }
   return result;
 }
@@ -180,6 +188,94 @@ std::vector<double> vector3(const Json& value, const std::string& where) {
     result.push_back(number);
   }
   return result;
+}
+
+// Time contract for one sensor. `source` is where message stamps come from:
+// board_trigger (a sync-board PWM channel fires the sensor), device_timestamp
+// (the device stamps itself, optionally disciplined by board PPS/GPRMC), or
+// host_arrival (free-running; the least accurate option). board_channel names
+// the physical channel when one is involved: CAM_n/IMU_2 for triggers,
+// LIDAR_n for a PPS output feeding a LiDAR or industrial IMU.
+Json timeSync(const Json& value, const std::string& where) {
+  Json result = record(value, where, kTimeSyncFields);
+  auto source_value = result.find("source");
+  if (source_value == result.end()) {
+    throw ConfigurationError(
+            where + ".source: expected board_trigger, device_timestamp or host_arrival");
+  }
+  const std::string source = text(*source_value, where + ".source");
+  if (source != "board_trigger" && source != "device_timestamp" && source != "host_arrival") {
+    throw ConfigurationError(
+            where + ".source: expected board_trigger, device_timestamp or host_arrival");
+  }
+
+  const std::string channel = result.contains("board_channel")
+                                  ? text(result.at("board_channel"), where + ".board_channel")
+                                  : "none";
+  static const std::set<std::string> kChannels = {
+      "none", "CAM_1", "CAM_2", "CAM_3", "CAM_4", "IMU_2", "LIDAR_1", "LIDAR_2"};
+  if (kChannels.count(channel) == 0) {
+    throw ConfigurationError(where + ".board_channel: unknown sync board channel " + channel);
+  }
+  const bool trigger_channel = channel == "CAM_1" || channel == "CAM_2" ||
+                               channel == "CAM_3" || channel == "CAM_4" || channel == "IMU_2";
+  if (source == "board_trigger" && !trigger_channel) {
+    throw ConfigurationError(where + ".board_channel: board_trigger needs CAM_n or IMU_2");
+  }
+  if (source == "host_arrival" && channel != "none") {
+    throw ConfigurationError(where + ".board_channel: host_arrival cannot claim a board channel");
+  }
+  if (source == "device_timestamp" && channel != "none" &&
+      channel != "LIDAR_1" && channel != "LIDAR_2") {
+    throw ConfigurationError(where + ".board_channel: device_timestamp accepts none or LIDAR_n");
+  }
+
+  std::string clock_domain = result.contains("clock_domain")
+                                 ? text(result.at("clock_domain"), where + ".clock_domain")
+                                 : (source == "device_timestamp" ? "device" : "host_utc");
+  if (clock_domain != "host_utc" && clock_domain != "board" && clock_domain != "device") {
+    throw ConfigurationError(where + ".clock_domain: expected host_utc, board or device");
+  }
+  // The clock domain has to be consistent with where the stamp comes from; a
+  // contradictory pair would make the requirement check and the diagnostics
+  // reason about a time base the sensor cannot actually provide.
+  if (source == "host_arrival" && clock_domain != "host_utc") {
+    throw ConfigurationError(
+            where + ".clock_domain: host_arrival stamps are host UTC, not " + clock_domain);
+  }
+  if (source == "board_trigger" && clock_domain == "device") {
+    throw ConfigurationError(
+            where + ".clock_domain: board_trigger stamps come from the board/host clock");
+  }
+  const std::string requires_value = result.contains("requires")
+                                   ? text(result.at("requires"), where + ".requires")
+                                   : "none";
+  if (requires_value != "none" && requires_value != "gps_sync" && requires_value != "ptp") {
+    throw ConfigurationError(where + ".requires: expected none, gps_sync or ptp");
+  }
+  const double max_age_ms = positive(
+      result.contains("max_age_ms") ? result.at("max_age_ms") : Json(50.0),
+      where + ".max_age_ms", 0.01, 10000.0);
+  const int64_t offset_us = integer(
+      result.contains("exposure_offset_us") ? result.at("exposure_offset_us") : Json(0),
+      where + ".exposure_offset_us", -1000000, 1000000);
+
+  Json normalized = Json::object();
+  normalized["source"] = source;
+  normalized["board_channel"] = channel;
+  normalized["clock_domain"] = clock_domain;
+  normalized["requires"] = requires_value;
+  normalized["max_age_ms"] = max_age_ms;
+  normalized["exposure_offset_us"] = offset_us;
+  if (result.contains("trigger_hz")) {
+    normalized["trigger_hz"] = positive(
+      result.at("trigger_hz"), where + ".trigger_hz", 0.01, 1000.0);
+  }
+  if (result.contains("image_stream")) {
+    normalized["image_stream"] = text(
+      result.at("image_stream"), where + ".image_stream", &identifier_re);
+  }
+  return normalized;
 }
 
 }  // namespace
@@ -310,6 +406,43 @@ Json resolve_sensors(const Json& model_sensors, const Json& instance_sensors,
       normalized["xyz"] = Json::array({xyz[0], xyz[1], xyz[2]});
       normalized["rpy"] = Json::array({rpy[0], rpy[1], rpy[2]});
       sensor["transform"] = normalized;
+    }
+    auto time_sync = sensor.find("time_sync");
+    if (time_sync != sensor.end()) {
+      const Json normalized = timeSync(time_sync.value(), prefix + ".time_sync");
+      sensor["time_sync"] = normalized;
+      if (kind_string == "camera" &&
+        normalized.at("source").get_ref<const std::string&>() == "board_trigger")
+      {
+        std::vector<std::string> image_streams;
+        for (auto sit = streams->begin(); sit != streams->end(); ++sit) {
+          if (sit.value().at("type").get_ref<const std::string&>() == "sensor_msgs/msg/Image") {
+            image_streams.push_back(sit.key());
+          }
+        }
+        if (image_streams.empty()) {
+          throw ConfigurationError(
+                  prefix + ".time_sync: a board_trigger camera needs an Image stream to pair");
+        }
+        const auto selected = normalized.find("image_stream");
+        if (selected != normalized.end()) {
+          const std::string& name = selected->get_ref<const std::string&>();
+          if (streams->find(name) == streams->end() ||
+            streams->at(name).at("type").get_ref<const std::string&>() != "sensor_msgs/msg/Image")
+          {
+            throw ConfigurationError(
+                    prefix + ".time_sync.image_stream: '" + name +
+                    "' is not an Image stream of this sensor");
+          }
+        } else if (image_streams.size() > 1) {
+          throw ConfigurationError(
+                  prefix + ".time_sync.image_stream: the camera has " +
+                  std::to_string(image_streams.size()) +
+                  " Image streams; name the one to pair");
+        } else {
+          sensor["time_sync"]["image_stream"] = image_streams.front();
+        }
+      }
     }
   }
   return result;

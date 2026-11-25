@@ -367,3 +367,144 @@ TEST(Components, ThePreflightChecksTheBackendOfTheHumanoidPlugin) {
   options.backend_available = [](const std::string&) { return false; };
   EXPECT_THROW(chaos::bringup::preflight(plan_of(asset), options), ConfigurationError);
 }
+
+namespace {
+
+Json camera_sensor(const std::string& source) {
+  Json sensor = Json::object();
+  sensor["id"] = "front_camera";
+  sensor["kind"] = "camera";
+  sensor["enabled"] = true;
+  sensor["namespace"] = "/robots/unit/sensors/front_camera";
+  sensor["frame_id"] = "unit/front_camera_link";
+  Json driver = Json::object();
+  driver["mode"] = "node";
+  driver["package"] = "camera_aravis2";
+  driver["executable"] = "camera_driver_gv";
+  sensor["driver"] = driver;
+  Json image = Json::object();
+  image["type"] = "sensor_msgs/msg/Image";
+  image["topic"] = "/robots/unit/sensors/front_camera/image_raw";
+  Json info = Json::object();
+  info["type"] = "sensor_msgs/msg/CameraInfo";
+  info["topic"] = "/robots/unit/sensors/front_camera/camera_info";
+  sensor["streams"] = Json::object({{"image", image}, {"camera_info", info}});
+  Json time_sync = Json::object();
+  time_sync["source"] = source;
+  time_sync["board_channel"] = source == "board_trigger" ? "CAM_1" : "none";
+  time_sync["clock_domain"] = "host_utc";
+  time_sync["requires"] = "none";
+  time_sync["max_age_ms"] = 80.0;
+  time_sync["exposure_offset_us"] = 0;
+  time_sync["trigger_hz"] = 10.0;
+  sensor["time_sync"] = time_sync;
+  return sensor;
+}
+
+Json plan_item_with_board(bool owner) {
+  Json asset = asset_with_description();
+  asset["mode"] = "real";
+  asset["host"] = "onboard";
+  asset["sensors"] = Json::object({{"front_camera", camera_sensor("board_trigger")}});
+  Json item = Json::object();
+  item["asset"] = asset;
+  item["mqtt"] = Json();
+  Json board = Json::object();
+  board["ip"] = "192.168.123.188";
+  board["port"] = 8888;
+  board["local_port"] = 0;
+  board["ptp_period_ms"] = 100;
+  board["publish_imu"] = true;
+  item["board"] = board;
+  item["board_owner"] = owner;
+  return item;
+}
+
+}  // namespace
+
+TEST(Components, TheTimeSyncBoardProcessUsesTheHostConfiguration) {
+  const Json item = plan_item_with_board(true);
+  const std::vector<chaos::bringup::ProcessSpec> processes =
+      chaos::bringup::time_sync_processes(item);
+  ASSERT_EQ(processes.size(), 2u);
+  const auto& board = processes.at(0);
+  EXPECT_EQ(board.package, "chaos_time_sync");
+  EXPECT_EQ(board.executable, "chaos_time_sync_node");
+  EXPECT_EQ(board.name, "chaos_time_sync");
+  EXPECT_EQ(board.node_namespace, "/");
+  EXPECT_TRUE(board.remappings.empty());
+  ASSERT_EQ(board.parameters.size(), 1u);
+  const Json& params = board.parameters.at(0);
+  EXPECT_EQ(params.at("board_ip"), "192.168.123.188");
+  EXPECT_EQ(params.at("board_port"), 8888);
+  EXPECT_EQ(params.at("local_port"), 0);
+  EXPECT_EQ(params.at("ptp_period_ms"), 100);
+  EXPECT_EQ(params.at("publish_imu"), true);
+  EXPECT_EQ(params.at("trigger_topic"), "/board/trigger");
+  EXPECT_EQ(params.at("imu_topic"), "/board/imu");
+  EXPECT_EQ(params.at("diagnostics_topic"), "/board/diagnostics");
+}
+
+TEST(Components, ABoardTriggerCameraGetsATriggerPairProcess) {
+  const Json item = plan_item_with_board(false);  // another asset owns the board
+  const std::vector<chaos::bringup::ProcessSpec> processes =
+      chaos::bringup::time_sync_processes(item);
+  ASSERT_EQ(processes.size(), 1u);
+  const auto& pair = processes.at(0);
+  EXPECT_EQ(pair.package, "chaos_camera_trigger");
+  EXPECT_EQ(pair.executable, "trigger_pair_node");
+  EXPECT_EQ(pair.name, "trigger_pair");
+  EXPECT_EQ(pair.node_namespace, "/robots/unit/sensors/front_camera");
+  ASSERT_EQ(pair.parameters.size(), 1u);
+  const Json& params = pair.parameters.at(0);
+  EXPECT_EQ(params.at("trigger_topic"), "/board/trigger");
+  EXPECT_EQ(params.at("image_topic"), "/robots/unit/sensors/front_camera/image_raw");
+  EXPECT_EQ(params.at("image_output_topic"), "/robots/unit/sensors/front_camera/image_synced");
+  EXPECT_EQ(params.at("camera_info_topic"), "/robots/unit/sensors/front_camera/camera_info");
+  EXPECT_EQ(params.at("camera_info_output_topic"),
+            "/robots/unit/sensors/front_camera/camera_info_synced");
+  EXPECT_EQ(params.at("board_channel"), "CAM_1");
+  EXPECT_DOUBLE_EQ(params.at("max_age_ms").get<double>(), 80.0);
+  EXPECT_DOUBLE_EQ(params.at("expected_period_ms").get<double>(), 100.0);
+  EXPECT_EQ(params.at("publish_camera_info"), true);
+}
+
+TEST(Components, ADeviceTimestampCameraGetsNoTriggerPair) {
+  Json item = plan_item_with_board(true);
+  item["asset"]["sensors"] =
+      Json::object({{"front_camera", camera_sensor("device_timestamp")}});
+  const std::vector<chaos::bringup::ProcessSpec> processes =
+      chaos::bringup::time_sync_processes(item);
+  ASSERT_EQ(processes.size(), 1u);
+  EXPECT_EQ(processes.at(0).executable, "chaos_time_sync_node");
+}
+
+TEST(Components, AMockAssetHasNoTimeSyncProcesses) {
+  Json item = plan_item_with_board(true);
+  item["asset"]["mode"] = "mock";
+  EXPECT_TRUE(chaos::bringup::time_sync_processes(item).empty());
+
+  Json no_board = plan_item_with_board(true);
+  no_board["board"] = Json();
+  EXPECT_TRUE(chaos::bringup::time_sync_processes(no_board).empty());
+}
+
+TEST(Components, TheNamedImageStreamIsPaired) {
+  Json item = plan_item_with_board(false);
+  Json sensor = camera_sensor("board_trigger");
+  Json thermal = Json::object();
+  thermal["type"] = "sensor_msgs/msg/Image";
+  thermal["topic"] = "/robots/unit/sensors/front_camera/thermal";
+  Json visible = Json::object();
+  visible["type"] = "sensor_msgs/msg/Image";
+  visible["topic"] = "/robots/unit/sensors/front_camera/visible";
+  sensor["streams"] = Json::object({{"thermal", thermal}, {"visible", visible}});
+  sensor["time_sync"]["image_stream"] = "visible";
+  item["asset"]["sensors"] = Json::object({{"front_camera", sensor}});
+
+  const std::vector<chaos::bringup::ProcessSpec> processes =
+      chaos::bringup::time_sync_processes(item);
+  ASSERT_EQ(processes.size(), 1u);
+  EXPECT_EQ(processes.at(0).parameters.at(0).at("image_topic"),
+            "/robots/unit/sensors/front_camera/visible");
+}

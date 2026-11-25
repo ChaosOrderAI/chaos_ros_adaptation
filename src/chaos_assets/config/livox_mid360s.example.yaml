@@ -1,0 +1,74 @@
+# Livox Mid-360S on a vehicle (GigE; the JSON profile carries the host and
+# lidar IPs).
+#
+# xfer_format 0 publishes sensor_msgs/PointCloud2, which is what this asset
+# layer can declare. Consumers that need the vendor livox_ros_driver2/msg/
+# CustomMsg channel (for example a SLAM front end) must either run their own
+# driver in attach mode or convert explicitly: renaming does not change the
+# message type.
+schema_version: 1
+hosts:
+  onboard:
+    ros_domain_id: 61
+    # InfiniteSense SimpleSensorSync V4 board. Its presence is the explicit
+    # switch that makes the launcher start chaos_time_sync_node on this host.
+    board:
+      ip: 192.168.123.188    # board on the sensor LAN; replace with its configured address
+      port: 8888
+      ptp_period_ms: 100
+assets:
+  - id: vehicle_001
+    host: onboard
+    mode: real
+    model_file: package://chaos_assets/models/lingao_vehicle/v1/model.yaml
+    sensors:
+      lidar:
+        kind: lidar
+        enabled: true
+        frame_id: vehicle_001_lidar_link
+        driver:
+          mode: node
+          package: livox_ros_driver2
+          executable: livox_ros_driver2_node
+          parameters:
+            xfer_format: 0        # 0 = PointCloud2, 1 = Livox CustomMsg
+            multi_topic: 0        # all lidars share one topic
+            data_src: 0           # 0 = live lidar
+            publish_freq: 10.0
+            output_data_type: 0
+            frame_id: vehicle_001_lidar_link
+            # Absolute path: plain parameters are not package:// resolved.
+            # Installed at this path for the 192.168.123.0/24 sensor LAN:
+            # host 192.168.123.222 (the Jetson's eth), lidar 192.168.123.101
+            # (replace with the actual Mid-360S address). The sync board is
+            # also on this subnet, see hosts.onboard.board above.
+            user_config_path: /opt/chaos/livox/MID360s_config.json
+          # The driver publishes relative livox/lidar and livox/imu topics;
+          # remap them onto the stream names declared below.
+          remappings:
+            livox/lidar: points
+            livox/imu: imu
+        streams:
+          points:
+            type: sensor_msgs/msg/PointCloud2
+            topic: points
+            frame_id: vehicle_001_lidar_link
+            rate_hz: 10.0
+            monitor: false
+          imu:
+            type: sensor_msgs/msg/Imu
+            topic: imu
+            frame_id: vehicle_001_lidar_imu_link
+            rate_hz: 200.0
+            monitor: false
+        time_sync:
+          # LIDAR_1 carries the board's 1 Hz PPS + GPRMC; the LiDAR stamps its
+          # own points/IMU from GPS time, which inherits host UTC through the
+          # sync board. Verify the driver reports GPS sync, not a fallback.
+          source: device_timestamp
+          board_channel: LIDAR_1
+          clock_domain: host_utc
+          requires: gps_sync
+        # Mounting extrinsics are intentionally absent: add `transform` with
+        # measured xyz/rpy once the lidar is bolted down. The factory
+        # IMU-to-lidar offset inside the device is the driver's business.

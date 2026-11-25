@@ -118,5 +118,12 @@ std::vector<ProcessSpec> driver_processes(const Json& asset);
 std::vector<ProcessSpec> description_processes(const Json& asset);
 std::vector<ProcessSpec> sensor_processes(const Json& asset, const Json& parameter_files);
 std::vector<ProcessSpec> collection_processes(const Json& asset);
+// The sync board client and the trigger pairing processes of one plan item.
+//
+// Takes the whole plan item (asset, board, board_owner). The board client is
+// derived only for the item that owns the host board; every enabled camera
+// whose time_sync.source is board_trigger gets its own pairing process.
+// Mock assets derive neither.
+std::vector<ProcessSpec> time_sync_processes(const Json& item);
 
 }  // namespace chaos::bringup

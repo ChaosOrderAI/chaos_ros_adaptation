@@ -1,0 +1,79 @@
+# Intel RealSense D435 on a vehicle (driver: ros-jazzy-realsense2-camera,
+# already installed on the Jetson as realsense2_camera).
+#
+# realsense2_camera prefixes its topics and TF frames with the camera_name
+# parameter, so camera_name carries the asset-qualified name and everything
+# lands under <sensor namespace>/vehicle_001_front_camera/...
+schema_version: 1
+hosts:
+  onboard:
+    ros_domain_id: 61
+assets:
+  - id: vehicle_001
+    host: onboard
+    mode: real
+    model_file: package://chaos_assets/models/lingao_vehicle/v1/model.yaml
+    sensors:
+      front_camera:
+        kind: camera
+        enabled: true
+        frame_id: vehicle_001_front_camera_link
+        driver:
+          mode: node
+          package: realsense2_camera
+          executable: realsense2_camera_node
+          parameters:
+            camera_name: vehicle_001_front_camera
+            enable_color: true
+            enable_depth: true
+            enable_infra1: false
+            enable_infra2: false
+            enable_gyro: true
+            enable_accel: true
+            unite_imu_method: 2          # linear interpolation into one Imu
+            rgb_camera.color_profile: 640x480x30
+            depth_module.depth_profile: 640x480x30
+            align_depth.enable: true
+            pointcloud.enable: false
+            clip_distance: 3.0
+            # Set serial_no when more than one RealSense is attached and the
+            # device order matters:
+            # serial_no: REPLACE_WITH_D435_SERIAL
+        # Frame names below follow realsense2_camera's own convention
+        # (<camera_name>_*); the driver owns that TF subtree.
+        streams:
+          color:
+            type: sensor_msgs/msg/Image
+            topic: vehicle_001_front_camera/color/image_raw
+            frame_id: vehicle_001_front_camera_color_optical_frame
+            rate_hz: 30.0
+            monitor: false
+          color_info:
+            type: sensor_msgs/msg/CameraInfo
+            topic: vehicle_001_front_camera/color/camera_info
+            frame_id: vehicle_001_front_camera_color_optical_frame
+            rate_hz: 30.0
+          depth:
+            type: sensor_msgs/msg/Image
+            topic: vehicle_001_front_camera/depth/image_rect_raw
+            frame_id: vehicle_001_front_camera_depth_optical_frame
+            rate_hz: 30.0
+            monitor: false
+          depth_info:
+            type: sensor_msgs/msg/CameraInfo
+            topic: vehicle_001_front_camera/depth/camera_info
+            frame_id: vehicle_001_front_camera_depth_optical_frame
+            rate_hz: 30.0
+          # D435 (non-i) has no IMU. On a D435i, enable_gyro/enable_accel above
+          # produce .../imu and this stream applies:
+          # imu:
+          #   type: sensor_msgs/msg/Imu
+          #   topic: vehicle_001_front_camera/imu
+          #   frame_id: vehicle_001_front_camera_gyro_optical_frame
+          #   rate_hz: 200.0
+        time_sync:
+          # Free-running device clock: no sync-board channel is involved.
+          source: device_timestamp
+          clock_domain: device
+        # Mounting extrinsics are intentionally absent: add `transform` with
+        # measured xyz/rpy once the camera is bolted down.

@@ -1,5 +1,7 @@
 #include "chaos_assets/inventory.hpp"
 
+#include <arpa/inet.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <map>
@@ -24,6 +26,16 @@ std::regex identifier_re(R"(^[A-Za-z][A-Za-z0-9_]*$)");
 std::regex token_re(R"(^[A-Za-z0-9][A-Za-z0-9_.-]*$)");
 std::regex namespace_re(R"(^(/[A-Za-z][A-Za-z0-9_]*)+$)");
 std::regex frame_re(R"(^[A-Za-z][A-Za-z0-9_/]*$)");
+
+// A literal IPv4 address, checked the same way the sync board client parses it.
+std::string ipv4(const Json& value, const std::string& where) {
+  const std::string address = text(value, where);
+  in_addr parsed{};
+  if (::inet_pton(AF_INET, address.c_str(), &parsed) != 1) {
+    throw ConfigurationError(where + ": expected an IPv4 address, got '" + address + "'");
+  }
+  return address;
+}
 
 // The default motion and lifetime limits of every asset.
 const std::vector<std::string> kDefaultLimits = {"linear_mps",    "angular_rps",  "command_timeout_s",
@@ -93,6 +105,38 @@ Json limits(const Json& base, const Json& overrides, const std::string& where) {
 
 std::string resolve_path_value(const Json& value, const std::string& base, const std::string& where) {
   return resolve_path(value, base, where);
+}
+
+// A real asset whose sensors claim the sync board must have a host board
+// block. Without it the board client would never run and the frames would
+// silently keep their arrival timestamps.
+void validate_board_requirements(const Json& hosts, const std::vector<Json>& assets) {
+  for (const Json& asset : assets) {
+    if (!asset.at("enabled").get<bool>()) continue;
+    if (asset.at("mode").get_ref<const std::string&>() != "real") continue;
+    const std::string& host = asset.at("host").get_ref<const std::string&>();
+    const bool have_board = hosts.at(host).contains("board");
+    for (auto it = asset.at("sensors").begin(); it != asset.at("sensors").end(); ++it) {
+      const Json& sensor = it.value();
+      if (!sensor.at("enabled").get<bool>()) continue;
+      const auto time_sync = sensor.find("time_sync");
+      if (time_sync == sensor.end()) continue;
+      const std::string source = time_sync->at("source").get_ref<const std::string&>();
+      const std::string requires_sync =
+          time_sync->at("requires").get_ref<const std::string&>();
+      const std::string clock = time_sync->at("clock_domain").get_ref<const std::string&>();
+      const std::string channel = time_sync->at("board_channel").get_ref<const std::string&>();
+      const bool needs_board = source == "board_trigger" || requires_sync != "none" ||
+                               clock == "board" || channel == "LIDAR_1" ||
+                               channel == "LIDAR_2";
+      if (needs_board && !have_board) {
+        throw ConfigurationError(
+            asset.at("id").get_ref<const std::string&>() + ".sensors." + it.key() +
+            ".time_sync: this sensor needs the sync board, but hosts." + host +
+            " has no 'board' block (ip/port)");
+      }
+    }
+  }
 }
 
 }  // namespace
@@ -170,11 +214,35 @@ Inventory load_inventory(const std::string& path, const std::string& mode) {
   for (auto it = hosts.begin(); it != hosts.end(); ++it) {
     const std::string host = it.key();
     text(host, "host ID", &identifier_re);
-    record(it.value(), "hosts." + host, {"ros_domain_id"});
+    record(it.value(), "hosts." + host, {"ros_domain_id", "board"});
     const auto domain = it.value().find("ros_domain_id");
     int64_t value = 0;
     if (domain == it.value().end() || !int64_value(*domain, &value) || value < 0 || value > 232) {
       throw ConfigurationError("hosts." + host + ".ros_domain_id: expected integer 0..232");
+    }
+    // An optional sync board of this host. Its presence is the explicit switch
+    // for the board client: sensor declarations alone never start hardware.
+    auto board = it.value().find("board");
+    if (board != it.value().end()) {
+      const std::string where = "hosts." + host + ".board";
+      record(board.value(), where, {"ip", "port", "local_port", "ptp_period_ms", "publish_imu"});
+      Json normalized = Json::object();
+      normalized["ip"] = ipv4(board->contains("ip") ? board->at("ip") : Json(), where + ".ip");
+      normalized["port"] = integer(board->contains("port") ? board->at("port") : Json(8888),
+                                   where + ".port", 1, 65535);
+      normalized["local_port"] = integer(
+          board->contains("local_port") ? board->at("local_port") : Json(0),
+          where + ".local_port", 0, 65535);
+      normalized["ptp_period_ms"] = integer(
+          board->contains("ptp_period_ms") ? board->at("ptp_period_ms") : Json(100),
+          where + ".ptp_period_ms", 1, 10000);
+      const Json publish_imu =
+          board->contains("publish_imu") ? board->at("publish_imu") : Json(true);
+      if (!publish_imu.is_boolean()) {
+        throw ConfigurationError(where + ".publish_imu: expected boolean");
+      }
+      normalized["publish_imu"] = publish_imu;
+      it.value()["board"] = normalized;
     }
   }
 
@@ -433,6 +501,7 @@ Inventory load_inventory(const std::string& path, const std::string& mode) {
 
   validate_sensor_graph(assets);
   validate_description_graph(assets);
+  validate_board_requirements(hosts, assets);
   return Inventory(absolute, hosts, assets, transports);
 }
 

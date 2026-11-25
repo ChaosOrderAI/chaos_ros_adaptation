@@ -109,6 +109,8 @@ LaunchPlan plan_inventory(const Inventory& inventory, const std::string& host_id
   // of the plugin that owns them.
   std::set<std::string> dds_connections;
   std::map<std::string, std::string> state_outputs;
+  // Hosts whose sync board client already has an owner item.
+  std::set<std::string> board_hosts;
   std::vector<Json> plan;
 
   for (const Json& asset : inventory.assets()) {
@@ -147,6 +149,22 @@ LaunchPlan plan_inventory(const Inventory& inventory, const std::string& host_id
     Json item = Json::object();
     item["asset"] = asset;
     item["mqtt"] = Json();
+    // The sync board is a per-host resource. Every selected real asset on that
+    // host carries the normalized board block so its own cameras can derive a
+    // trigger pairing process, but exactly one item owns the board client.
+    item["board"] = Json();
+    item["board_owner"] = false;
+    // Only an asset that will actually be launched may claim the host board:
+    // an unselected asset must not take ownership away from the selected one.
+    if (real && selected_ids.count(asset_id) != 0) {
+      const std::string& host = asset.at("host").get_ref<const std::string&>();
+      const Json& host_config = inventory.hosts().at(host);
+      const auto board = host_config.find("board");
+      if (board != host_config.end()) {
+        item["board"] = *board;
+        item["board_owner"] = board_hosts.insert(host).second;
+      }
+    }
     const Json& transport = asset.at("transport");
     if (enable_mqtt && !transport.is_null()) {
       if (!mqtt_config) {

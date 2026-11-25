@@ -123,3 +123,29 @@ def test_custom_transport_executable_path_remains_relative_to_inventory(tmp_path
 def test_package_uri_rejects_invalid_or_escaping_paths(tmp_path, uri):
     with pytest.raises(ConfigurationError, match='invalid package resource URI'):
         load_inventory(write_inventory(tmp_path, lambda d: d['assets'][0].update(model_file=uri)))
+
+
+def test_host_board_defaults_and_normalization(tmp_path):
+    path = write_inventory(tmp_path, lambda d: d['hosts']['dev'].update(
+        board={'ip': '192.168.123.188'}))
+    inventory = load_inventory(path)
+    assert inventory.as_dict()['hosts']['dev']['board'] == {
+        'ip': '192.168.123.188', 'port': 8888, 'local_port': 0,
+        'ptp_period_ms': 100, 'publish_imu': True,
+    }
+
+
+@pytest.mark.parametrize('board,match', [
+    ({}, '.ip'),
+    ({'ip': '192.168.123.300'}, 'IPv4'),
+    ({'ip': 'board.local'}, 'IPv4'),
+    ({'ip': '192.168.123.188', 'port': 0}, 'port'),
+    ({'ip': '192.168.123.188', 'port': 70000}, 'port'),
+    ({'ip': '192.168.123.188', 'local_port': -1}, 'local_port'),
+    ({'ip': '192.168.123.188', 'ptp_period_ms': 0}, 'ptp_period_ms'),
+    ({'ip': '192.168.123.188', 'publish_imu': 'yes'}, 'publish_imu'),
+    ({'ip': '192.168.123.188', 'extra': 1}, 'unknown fields'),
+])
+def test_reject_bad_host_board(tmp_path, board, match):
+    with pytest.raises(ConfigurationError, match=match):
+        load_inventory(write_inventory(tmp_path, lambda d: d['hosts']['dev'].update(board=board)))
