@@ -32,8 +32,8 @@ recent `CAM_n` trigger, not to when its buffer happened to arrive.
 ## Run
 
 ```bash
-# board on a dedicated subnet, e.g. host 192.168.10.10, board 192.168.10.188
-ros2 launch chaos_time_sync time_sync.launch.py board_ip:=192.168.10.188
+# board on a dedicated subnet, e.g. host 192.168.10.10, board 192.168.123.188
+ros2 launch chaos_time_sync time_sync.launch.py board_ip:=192.168.123.188
 ```
 
 Ethernet caveats from the vendor docs:

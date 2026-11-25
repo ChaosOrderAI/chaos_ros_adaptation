@@ -2,17 +2,34 @@
 <package format="3">
   <name>chaos_sensors</name>
   <version>0.1.0</version>
-  <description>Mock sensor publishers and asset-scoped sensor health diagnostics.</description>
+  <description>
+    Unified sensor package: mock publishers and asset-scoped health
+    diagnostics, plus the first-party acquisition and timing nodes (AT600
+    dual-spectrum split, sync-board trigger pairing and clock client).
+    Third-party drivers stay separate and are referenced through the asset
+    catalog.
+  </description>
   <maintainer email="maintainers@example.com">Chaos maintainers</maintainer>
+  <!-- The pre-existing mock/monitor code is Proprietary; the acquisition and
+       timing nodes merged from chaos_thermal_fusion, chaos_camera_trigger and
+       chaos_time_sync remain Apache-2.0. See NOTICE. -->
   <license>Proprietary</license>
+  <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>chaos_core</depend>
+  <depend>chaos_interfaces</depend>
   <depend>nlohmann-json-dev</depend>
-  <test_depend>rosgraph_msgs</test_depend>
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>diagnostic_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
+  <depend>libopencv-dev</depend>
+  <exec_depend>livox_ros_driver2</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <test_depend>rosgraph_msgs</test_depend>
   <test_depend>ament_cmake_gtest</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

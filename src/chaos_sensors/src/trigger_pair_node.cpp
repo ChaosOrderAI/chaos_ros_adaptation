@@ -25,6 +25,7 @@
 //       last     publish with the last trigger regardless of age (debugging
 //                only, it can be arbitrarily wrong)
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -54,6 +55,15 @@ uint32_t channelMask(const std::string & channel)
   if (channel == "CAM_4") {return 1u << 5;}
   return 0u;
 }
+
+// Pairing ages compare host wall-clock microseconds: trigger host_stamp_us is
+// taken from the system clock by the board client, so the ROS clock (which may
+// be simulated) must not be mixed into the same subtraction.
+int64_t hostUs()
+{
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+    std::chrono::system_clock::now().time_since_epoch()).count();
+}
 }  // namespace
 
 class TriggerPairNode : public rclcpp::Node
@@ -71,7 +81,7 @@ public:
     publish_camera_info_ = declare_parameter<bool>("publish_camera_info", true);
     diagnostics_topic_ = declare_parameter<std::string>("diagnostics_topic", "diagnostics");
     const std::string channel = declare_parameter<std::string>("board_channel", "CAM_1");
-    max_age_ms_ = declare_parameter<double>("max_age_ms", 100.0);
+    max_age_ms_ = declare_parameter<double>("max_age_ms", 50.0);
     exposure_offset_us_ = declare_parameter<int64_t>("exposure_offset_us", 0);
     missing_trigger_ = declare_parameter<std::string>("missing_trigger", "drop");
     expected_period_ms_ = declare_parameter<double>("expected_period_ms", 0.0);
@@ -140,8 +150,7 @@ private:
 
   void onImage(const sensor_msgs::msg::Image::ConstSharedPtr & msg)
   {
-    const rclcpp::Time arrival = now();
-    const int64_t arrival_us = arrival.nanoseconds() / 1000;
+    const int64_t arrival_us = hostUs();
 
     bool paired = false;
     bool used_last = false;
@@ -208,7 +217,7 @@ private:
       return;
     }
     sensor_msgs::msg::CameraInfo out = *msg;
-    const int64_t now_us = now().nanoseconds() / 1000;
+    const int64_t now_us = hostUs();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       // Attach the calibration to the last image only while that image is
@@ -255,7 +264,7 @@ private:
       max_age = max_observed_age_us_;
       used_last = last_used_last_;
       if (have_trigger_) {
-        const int64_t now_us = now().nanoseconds() / 1000;
+        const int64_t now_us = hostUs();
         last_trigger_age_ms =
           (now_us - static_cast<int64_t>(last_trigger_.host_stamp_us)) / 1000;
       }
@@ -264,7 +273,7 @@ private:
     diagnostic_msgs::msg::DiagnosticArray array;
     array.header.stamp = now();
     diagnostic_msgs::msg::DiagnosticStatus status;
-    status.name = "chaos_camera_trigger: pairing";
+    status.name = "chaos_sensors: trigger pairing";
     status.hardware_id = image_topic_;
     std::string message = "paired";
     uint8_t level = diagnostic_msgs::msg::DiagnosticStatus::OK;

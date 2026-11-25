@@ -1,0 +1,48 @@
+# Single source of truth for every third-party sensor driver.
+#
+# mode: in-tree        source committed under path (source of truth is our tree)
+#       pinned-import  source fetched into path at build time, never committed
+#       apt            installed system package, version pinned here
+schema_version: 1
+drivers:
+  livox_ros_driver2:
+    mode: in-tree
+    path: vendor/livox_ros_driver2
+    upstream: https://github.com/Livox-SDK/livox_ros_driver2.git
+    ref: 21445540f0d100dc86a7e6df312dd70bbdb4afdf
+    license: MIT
+    build_packages: [livox_ros_driver2]
+    requires: Livox-SDK2 (optional; scripts/build_slam.sh skips the driver when absent)
+    patches: []
+
+  orbbec_camera:
+    mode: pinned-import
+    path: vendor/orbbec/src/OrbbecSDK_ROS2
+    upstream: https://github.com/orbbec/OrbbecSDK_ROS2.git
+    ref: 296156521b60bdf813cb94c46cbb55562bbdc453
+    license: Apache-2.0 (wrapper) + Orbbec SDK terms, see upstream LICENSE/NOTICE
+    build: vendor/orbbec/build-orbbec.sh
+    sdk:
+      mode: download
+      note: SDK binaries ship inside the pinned upstream tree; they are not committed here.
+    patches: []
+
+  realsense2_camera:
+    mode: apt
+    package: realsense2_camera
+    dpkg: ros-jazzy-realsense2-camera
+    version: 4.58.4
+    license: Apache-2.0
+    executable: realsense2_camera_node
+    upstream: https://github.com/IntelRealSense/realsense-ros
+    patches: []
+
+  camera_aravis2:
+    mode: apt
+    package: camera_aravis2
+    dpkg: ros-jazzy-camera-aravis2
+    version: 1.2.0
+    license: BSD-3-Clause
+    executable: camera_driver_gv
+    upstream: https://github.com/FraunhoferIOSB/camera_aravis2
+    patches: []

@@ -9,7 +9,7 @@ def generate_launch_description():
         DeclareLaunchArgument('image_topic', default_value='image_raw'),
         DeclareLaunchArgument('image_output_topic', default_value='image_synced'),
         DeclareLaunchArgument('board_channel', default_value='CAM_1'),
-        DeclareLaunchArgument('max_age_ms', default_value='80.0'),
+        DeclareLaunchArgument('max_age_ms', default_value='50.0'),
         DeclareLaunchArgument('exposure_offset_us', default_value='0'),
         DeclareLaunchArgument('missing_trigger', default_value='arrival'),
         Node(

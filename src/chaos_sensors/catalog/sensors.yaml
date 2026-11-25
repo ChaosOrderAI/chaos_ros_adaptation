@@ -1,0 +1,60 @@
+# Device catalog: one entry per sensor model the platform supports.
+#
+# This is the maintenance table. A new sensor is a new entry here plus, when
+# no existing driver fits, one node in this package. The driver column points
+# at our own executable or at a vendored/apt package from vendor/manifest.yaml.
+schema_version: 1
+sensors:
+  at600_ir:
+    kind: camera
+    model: IRay AT600
+    driver: {package: chaos_sensors, executable: at600_split_node, origin: first-party}
+    streams: [thermal/image_raw, visible/image_raw]
+    time_sync: {source: device_timestamp, clock_domain: host_utc}
+    wiring: >-
+      USB UVC, 512x192 YUYV @ 25 fps, left half thermal + right half visible.
+      No external trigger input; stamps come from the V4L2 buffer timestamp.
+    example: src/chaos_assets/config/at600_ir_camera.example.yaml
+
+  mid360s:
+    kind: lidar
+    model: Livox Mid-360S
+    driver: {package: livox_ros_driver2, executable: livox_ros_driver2_node, origin: vendored}
+    streams: [points, imu]
+    time_sync: {source: device_timestamp, board_channel: LIDAR_1, requires: gps_sync}
+    wiring: >-
+      Ethernet; board LIDAR_1 PPS + GPRMC (9600 bps) on the sensor LAN
+      (host 192.168.123.222). Keep xfer_format 0 (PointCloud2) for the asset layer.
+    example: src/chaos_assets/config/livox_mid360s.example.yaml
+
+  mv_cs050_10gc:
+    kind: camera
+    model: Hikrobot MV-CS050-10GC
+    driver: {package: camera_aravis2, executable: camera_driver_gv, origin: apt}
+    streams: [vis/image_raw, vis/camera_info]
+    time_sync: {source: board_trigger, board_channel: CAM_1, trigger_hz: 10}
+    wiring: >-
+      GigE Vision; board PWM CAM1 -> camera Line0 (rising edge), MVS/GenICam
+      trigger configuration. Frames are paired by chaos_sensors/trigger_pair_node.
+    example: src/chaos_assets/config/hikvision_mvcs050.example.yaml
+
+  d435:
+    kind: camera
+    model: Intel RealSense D435
+    driver: {package: realsense2_camera, executable: realsense2_camera_node, origin: apt}
+    streams: [color/image_raw, color/camera_info, depth/image_raw, depth/camera_info]
+    time_sync: {source: device_timestamp, clock_domain: device}
+    wiring: >-
+      USB 3; no IMU on the non-i model. Free-running device clock, soft sync only.
+    example: src/chaos_assets/config/realsense_d435.example.yaml
+
+  gemini335:
+    kind: camera
+    model: Orbbec Gemini 335
+    driver: {package: orbbec_camera, executable: orbbec_camera_node, origin: external-workspace}
+    streams: [color/image_raw, color/camera_info, depth/image_raw, depth/camera_info, gyro_accel/sample]
+    time_sync: {source: device_timestamp, clock_domain: device}
+    wiring: >-
+      USB; built from the pinned OrbbecSDK_ROS2 tree via vendor/orbbec/build-orbbec.sh
+      (independent workspace, INSTALL_UDEV_RULES=OFF).
+    example: src/chaos_assets/config/orbbec_gemini335.example.yaml

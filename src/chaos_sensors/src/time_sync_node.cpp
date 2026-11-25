@@ -71,7 +71,7 @@ public:
   TimeSyncNode()
   : rclcpp::Node("chaos_time_sync")
   {
-    board_ip_ = declare_parameter<std::string>("board_ip", "192.168.1.188");
+    board_ip_ = declare_parameter<std::string>("board_ip", "192.168.123.188");
     board_port_ = declare_parameter<int>("board_port", 8888);
     local_port_ = declare_parameter<int>("local_port", 0);
     ptp_period_ms_ = declare_parameter<int>("ptp_period_ms", 100);
@@ -376,7 +376,7 @@ private:
     diagnostic_msgs::msg::DiagnosticArray array;
     array.header.stamp = now();
     diagnostic_msgs::msg::DiagnosticStatus status;
-    status.name = "chaos_time_sync: board";
+    status.name = "chaos_sensors: board";
     status.hardware_id = board_ip_ + ":" + std::to_string(board_port_);
     const bool stale = !have_rx || age_ms > stale_after_ms_;
     const bool clock_off = std::llabs(clock_skew) > clock_warn_us_;

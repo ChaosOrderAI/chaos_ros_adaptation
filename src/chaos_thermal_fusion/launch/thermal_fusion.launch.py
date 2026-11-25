@@ -18,7 +18,7 @@ def generate_launch_description():
         DeclareLaunchArgument('alpha', default_value='0.6'),
         DeclareLaunchArgument('colormap', default_value='inferno'),
         Node(
-            package='chaos_thermal_fusion',
+            package='chaos_sensors',
             executable='at600_split_node',
             name='at600_split_node',
             parameters=[{

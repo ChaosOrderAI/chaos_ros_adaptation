@@ -402,7 +402,7 @@ void preflight(const LaunchPlan& plan, const PreflightOptions& options) {
     const auto board = item.find("board");
     if (board != item.end() && !board->is_null()) {
       if (item.contains("board_owner") && item.at("board_owner").get<bool>()) {
-        dependencies.insert({"chaos_time_sync", "chaos_time_sync_node"});
+        dependencies.insert({"chaos_sensors", "chaos_time_sync_node"});
       }
       for (const Json* sensor : sensors) {
         const auto time_sync = sensor->find("time_sync");
@@ -410,7 +410,7 @@ void preflight(const LaunchPlan& plan, const PreflightOptions& options) {
         if (sensor->at("kind").get_ref<const std::string&>() == "camera" &&
           time_sync->at("source").get_ref<const std::string&>() == "board_trigger")
         {
-          dependencies.insert({"chaos_camera_trigger", "trigger_pair_node"});
+          dependencies.insert({"chaos_sensors", "trigger_pair_node"});
         }
       }
     }
@@ -634,7 +634,7 @@ std::vector<ProcessSpec> time_sync_processes(const Json& item) {
     // second one on the same host would fight over the same UDP peer.
     ProcessSpec spec;
     spec.label = "Time sync board " + host;
-    spec.package = "chaos_time_sync";
+    spec.package = "chaos_sensors";
     spec.executable = "chaos_time_sync_node";
     spec.name = "chaos_time_sync";
     spec.node_namespace = "/";
@@ -684,7 +684,7 @@ std::vector<ProcessSpec> time_sync_processes(const Json& item) {
 
     ProcessSpec spec;
     spec.label = "Camera trigger " + asset_id + "/" + sensor_id;
-    spec.package = "chaos_camera_trigger";
+    spec.package = "chaos_sensors";
     spec.executable = "trigger_pair_node";
     spec.name = "trigger_pair";
     spec.node_namespace = ns;

@@ -428,7 +428,7 @@ TEST(Components, TheTimeSyncBoardProcessUsesTheHostConfiguration) {
       chaos::bringup::time_sync_processes(item);
   ASSERT_EQ(processes.size(), 2u);
   const auto& board = processes.at(0);
-  EXPECT_EQ(board.package, "chaos_time_sync");
+  EXPECT_EQ(board.package, "chaos_sensors");
   EXPECT_EQ(board.executable, "chaos_time_sync_node");
   EXPECT_EQ(board.name, "chaos_time_sync");
   EXPECT_EQ(board.node_namespace, "/");
@@ -451,7 +451,7 @@ TEST(Components, ABoardTriggerCameraGetsATriggerPairProcess) {
       chaos::bringup::time_sync_processes(item);
   ASSERT_EQ(processes.size(), 1u);
   const auto& pair = processes.at(0);
-  EXPECT_EQ(pair.package, "chaos_camera_trigger");
+  EXPECT_EQ(pair.package, "chaos_sensors");
   EXPECT_EQ(pair.executable, "trigger_pair_node");
   EXPECT_EQ(pair.name, "trigger_pair");
   EXPECT_EQ(pair.node_namespace, "/robots/unit/sensors/front_camera");

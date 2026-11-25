@@ -6,7 +6,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('board_ip', default_value='192.168.10.188'),
+        DeclareLaunchArgument('board_ip', default_value='192.168.123.188'),
         DeclareLaunchArgument('board_port', default_value='8888'),
         DeclareLaunchArgument('ptp_period_ms', default_value='100'),
         DeclareLaunchArgument('trigger_topic', default_value='board/trigger'),

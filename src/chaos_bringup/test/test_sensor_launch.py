@@ -218,8 +218,8 @@ def test_real_board_plan_starts_client_and_pairing(tmp_path, capabilities, monke
     labels = [spec['label'] for spec in recorded]
     assert 'Time sync board local' in labels
     assert 'Camera trigger robot_a/front' in labels
-    assert ('chaos_time_sync', 'chaos_time_sync_node') in dependencies
-    assert ('chaos_camera_trigger', 'trigger_pair_node') in dependencies
+    assert ('chaos_sensors', 'chaos_time_sync_node') in dependencies
+    assert ('chaos_sensors', 'trigger_pair_node') in dependencies
 
 
 def test_mock_board_plan_starts_no_time_sync(tmp_path, capabilities, monkeypatch):
@@ -231,5 +231,5 @@ def test_mock_board_plan_starts_no_time_sync(tmp_path, capabilities, monkeypatch
     labels = [spec['label'] for spec in recorded]
     assert all('Time sync board' not in label and 'Camera trigger' not in label
                for label in labels)
-    assert ('chaos_time_sync', 'chaos_time_sync_node') not in dependencies
-    assert ('chaos_camera_trigger', 'trigger_pair_node') not in dependencies
+    assert ('chaos_sensors', 'chaos_time_sync_node') not in dependencies
+    assert ('chaos_sensors', 'trigger_pair_node') not in dependencies

@@ -11,7 +11,7 @@ trigger_pair:
     diagnostics_topic: diagnostics
     # Pairing
     board_channel: CAM_1                  # IMU_2 or CAM_1..CAM_4
-    max_age_ms: 80.0                      # must stay below the trigger period
+    max_age_ms: 50.0                      # default; must stay below the trigger period
     exposure_offset_us: 0                 # e.g. half the exposure time
     missing_trigger: drop                 # drop | arrival | last
     expected_period_ms: 100.0             # 0 disables trigger-gap counting

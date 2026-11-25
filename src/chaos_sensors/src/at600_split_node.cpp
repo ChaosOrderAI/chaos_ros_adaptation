@@ -270,12 +270,14 @@ private:
       static_cast<int64_t>(tv.tv_usec) * 1000LL;
     rclcpp::Time stamp;
     if ((buf.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC) {
-      // uvcvideo stamps buffers on CLOCK_MONOTONIC; anchor it to ROS time with
-      // a single sample pair so the frame keeps its kernel timestamp.
-      const auto steady_now = std::chrono::steady_clock::now().time_since_epoch();
-      const int64_t steady_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(steady_now).count();
-      stamp = now() + rclcpp::Duration::from_nanoseconds(ns - steady_ns);
+      // uvcvideo stamps buffers on CLOCK_MONOTONIC. Anchor that to the host
+      // wall clock (not the ROS clock, which may be simulated) with a single
+      // sample pair, so the frame keeps its kernel timestamp.
+      const int64_t steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+      const int64_t system_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+      stamp = rclcpp::Time(system_ns + (ns - steady_ns));
     } else {
       stamp = rclcpp::Time(ns);
     }

@@ -56,7 +56,9 @@ source /opt/ros/jazzy/setup.bash
 ./scripts/build_slam.sh
 
 # 或手动:全新构建目录 build-<tag> / install-<tag> / log-<tag>
-colcon --log-base log build --base-paths src \
+# 传感器 vendor 树在 chaos_sensors 包内，colcon 不会下钻包目录，
+# 所以 vendor 根要作为第二个 base path
+colcon --log-base log build --base-paths src src/chaos_sensors/vendor \
   --build-base build --install-base install \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 
@@ -104,8 +106,9 @@ src/
   chaos_data/         原生 rosbag2 采集、时间质量门控、审计与离线训练数据导出
   chaos_sim/          可选 MuJoCo Go2 / T2 物理仿真；点云/3DGS 几何代理、独立关节控制与标准 ROS 观测
   chaos_benchmarks/   领域微基准（非生产入口，不参与运行）
-drivers/
-  src/OrbbecSDK_ROS2/ 固定版本的官方相机驱动，独立构建
+chaos_sensors/vendor/
+  livox_ros_driver2/  树内固定版本（MIT）
+  orbbec/             固定版本的官方相机驱动，独立工作区构建
 ```
 
 `models/<model>/<version>/model.yaml` 保存型号、能力上限、运动限制、资源路径和后端；`config/*.yaml` 保存设备 ID、host、namespace、mode 以及实例覆盖。配置中的相对路径以声明它的文件为基准；`package://包名/路径` 从已安装的 ROS 包读取资源，适合 `/etc/chaos` 下的设备配置。模型资源会随包安装，通过可选的 `description` 配置导入 URDF/Xacro 并启动模型发布器；控制器仍需按机器人能力单独接入。

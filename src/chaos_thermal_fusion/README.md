@@ -6,7 +6,7 @@ Thermal/visible fusion for the chaos platform.
 
 | node | what it does |
 |---|---|
-| `at600_split_node` | Opens the IRay AT600 (`/dev/video0`, one UVC mode: 512x192 YUYV @ 25 fps) and publishes the two halves the module paints side by side: `thermal/image_raw` (left) and `visible/image_raw` (right), both `mono8`. |
+| `at600_split_node` | **Moved to `chaos_sensors`** (sensor acquisition lives in the umbrella package). `thermal_fusion.launch.py` still starts it, together with the fusion node below. |
 | `thermal_register_calib` | Estimates the visible -> thermal homography from a live image pair and writes it as a ROS 2 parameter file. |
 | `thermal_fusion_node` | Fuses any two image topics into `thermal/image_fused` (`bgr8`). Optional `homography` warps the visible image into the thermal frame first. |
 

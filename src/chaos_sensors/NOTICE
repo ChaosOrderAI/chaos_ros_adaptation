@@ -1,0 +1,18 @@
+chaos_sensors
+=============
+
+This package contains code under two licenses.
+
+Proprietary (pre-existing):
+  src/health.cpp, src/mock_sensor_main.cpp, src/mock_sensor_node.cpp,
+  src/sensor_config.cpp, src/sensor_monitor_main.cpp,
+  src/sensor_monitor_node.cpp and the matching headers.
+
+Apache-2.0 (merged from first-party packages):
+  src/at600_split_node.cpp        (from chaos_thermal_fusion)
+  src/trigger_pair_node.cpp       (from chaos_camera_trigger)
+  src/time_sync_node.cpp          (from chaos_time_sync)
+  config/, launch/, docs/         (from the same packages)
+
+The Apache-2.0 portions keep their original copyright and license; the full
+license text is in LICENSE.

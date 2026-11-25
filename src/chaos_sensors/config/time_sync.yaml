@@ -3,7 +3,7 @@ chaos_time_sync:
     # InfiniteSense V4 sync board, Ethernet link (W5500). The board has no
     # RTC: its UTC comes from this host through the PTP-like exchange, so the
     # host must run chrony/NTP.
-    board_ip: 192.168.10.188
+    board_ip: 192.168.123.188
     board_port: 8888
     local_port: 0              # 0 = ephemeral source port
     ptp_period_ms: 100         # vendor SDK uses ~100 ms (~9 Hz)

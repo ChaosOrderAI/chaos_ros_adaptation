@@ -12,11 +12,6 @@ find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc features2d calib3d imgcodecs)
 
-add_executable(at600_split_node src/at600_split_node.cpp)
-target_include_directories(at600_split_node PRIVATE ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(at600_split_node ${OpenCV_LIBS})
-ament_target_dependencies(at600_split_node rclcpp sensor_msgs cv_bridge)
-
 add_executable(thermal_fusion_node src/thermal_fusion_node.cpp)
 target_include_directories(thermal_fusion_node PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(thermal_fusion_node ${OpenCV_LIBS})
@@ -27,7 +22,7 @@ target_include_directories(thermal_register_calib PRIVATE ${OpenCV_INCLUDE_DIRS}
 target_link_libraries(thermal_register_calib ${OpenCV_LIBS})
 ament_target_dependencies(thermal_register_calib rclcpp sensor_msgs cv_bridge image_transport)
 
-install(TARGETS at600_split_node thermal_fusion_node thermal_register_calib
+install(TARGETS thermal_fusion_node thermal_register_calib
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config

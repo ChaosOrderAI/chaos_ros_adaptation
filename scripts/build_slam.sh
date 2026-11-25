@@ -15,7 +15,7 @@ set +u
 source /opt/ros/jazzy/setup.bash
 set -u
 
-livox="src/livox_ros_driver2"
+livox="src/chaos_sensors/vendor/livox_ros_driver2"
 if [[ -d "${livox}" ]]; then
   # livox_ros_driver2 ships package_ROS1.xml / package_ROS2.xml side by side;
   # colcon needs a plain package.xml, so materialize the ROS 2 one.
@@ -31,7 +31,10 @@ elif [[ -f "${HOME}/.local/lib/liblivox_lidar_sdk_shared.so" ]]; then
   sdk_prefix="${HOME}/.local"
 fi
 
-build_args=(--base-paths src --build-base build --install-base install)
+# Vendored drivers live inside the chaos_sensors package tree; colcon does
+# not descend into a package directory, so the vendor root is an explicit
+# second base path.
+build_args=(--base-paths src src/chaos_sensors/vendor --build-base build --install-base install)
 cmake_args=(-DCMAKE_BUILD_TYPE=Release)
 
 if [[ -n "${sdk_prefix}" ]]; then

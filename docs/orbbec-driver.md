@@ -1,6 +1,6 @@
 # 奥比中光 Gemini 335 驱动接入
 
-Gemini 335 使用官方 C++ ROS 2 驱动；资产配置负责设备选择、ROS namespace、参数和标准数据接口，统一 launch 管理进程。原厂源码位于 [`drivers/src/OrbbecSDK_ROS2`](../drivers/src/OrbbecSDK_ROS2)，不修改厂商的 USB/SDK 实现。
+Gemini 335 使用官方 C++ ROS 2 驱动；资产配置负责设备选择、ROS namespace、参数和标准数据接口，统一 launch 管理进程。原厂源码位于 [`src/chaos_sensors/vendor/orbbec/src/OrbbecSDK_ROS2`](../src/chaos_sensors/vendor/orbbec/src/OrbbecSDK_ROS2)，不修改厂商的 USB/SDK 实现。
 
 ## 1. 来源与版本
 
@@ -11,11 +11,11 @@ Gemini 335 使用官方 C++ ROS 2 驱动；资产配置负责设备选择、ROS 
 | Commit | `296156521b60bdf813cb94c46cbb55562bbdc453` |
 | ROS 包 | `orbbec_camera`、`orbbec_camera_msgs`；仓库同时保留 `orbbec_description` |
 | SDK | 原厂随版本提供的 OrbbecSDK 2.10.6，包含 Linux x64 和 ARM64 二进制 |
-| 源码恢复清单 | [`drivers/orbbec.repos`](../drivers/orbbec.repos) |
+| 源码恢复清单 | [`src/chaos_sensors/vendor/orbbec/orbbec.repos`](../src/chaos_sensors/vendor/orbbec/orbbec.repos) |
 
-此版本声明支持 ROS 2 Jazzy，并提供 Ubuntu 24.04 x64 和 ARM64 平台支持信息。ARM64 的厂商测试平台主要为 Jetson；其他 ARM64 板卡仍需核对其系统与 USB 支持。源码 CMake 明确拒绝 ARM32。以上依据固定版本的 [README](../drivers/src/OrbbecSDK_ROS2/README.MD) 与 [CMakeLists.txt](../drivers/src/OrbbecSDK_ROS2/orbbec_camera/CMakeLists.txt)。
+此版本声明支持 ROS 2 Jazzy，并提供 Ubuntu 24.04 x64 和 ARM64 平台支持信息。ARM64 的厂商测试平台主要为 Jetson；其他 ARM64 板卡仍需核对其系统与 USB 支持。源码 CMake 明确拒绝 ARM32。以上依据固定版本的 [README](../src/chaos_sensors/vendor/orbbec/src/OrbbecSDK_ROS2/README.MD) 与 [CMakeLists.txt](../src/chaos_sensors/vendor/orbbec/src/OrbbecSDK_ROS2/orbbec_camera/CMakeLists.txt)。
 
-完整保留上游 Apache-2.0 [`LICENSE`](../drivers/src/OrbbecSDK_ROS2/LICENSE)、[`NOTICE`](../drivers/src/OrbbecSDK_ROS2/NOTICE) 和 [`SDK/licenses`](../drivers/src/OrbbecSDK_ROS2/orbbec_camera/SDK/licenses/THIRD_PARTY_LICENSES.md)。分发原厂 SDK 时应一并保留这些材料。
+完整保留上游 Apache-2.0 [`LICENSE`](../src/chaos_sensors/vendor/orbbec/src/OrbbecSDK_ROS2/LICENSE)、[`NOTICE`](../src/chaos_sensors/vendor/orbbec/src/OrbbecSDK_ROS2/NOTICE) 和 [`SDK/licenses`](../src/chaos_sensors/vendor/orbbec/src/OrbbecSDK_ROS2/orbbec_camera/SDK/licenses/THIRD_PARTY_LICENSES.md)。分发原厂 SDK 时应一并保留这些材料。
 
 当前用户设备为 Gemini 335。v2.10.6 的型号表将其对应到 `gemini_330_series.launch.py`，推荐固件为 1.8.10；本轮没有执行固件升级。旧 OpenNI 设备需要另行核对官方 `main` 分支，不能直接套用此 v2 目录。
 
@@ -24,15 +24,15 @@ Gemini 335 使用官方 C++ ROS 2 驱动；资产配置负责设备选择、ROS 
 框架与原厂驱动分开构建。在 `chaos_ws` 下执行：
 
 ```bash
-./drivers/build-orbbec.sh
+./src/chaos_sensors/vendor/orbbec/build-orbbec.sh
 source /opt/ros/jazzy/setup.bash
-source drivers/install/local_setup.bash
+source src/chaos_sensors/vendor/orbbec/install/local_setup.bash
 source install/local_setup.bash
 ```
 
-脚本仅构建 `orbbec_camera` 及其消息依赖，使用本目录 `drivers/build`、`drivers/install`、`drivers/log`，不安装系统依赖。脚本清除 `BUILDING_PACKAGE` 并设置 `INSTALL_UDEV_RULES=OFF`，因此普通源码构建不会写入 `/etc/udev/rules.d`。
+脚本仅构建 `orbbec_camera` 及其消息依赖，使用本目录 `src/chaos_sensors/vendor/orbbec/build/install/log`，不安装系统依赖。脚本清除 `BUILDING_PACKAGE` 并设置 `INSTALL_UDEV_RULES=OFF`，因此普通源码构建不会写入 `/etc/udev/rules.d`。
 
-目标机依赖以固定源码的 [`package.xml`](../drivers/src/OrbbecSDK_ROS2/orbbec_camera/package.xml)、`CMakeLists.txt` 和 README 为准。当前开发机实际缺失：
+目标机依赖以固定源码的 [`package.xml`](../src/chaos_sensors/vendor/orbbec/src/OrbbecSDK_ROS2/orbbec_camera/package.xml)、`CMakeLists.txt` 和 README 为准。当前开发机实际缺失：
 
 - ROS 包：`backward_ros`、`image_publisher`、`camera_info_manager`、`diagnostic_updater`、`camera_calibration_parsers`。
 - 系统包：`libgoogle-glog-dev`、`python3-tabulate`。
