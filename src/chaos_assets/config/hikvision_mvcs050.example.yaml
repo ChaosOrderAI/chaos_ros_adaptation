@@ -55,16 +55,31 @@ assets:
             verbose: false
             TransportLayerControl.PtpEnable: false
             TransportLayerControl.GevSCPSPacketSize: 9000
-            ImageFormatControl.Width: 2448
-            ImageFormatControl.Height: 2048
-            # BayerRG8 straight from the sensor. A single-element list follows
-            # the driver's format-preference interface; downstream image_proc
-            # debayers, or set Mono8/rgb8 conversion in the driver.
+            # 2x2 binning -> 1224x1024 at full FOV, chosen for FAST-LIVO2:
+            # 1.25 MB frames, and the size matches the fast_livo2 camera
+            # config invariant (incoming image == cam_width x cam_height at
+            # scale 1.0 — any other size trips a stride bug in
+            # VIOManager::processFrame).
+            # NOTE: run the stack with rmw_cyclonedds_cpp. FastDDS was
+            # measured dropping ~2/3 of frames on this machine even at
+            # this size (best-effort fragment loss, no retransmission);
+            # CycloneDDS delivered 23.1 Hz with zero drops (301/301).
+            ImageFormatControl.BinningHorizontal: 2
+            ImageFormatControl.BinningVertical: 2
+            ImageFormatControl.Width: 1224
+            ImageFormatControl.Height: 1024
+            # BayerRG8 straight from the sensor (post-binning). A
+            # single-element list follows the driver's format-preference
+            # interface; fast_livo2 debayers via its cv_bridge "bgr8" copy,
+            # which also keeps colour for the RGB map.
             ImageFormatControl.PixelFormat: [BayerRG8]
             AcquisitionControl.TriggerMode: 'On'
             AcquisitionControl.TriggerSource: 'Line0'
             AcquisitionControl.TriggerActivation: 'RisingEdge'
             AcquisitionControl.ExposureAuto: 'Off'
+            # Direct-method odometry dislikes exposure jumps — keep fixed.
+            # At the 10 Hz board trigger and ~0.5 m/s robot speed, stay
+            # <= 10 ms (~5 mm blur); retune on the vehicle's real lighting.
             AcquisitionControl.ExposureTime: 5000.0
         # camera_aravis2 derives topic names from the node name and stream
         # name; the launcher forces the node name to `driver`, so confirm the
