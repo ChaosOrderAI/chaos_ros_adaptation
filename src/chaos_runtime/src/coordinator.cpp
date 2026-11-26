@@ -1,7 +1,9 @@
 #include "chaos_runtime/coordinator.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -18,6 +20,28 @@ namespace {
 constexpr double kTickWait = 0.05;  // cv wait slice; not a deadline
 constexpr double kStatePublishInterval = 0.1;
 constexpr double kAcceptanceHandshakeTimeout = 2.0;
+
+// One bounded retry budget for the contended window. A worker holding the
+// registry lock delays the next admission by at most one scheduling
+// quantum, so a few milliseconds of yields cover the transient; the
+// observation gtest demonstrates the same pattern (admitRetrying).
+// `full` is retried inside the same budget: a short burst can momentarily
+// fill a bounded queue, while a stalled sink outlasts the budget and is
+// dropped as before, still counted in the producer counters. State and log
+// stay un-retried: they are periodic, the next sample repairs the loss.
+template <typename Attempt>
+Admission admitWithRetry(Attempt && attempt,
+                         std::chrono::milliseconds budget =
+                           std::chrono::milliseconds(20)) {
+  const auto deadline = std::chrono::steady_clock::now() + budget;
+  Admission outcome = attempt();
+  while ((outcome == Admission::contended || outcome == Admission::full) &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+    outcome = attempt();
+  }
+  return outcome;
+}
 
 // The capability name is a literal: the caller never allocates a string
 // for it, so the trace path and the log path build their text from a
@@ -163,7 +187,7 @@ void ControlCoordinator::publishResult(bool success, std::string_view code,
     result.success = success;
     result.code.assign(code);
     result.message.assign(message);
-    observations_->result(result);
+    admitWithRetry([&] { return observations_->result(result); });
   } catch (...) {
     // Observation is not control: the command outcome is enforced by the
     // guard, by the deadline and by the watchdog, not by this channel. The
@@ -276,9 +300,14 @@ void ControlCoordinator::emitTrace(
   const std::optional<std::array<double, 6>> & velocity,
   const std::optional<std::int64_t> & driver_deadline_ns) {
   // Best-effort evidence, isolated from control decisions and driver
-  // outcomes. The sequence advances before the construction and the
-  // admission, so a missing event is visible to an offline consumer as a
-  // sequence gap. No authorization values or error text are copied.
+  // outcomes. Sequence assignment and admission share one dedicated lock:
+  // emitTrace runs on several threads (velocity callbacks, the action
+  // worker, the watchdog), and a plain ++ on the sequence is a data race
+  // whose duplicate and reversed sequences are exactly what a downstream
+  // consumer reconciles against. With the lock, the recorded order matches
+  // the assignment order and each event is admitted exactly once; the
+  // bounded retry keeps a missing event a rare, accounted loss instead of
+  // a routine gap. No authorization values or error text are copied.
   //
   // The whole event construction, including every clock read and every
   // field copy, lives inside the best-effort block: a broken clock must
@@ -286,6 +315,7 @@ void ControlCoordinator::emitTrace(
   // suppress the stop output of a failing command. The block reports its
   // own failures through the endpoint, so this function never throws and
   // an accepted command can never become a DRIVER_ERROR here.
+  std::lock_guard<std::mutex> trace_order(trace_order_mutex_);
   const std::uint64_t sequence = ++trace_sequence_;
   try {
     TraceEvent event;
@@ -339,8 +369,13 @@ void ControlCoordinator::emitTrace(
       event.velocity = sample;
     }
     // The endpoint copies the event and delivers it on its own worker: the
-    // delivery never re-stamps and never renumbers the event.
-    observations_->trace(event);
+    // delivery never re-stamps and never renumbers the event. The trace
+    // channel keeps its single-shot admission: its consumers reconcile
+    // The endpoint copies the event and delivers it on its own worker: the
+    // delivery never re-stamps and never renumbers the event. The bounded
+    // retry runs under the order lock, so a contended registry lock turns
+    // into a short yield instead of a consumer-visible sequence gap.
+    admitWithRetry([&] { return observations_->trace(event); });
   } catch (...) {
     // The event could not even be built. The loss is counted through the
     // endpoint and the assigned sequence stays visible as a gap.

@@ -103,9 +103,19 @@ def run():
                         return future.result()
 
                     def velocity(**values):
-                        request_id = sdk.velocity(**values)
-                        wait(lambda: request_id in results, 'velocity acknowledgement')
-                        return results.pop(request_id)
+                        # The runtime drains command results through a
+                        # bounded observation worker, so an event can be
+                        # dropped by design under load. The command is
+                        # repeatable: retry with a fresh request_id.
+                        for _attempt in range(3):
+                            request_id = sdk.velocity(**values)
+                            try:
+                                wait(lambda: request_id in results,
+                                     'velocity acknowledgement', timeout=10)
+                                return results.pop(request_id)
+                            except AssertionError:
+                                if _attempt == 2:
+                                    raise
 
                     def velocity_values():
                         state = sdk.state()

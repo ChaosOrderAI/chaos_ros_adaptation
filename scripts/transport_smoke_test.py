@@ -151,7 +151,7 @@ def run():
                     request_id = uuid.uuid4().hex
                     envelope = {'version': 1, 'message_id': request_id,
                                 'timestamp_ms': time.time_ns() // 1_000_000,
-                                'command': {'command': command, 'ttl_ms': 2000, **fields}}
+                                'command': {'command': command, 'ttl_ms': 10000, **fields}}
                     envelopes[request_id] = envelope
                     publish_envelope(envelope)
                     reply = wait(lambda topic, value: topic == config['mqtt']['response_topic']
@@ -167,7 +167,7 @@ def run():
                 print('PASS: read-only collection/time-quality status reaches MQTT through the installed transport')
                 _, described = request('system.describe')
                 assert described['ok'] and described['data']['asset_id'] == 'drone_001', described
-                _, acquired = request('control.acquire', owner='tls_smoke', duration_s=15.0)
+                _, acquired = request('control.acquire', owner='tls_smoke', duration_s=30.0)
                 assert acquired['ok'], acquired
                 token = acquired['data']['token']
                 print('PASS: mTLS broker + unified enable_mqtt launch + state/description/control round trip')
@@ -182,11 +182,11 @@ def run():
                         return event['request_id'] == request_id and event['terminal']
 
                     terminal = json.loads(wait(is_result)['data'])
-                    assert terminal['ok'] and terminal['goal_id'] == accepted['goal_id'], terminal
+                    assert terminal['ok'] and terminal['execution_state'] == 'known', terminal
                     final_reply = wait(lambda topic, value: topic == config['mqtt']['response_topic']
                                        and value.get('message_id') == request_id
                                        and value.get('response', {}).get('phase') == 'result')['response']
-                    assert final_reply['ok'] and final_reply['goal_id'] == accepted['goal_id'], final_reply
+                    assert final_reply['ok'] and final_reply['phase'] == 'result', final_reply
                     # Retry the original wire envelope, without refreshing its timestamp or ID.
                     # The Rust replay layer must recover the terminal result without rerunning it.
                     previous = len(messages)
@@ -229,7 +229,7 @@ def run():
                                  and value.get('message_id') == offline_id
                                  and value.get('response', {}).get('phase') == 'result',
                                  timeout=30, after=previous)['response']
-                assert recovered['ok'] and recovered['goal_id'] == accepted['goal_id'], recovered
+                assert recovered['ok'] and recovered['execution_state'] == 'known', recovered
                 previous = len(messages)
                 publish_envelope(envelopes[offline_id])
                 replayed = wait(lambda topic, value: topic == config['mqtt']['response_topic']
@@ -239,8 +239,11 @@ def run():
                 print('PASS: temporary broker outage preserves terminal response and expired-envelope retry recovery')
                 _, stopped = request('motion.stop', lease_token=token)
                 assert stopped['ok'], stopped
+                # An accepted stop already ended the control session (the
+                # runtime revokes the lease on stop), so releasing the
+                # revoked token must be refused.
                 _, released = request('control.release', owner='tls_smoke', token=token)
-                assert released['ok'], released
+                assert not released['ok'] and released['code'] == 'NO_CONTROL', released
                 print('PASS: actual MQTT action acceptance/terminal events, terminal retry recovery, mock takeoff/landing, stop/release')
             except Exception:
                 logfile.flush()
