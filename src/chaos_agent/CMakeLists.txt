@@ -47,4 +47,12 @@ install(DIRECTORY include/ DESTINATION include)
 ament_export_targets(export_chaos_agent HAS_LIBRARY_TARGET)
 ament_export_dependencies(chaos_core chaos_interfaces nlohmann_json CURL Threads)
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_agent_loop test/agent_loop_tests.cpp)
+  target_link_libraries(test_agent_loop chaos_agent)
+  set_tests_properties(test_agent_loop PROPERTIES TIMEOUT 60 ENVIRONMENT "ROS_DOMAIN_ID=189")
+endif()
+
 ament_package()
