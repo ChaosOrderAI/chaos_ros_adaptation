@@ -88,7 +88,7 @@ ros2 run camera_aravis2 camera_driver_gv --ros-args -r __node:=driver \
    ```xml
    <CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo"/></Interfaces></General></Domain></CycloneDDS>
    ```
-3. 不要同时跑两个 driver 实例:GigE 独占,后者重试 60 次后 FATAL。
+3. 不要同时跑两个 driver 实例,也不要开着 MVS 客户端连设备:GigE 控制权独占——后者重试 60 次后 FATAL;实测 MVS 客户端的会话会让 driver 的**所有寄存器写**报 access-denied(读正常,读回的是上次会话残留值,具有迷惑性),需整个退出 MVS 或相机断电清会话。触发三件套(TriggerMode/TriggerSource/TriggerActivation)为 volatile 特性,driver 每次打开从资产 yaml 下发,相机侧无需持久化配置——已实测干净下发。
 
 ## 6. 曝光标定(台架暗光办公室场景)
 
