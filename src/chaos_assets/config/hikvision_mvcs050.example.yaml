@@ -104,6 +104,10 @@ assets:
           board_channel: CAM_1
           trigger_hz: 10.0
           max_age_ms: 80.0
+          # Exposure starts at the trigger edge (ExposureMode Timed), so the
+          # photon midpoint sits at edge + ExposureTime/2. Keep this equal to
+          # ExposureTime/2 whenever ExposureTime changes (2500 at 5 ms).
+          exposure_offset_us: 2500.0
           clock_domain: host_utc
         # Mounting extrinsics are intentionally absent: add `transform` with
         # measured xyz/rpy once the camera is bolted down.

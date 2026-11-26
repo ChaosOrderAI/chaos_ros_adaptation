@@ -110,3 +110,9 @@ ros2 run camera_aravis2 camera_driver_gv --ros-args -r __node:=driver \
 - [ ] 镜头对焦(当前 20ms+9dB 图像失焦,手动拧调焦环;对焦后重新标定)。
 - [ ] 棋盘格标定 → `/opt/chaos/hik/mvcs050_camera_info.yaml`,替换台架占位文件。
 - [ ] 车上:触发模式(板卡 CAM_1 PWM 10Hz→Line0)、按车端光照定曝光、外参测量。
+- [ ] 车上硬件同步链路(代码侧已就绪,见下):
+  - 接线:板卡 **CAM_1+ → 相机 Line0+,CAM_1− → Line0−**(Line0 为光耦输入,注意极性与共地;相机侧 RisingEdge);
+  - 板卡端把 CAM_1 配成 10Hz PWM 输出(InfiniteSense 上位机/配置);
+  - 资产 yaml 的 `time_sync.exposure_offset_us` 保持 = ExposureTime/2(曝光从触发沿开始,时间戳打在光子中点);
+  - bringup 时 `ros2 topic list` 确认传感器命名空间,把 `fast_livo2/config/go2_mid360.yaml` 的 `img_topic` 改为 `<ns>/image_synced`(标定后 `img_en: 1`);
+  - 桌面无板卡时走 `TriggerMode: 'Off'` 连续模式直接用 `vis/image_raw`;车上有触发沿时才产出 `image_synced`(missing_trigger 默认 drop)。
