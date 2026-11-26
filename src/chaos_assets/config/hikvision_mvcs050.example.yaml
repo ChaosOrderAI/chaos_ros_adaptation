@@ -15,6 +15,10 @@
 # Alternative without the sync board: if the camera's GenICam tree exposes
 # PtpEnable, hardware PTP to the host is possible; set
 # TransportLayerControl.PtpEnable: true and drop the trigger parameters.
+# NOTE: firmware V3.4.54 (serial K90022518) exposes NO PtpEnable feature at
+# all, so the board trigger is the only sync path for this unit. The
+# TransportLayerControl.PtpEnable: false line below is kept anyway — the
+# driver logs "Feature 'PtpEnable' is not available" and continues.
 schema_version: 1
 hosts:
   onboard:
@@ -42,7 +46,7 @@ assets:
           parameters:
             # Camera selector: the Aravis device id, i.e. "<vendor>-<model>-<serial>"
             # as printed by `camera_finder`. REPLACE before a real start.
-            guid: REPLACE_WITH_MVCS050_GUID
+            guid: Hikrobot-MV-CS050-10GC-K90022518
             frame_id: vehicle_001_front_camera_optical_frame
             stream_names: [vis]
             # Absolute path: plain parameters are not package:// resolved.
