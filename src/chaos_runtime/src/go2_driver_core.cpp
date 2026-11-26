@@ -1,4 +1,4 @@
-// Port of chaos_runtime/go2_driver_core.py (ROS-free core). step() and
+// step() and
 // write() live in the header as templates so stateful Move observers are
 // never copied.
 //

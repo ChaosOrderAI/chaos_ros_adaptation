@@ -35,7 +35,7 @@ python3 scripts/mesh_to_pcd.py /home/yunze/Downloads/Merged_Data_recon_final.ply
   --output generated/merged_recon_go2/source_points.pcd \
   --origin 554776.57705 3312849.9003 0
 python3 scripts/prepare_pcd_go2.py generated/merged_recon_go2/source_points.pcd \
-  --model-root work/multi-model-team/simplify-20261031/model-cache \
+  --model-root ~/.cache/chaos/mujoco \
   --output generated/merged_recon_go2 --spawn-xy 0 77 \
   --gpu-only --merge-collision-boxes
 python3 scripts/prepare_pcd_gpu.py --scene-dir generated/merged_recon_go2 --voxel 0

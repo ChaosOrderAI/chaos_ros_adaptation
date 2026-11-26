@@ -12,7 +12,7 @@
 
 #include "chaos_sdk/robot.hpp"
 
-namespace chaos_bt
+namespace chaos_sdk::bt
 {
 
 /// Register the Navigate, Takeoff and Land nodes with one robot.
@@ -244,4 +244,4 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace chaos_bt
+}  // namespace chaos_sdk::bt

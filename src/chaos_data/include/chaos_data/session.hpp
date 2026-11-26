@@ -1,5 +1,4 @@
 // Durable collection session metadata without driver credentials.
-// Port of chaos_data/session.py. No ROS dependency.
 //
 // A manifest left `running` indicates interruption without clean finalization.
 // A `completed` manifest means shutdown flushed rosbag metadata; it is not a

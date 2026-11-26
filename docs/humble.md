@@ -1,6 +1,6 @@
 # Ubuntu 22.04 / ROS 2 Humble
 
-这是无人车旧部署的兼容路径，不是当前默认环境。当前开发与机载默认是 Ubuntu 24.04 / ROS 2 Jazzy。Humble 验收在 Ubuntu 22.04 上单独构建，x86_64 与 ARM64 使用同一份源码；`chaos_bt` 依赖的 BehaviorTree.CPP 4.x 不在 Humble 范围内。模拟运行不需要底盘、无人机 SDK、相机或外部 MQTT broker。
+这是无人车旧部署的兼容路径，不是当前默认环境。当前开发与机载默认是 Ubuntu 24.04 / ROS 2 Jazzy。Humble 验收在 Ubuntu 22.04 上单独构建，x86_64 与 ARM64 使用同一份源码；`chaos_sdk` 的 BT 节点库以 `-DCHAOS_SDK_WITH_BT=OFF` 关闭（BehaviorTree.CPP 4.x 不在 Humble 范围内）。模拟运行不需要底盘、无人机 SDK、相机或外部 MQTT broker。
 
 ## 准备依赖
 

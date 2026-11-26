@@ -14,7 +14,9 @@ find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common filters registration)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2_sensor_msgs REQUIRED)
 
 add_library(se3_graph src/se3_graph.cpp)
 target_include_directories(se3_graph PUBLIC
@@ -28,7 +30,16 @@ target_link_libraries(slam_backend_node se3_graph ${PCL_LIBRARIES})
 ament_target_dependencies(slam_backend_node
   geometry_msgs nav_msgs pcl_conversions rclcpp sensor_msgs tf2_ros)
 
-install(TARGETS se3_graph slam_backend_node
+# Near-field obstacle cloud. Nothing in the workspace consumes
+# /navigation/obstacle_cloud yet; the node is kept buildable for planned
+# consumers (stack.launch.py does not start it).
+add_executable(obstacle_cloud_node src/obstacle_cloud_node.cpp)
+target_include_directories(obstacle_cloud_node PRIVATE ${PCL_INCLUDE_DIRS})
+target_link_libraries(obstacle_cloud_node ${PCL_LIBRARIES})
+ament_target_dependencies(obstacle_cloud_node
+  geometry_msgs pcl_conversions rclcpp sensor_msgs tf2 tf2_ros tf2_sensor_msgs)
+
+install(TARGETS se3_graph slam_backend_node obstacle_cloud_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})

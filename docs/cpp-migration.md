@@ -33,11 +33,10 @@ chaos_assets          配置引擎：schema 校验、型号继承、限值、sen
                       （不依赖 rclcpp，也不依赖设备 SDK）
 chaos_runtime         每资产运行时：chaos_control / chaos_runtime_core / chaos_go2_core / chaos_runtime_ros / chaos_go2_ros
 chaos_sensors         chaos_sensors_health / chaos_sensors_config / chaos_sensors_ros
-chaos_sdk             原生异步客户端（chaos_sdk 共享库 + _chaos_sdk 薄绑定）
+chaos_sdk             原生异步客户端（chaos_sdk 共享库 + _chaos_sdk 薄绑定 + 可选 chaos_sdk_bt BT 节点库）
 chaos_mqtt            chaos_mqtt_core / chaos_mqtt_gateway（原生 C++）+ transport/（Rust）+ _chaos_mqtt_core 薄绑定
 chaos_data            timing / session / file_io / supervisor / controller / ros_message / audit / export（原生 C++）
 chaos_bringup         chaos_bringup_core + chaos_bringup_plan + launch 胶水
-chaos_bt              BehaviorTree.CPP 节点：导航、起飞、降落；只依赖 Jazzy 的 4.x
 chaos_sim             可选 MuJoCo 仿真；模拟器默认关闭，需 CHAOS_SIM_ENABLE_MUJOCO=ON
 chaos_benchmarks      领域微基准，非生产入口
 ```

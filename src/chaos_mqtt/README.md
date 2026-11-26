@@ -1,16 +1,17 @@
 # chaos_mqtt
 
-机器人端统一 MQTT 通信包，同时包含 Rust 传输层和 Python 命令网关。框架只构建、安装一个 `chaos_mqtt` ROS 包，统一 launch 从该包启动两个进程。
+机器人端统一 MQTT 通信包，同时包含 Rust 传输层和 C++ 命令网关。框架只构建、安装一个 `chaos_mqtt` ROS 包，统一 launch 从该包启动两个进程。
 
 ```text
 chaos_mqtt/
-├── chaos_mqtt/       # 资产配置转换、命令协议、控制权与 ROS API 网关
-├── transport/        # 完整 Rust MQTT ↔ ROS 2 实现、Cargo.lock 和传输示例
-├── cmake/            # Cargo 构建与测试入口
-├── scripts/          # Python 网关入口模板
-├── test/             # Python 协议与网关测试
+├── include/chaos_mqtt/  # 网关、协议、观测与配置生成的公共头
+├── src/                 # C++ 命令网关（gateway_node、protocol、adapter_config）+ pybind11 薄绑定
+├── chaos_mqtt/          # Python 薄绑定模块（build_adapter_config 等）
+├── transport/           # 原样导入的 Rust MQTT ↔ ROS 2 实现（crate 名 mqtt_ros2_adapter）
+├── cmake/               # Cargo 构建与测试入口
+├── test/                # 协议/网关 gtest + 单个 pybind pytest
 ├── CMakeLists.txt
-└── package.xml       # 唯一 ROS 包定义
+└── package.xml          # 唯一 ROS 包定义
 ```
 
 在 `chaos_ws` 中构建并加载环境：
@@ -37,4 +38,4 @@ colcon test --packages-select chaos_mqtt --event-handlers console_direct+
 colcon test-result --verbose
 ```
 
-`transport/` 不是独立 ROS 包。保留 Rust crate 的 `mqtt_ros2_adapter` 名称以维持原依赖锁文件和源码兼容；ROS 安装入口统一为 `chaos_mqtt/mqtt_transport`。原工作区相邻的 `mqtt_ros2_adapter/` 仅作为来源保留，不参与本框架的构建或运行。
+`transport/` 不是独立 ROS 包。保留 Rust crate 的 `mqtt_ros2_adapter` 名称以维持原依赖锁文件和源码兼容；ROS 安装入口统一为 `chaos_mqtt/mqtt_transport`。导入来源与基准提交记录见 [transport/SOURCE_PROVENANCE.md](transport/SOURCE_PROVENANCE.md)。

@@ -46,7 +46,7 @@ LAS 使用投影坐标，float32 无法以毫米精度保存，因此转换时�
 python3 scripts/las_to_pcd.py "/home/yunze/Downloads/Merged Data.las" \
   --output generated/shaoxing_las_go2/source_points.pcd --target-points 64000000
 python3 scripts/prepare_pcd_go2.py generated/shaoxing_las_go2/source_points.pcd \
-  --model-root work/multi-model-team/simplify-20261031/model-cache \
+  --model-root ~/.cache/chaos/mujoco \
   --output generated/shaoxing_las_go2 --spawn-xy 0 77 \
   --gpu-only --merge-collision-boxes
 python3 scripts/prepare_pcd_gpu.py --scene-dir generated/shaoxing_las_go2 --voxel 0

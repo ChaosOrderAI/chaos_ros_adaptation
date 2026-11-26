@@ -1,4 +1,3 @@
-// Port of chaos_sensors/health.py.
 #include "chaos_sensors/health.hpp"
 
 #include <cmath>

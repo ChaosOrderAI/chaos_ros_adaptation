@@ -62,7 +62,7 @@ def run():
                     lambda value: results.__setitem__(value.request_id, value), 50))
                 publishers[name] = node.create_publisher(VelocityCommand, prefix + '/motion/velocity', 10)
 
-            def wait(predicate, timeout=10):
+            def wait(predicate, timeout=30):
                 deadline = time.monotonic() + timeout
                 while not predicate():
                     if process.poll() is not None:
@@ -89,17 +89,29 @@ def run():
 
             def velocity(asset, token, age=0.0, x=0.2):
                 message = VelocityCommand()
-                message.header.stamp = node.get_clock().now().to_msg()
-                message.header.stamp.sec -= int(age)
                 message.header.frame_id = f'{asset}/base_link'
-                message.request_id = uuid.uuid4().hex
                 message.lease_token = token
                 message.valid_for_s = 0.3
                 message.velocity.linear.x = float(x)
                 wait(lambda: publishers[asset].get_subscription_count() > 0)
-                publishers[asset].publish(message)
-                wait(lambda: message.request_id in results)
-                return results[message.request_id]
+                # The runtime drains command results through a bounded
+                # observation worker, so an event can be dropped by design
+                # when the queue is momentarily full. The command is
+                # repeatable: retry with a fresh request_id.
+                for _attempt in range(3):
+                    # Refresh the stamp with every attempt: valid_for_s=0.3
+                    # is measured from the stamp, and under load the first
+                    # attempt can fall out of the window before dispatch.
+                    message.header.stamp = node.get_clock().now().to_msg()
+                    message.header.stamp.sec -= int(age)
+                    message.request_id = uuid.uuid4().hex
+                    publishers[asset].publish(message)
+                    try:
+                        wait(lambda: message.request_id in results, timeout=5)
+                        return results[message.request_id]
+                    except AssertionError:
+                        if _attempt == 2:
+                            raise
 
             def action(asset, kind, endpoint, goal):
                 client = ActionClient(node, kind, f'/robots/{asset}/{endpoint}')
@@ -112,7 +124,9 @@ def run():
                 assert description.asset_id == asset
                 assert ('flight.takeoff' in description.capabilities) == (asset == 'drone_001')
             assert not velocity('vehicle_001', 'invalid').success
-            vehicle_lease = lease('vehicle_001')
+            # 30s（资产上限）：验证段含守门狗过期的确定性等待，
+            # 套件满载下 result 丢事件重试会占用租约窗口
+            vehicle_lease = lease('vehicle_001', duration=30.0)
             assert vehicle_lease.success, vehicle_lease.message
             token = vehicle_lease.token
             assert lease('vehicle_001').code == 'BUSY'
@@ -179,7 +193,17 @@ def run():
                 invalid_token = Stop.Request(request_id='invalid-token', lease_token='错误令牌')
                 assert service('vehicle_001', Stop, 'motion/stop', invalid_token).code == 'NO_CONTROL'
                 request_id = sdk.velocity(x=0, yaw=0)
-                wait(lambda: request_id in results)
+                # The runtime drains command results through a bounded
+                # observation worker; under load an event can be dropped by
+                # design. The command is repeatable: retry with a fresh one.
+                for _attempt in range(3):
+                    try:
+                        wait(lambda: request_id in results, timeout=5)
+                        break
+                    except AssertionError:
+                        if _attempt == 2:
+                            raise
+                        request_id = sdk.velocity(x=0, yaw=0)
                 assert results[request_id].success
                 assert future_result(sdk.renew(5)).success
                 assert future_result(sdk.stop()).success

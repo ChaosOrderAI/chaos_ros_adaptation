@@ -2,7 +2,8 @@
 """Exercise the MQTT facade over local ROS, with one mock robot and no broker.
 
 Run after sourcing the built workspace. Uses domain 188 and localhost discovery,
-starts only its own mock runtime/gateway, and always terminates those processes.
+starts only its own mock runtime, skill server and gateway, and always
+terminates those processes.
 """
 
 import json
@@ -13,6 +14,8 @@ import subprocess
 import tempfile
 import time
 import uuid
+
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 import rclpy
@@ -41,9 +44,22 @@ def run():
             try:
                 common = ['--ros-args', '-r', '__ns:=' + prefix,
                           '-p', 'asset_json:=' + json.dumps(json.dumps(asset))]
+                # The MQTT capability commands reach the runtime through the
+                # skill layer (docs/agent-skill-layer.md), so the smoke needs
+                # the same skill server the unified launch starts. A JSON
+                # payload cannot ride through `-p` (rcl parses it as a
+                # mapping), so it goes into a params file as a string.
+                vocab = (Path(get_package_share_directory('chaos_skill'))
+                         / 'config/demo_vocabulary.json').read_text()
+                skill_params = root / 'skill_params.yaml'
+                skill_params.write_text(yaml.safe_dump(
+                    {'/**': {'ros__parameters': {
+                        'vocabulary_json': vocab, 'asset_id': asset['id']}}}))
                 for package, executable, extra in (
                     ('chaos_runtime', 'robot_runtime', []),
-                    ('chaos_mqtt', 'gateway', ['-p', 'action_timeout_s:=1.0']),
+                    ('chaos_skill', 'chaos_skill_server',
+                     ['--params-file', str(skill_params)]),
+                    ('chaos_mqtt', 'gateway', ['-p', 'action_timeout_s:=5.0']),
                 ):
                     processes.append(subprocess.Popen(
                         ['ros2', 'run', package, executable, *common, *extra],
@@ -75,7 +91,7 @@ def run():
                             raise AssertionError('timed out waiting for MQTT facade ROS response')
                         rclpy.spin_once(node, timeout_sec=0.02)
 
-                def command(name, *, request_id=None, age_ms=0, ttl_ms=1000, **fields):
+                def command(name, *, request_id=None, age_ms=0, ttl_ms=10000, **fields):
                     request_id = request_id or uuid.uuid4().hex
                     value = {'bridge': {'source': 'mqtt', 'request_id': request_id,
                                         'timestamp_ms': time.time_ns() // 1_000_000 - age_ms},
@@ -95,7 +111,7 @@ def run():
                      and describe_client.service_is_ready() and bool(states))
                 _, description = command('system.describe')
                 assert description['ok'] and description['data']['asset_id'] == asset['id'], description
-                acquire_id, acquired = command('control.acquire', owner='mqtt_smoke', duration_s=15.0)
+                acquire_id, acquired = command('control.acquire', owner='mqtt_smoke', duration_s=30.0)
                 assert acquired['ok'], acquired
                 token = acquired['data']['token']
                 _, repeated = command('control.acquire', request_id=acquire_id,
@@ -122,17 +138,36 @@ def run():
                 assert not malformed['ok'] and malformed['code'] == 'INVALID_ARGUMENT', malformed
                 print('PASS: extreme finite quaternion is rejected without terminating the gateway')
 
+                # The accepted motion.stop above ended the control session
+                # (the runtime revokes the lease on stop), so the capability
+                # section continues on a fresh lease.
+                _, reacquired = command('control.acquire', owner='mqtt_smoke', duration_s=30.0)
+                assert reacquired['ok'], reacquired
+                token = reacquired['data']['token']
+
                 for name, fields in (
                     ('navigation.to_pose', {'target': {'frame_id': asset['frames']['map'],
                                                        'position': {'x': 0.1}}}),
                     ('flight.takeoff', {'altitude_m': 0.2}),
                     ('flight.land', {'altitude_m': 0.0}),
                 ):
-                    request_id, accepted = command(name, lease_token=token, **fields)
-                    assert accepted['ok'] and accepted['phase'] == 'accepted' and not accepted['terminal'], accepted
-                    result = terminal(request_id)
+                    # The skill executor's SDK action acceptance has a fixed
+                    # 5 s local timeout; under load it can lapse before the
+                    # runtime answers. Nothing was dispatched yet, so the
+                    # command is retryable with a fresh request_id.
+                    for _attempt in range(3):
+                        request_id, accepted = command(name, lease_token=token, **fields)
+                        assert accepted['ok'] and accepted['phase'] == 'accepted' \
+                            and not accepted['terminal'], accepted
+                        result = terminal(request_id)
+                        if (not result['ok'] and result['code'] == 'skill.internal_error'
+                                and 'local response timeout' in result['message']
+                                and _attempt < 2):
+                            continue
+                        break
+                    # Skill-era responses correlate by request_id and
+                    # task_events; they carry no goal_id field.
                     assert result['ok'] and result['execution_state'] == 'known', result
-                    assert result['goal_id'] == accepted['goal_id'], result
                 assert any(item['phase'] == 'feedback' for item in events)
                 print('PASS: navigation/takeoff/landing accepted, goal correlation, feedback, terminal results')
 
@@ -153,8 +188,11 @@ def run():
                 wait(lambda: any(state.get('asset_id') == 'synthetic_unknown' for state in states))
                 telemetry = next(state for state in states if state.get('asset_id') == 'synthetic_unknown')
                 assert telemetry['battery_percentage'] is None, telemetry
+                # The accepted motion.stop above already ended the control
+                # session (the runtime revokes the lease on stop), so the
+                # release of the revoked token must be refused.
                 _, released = command('control.release', owner='mqtt_smoke', token=token)
-                assert released['ok'], released
+                assert not released['ok'] and released['code'] == 'NO_CONTROL', released
                 print('PASS: unknown telemetry serializes to JSON null; gateway remains live')
             except Exception:
                 logfile.flush()

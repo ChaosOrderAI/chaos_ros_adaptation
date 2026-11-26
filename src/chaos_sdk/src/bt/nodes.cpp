@@ -5,7 +5,7 @@
 // cancel, so that one path hands the acceptance future to a short lived waiter
 // that cancels the goal if the server accepts it afterwards. The waiter holds
 // the session only, never the node or the blackboard.
-#include "chaos_bt/nodes.hpp"
+#include "chaos_sdk/bt/nodes.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -17,7 +17,7 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 
-namespace chaos_bt
+namespace chaos_sdk::bt
 {
 
 namespace
@@ -665,4 +665,4 @@ void Land::onHalted()
   cancel_goal(*impl_);
 }
 
-}  // namespace chaos_bt
+}  // namespace chaos_sdk::bt

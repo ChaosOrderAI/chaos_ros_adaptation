@@ -29,7 +29,7 @@ def generate_launch_description():
             output='screen',
         ),
         Node(
-            package='chaos_thermal_fusion',
+            package='chaos_sensors',
             executable='thermal_fusion_node',
             name='thermal_fusion_node',
             parameters=[{

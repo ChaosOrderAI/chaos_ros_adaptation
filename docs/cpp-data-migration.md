@@ -19,11 +19,12 @@ The ament_cmake build installs five executables into `lib/chaos_data`:
 | --- | --- |
 | `collector` | the production collector node |
 | `chaos_data_recorder_worker` | the recorder, an isolated worker process |
-| `audit`, `data_audit` | the source timestamp audit of a bag |
+| `data_audit` | the source timestamp audit of a bag |
 | `data_export` | the export of labelled episodes |
 
-The names are the console script names of the original Python package, so
-the callers of the module do not change.
+`data_audit` keeps the console script name of the original Python package so
+the callers of the module do not change; the duplicate `audit` alias was
+dropped in the 2026-11 package cleanup.
 
 ## The libraries
 
@@ -286,6 +287,6 @@ quoted frame rate, a frame rate with an explicit string tag and a hexadecimal
 frame rate. The source recording may not change while the export runs.
 
 The public smoke scripts drive the installed executables: the audit is
-called as the `audit` binary and the exporter as the `data_export` binary, so
+called as the `data_audit` binary and the exporter as the `data_export` binary, so
 a smoke test proves the behaviour of the shipped command line and not the
 behaviour of a library.

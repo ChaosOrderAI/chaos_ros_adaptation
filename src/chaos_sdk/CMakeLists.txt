@@ -20,6 +20,13 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 find_package(Threads REQUIRED)
 
 option(CHAOS_SDK_SANITIZE "Build unit tests with ASan+UBSan" OFF)
+# BehaviorTree.CPP node library (Navigate/Takeoff/Land wrapping the SDK's
+# actions). The 4.x API is required; Humble ships only v3, so the Humble
+# validation build turns this off.
+option(CHAOS_SDK_WITH_BT "Build the BehaviorTree.CPP node library" ON)
+if(CHAOS_SDK_WITH_BT)
+  find_package(behaviortree_cpp 4.0 CONFIG REQUIRED)
+endif()
 
 # --- Internal feedback dispatcher -------------------------------------------
 # The dispatcher runs the user feedback callbacks off the ROS executor. It is
@@ -54,6 +61,25 @@ target_link_libraries(chaos_sdk PUBLIC
 target_link_libraries(chaos_sdk PRIVATE chaos_sdk_feedback_dispatcher)
 set_target_properties(chaos_sdk PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# --- BehaviorTree.CPP nodes -------------------------------------------------
+# The tree is ticked by an external caller process; the nodes only wrap the
+# SDK's typed action handles and never acquire a lease or spin an executor.
+if(CHAOS_SDK_WITH_BT)
+  add_library(chaos_sdk_bt SHARED
+    src/bt/nodes.cpp
+    src/bt/register_nodes.cpp)
+  target_compile_features(chaos_sdk_bt PUBLIC cxx_std_17)
+  target_include_directories(chaos_sdk_bt PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+  target_link_libraries(chaos_sdk_bt PUBLIC
+    chaos_sdk
+    behaviortree_cpp::behaviortree_cpp
+    ${geometry_msgs_TARGETS}
+    Threads::Threads)
+  set_target_properties(chaos_sdk_bt PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # --- Mock asset for the integration tests and the example client ----------
 # The mock asset is a test peer: it is not needed in a production
 # installation, so it is only installed with the tests.
@@ -75,12 +101,29 @@ install(TARGETS chaos_sdk
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
+if(CHAOS_SDK_WITH_BT)
+  install(TARGETS chaos_sdk_bt
+    EXPORT export_chaos_sdk
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin)
+endif()
 install(TARGETS _chaos_sdk DESTINATION ${PYTHON_INSTALL_DIR}/${PROJECT_NAME})
-install(DIRECTORY include/ DESTINATION include)
+if(CHAOS_SDK_WITH_BT)
+  install(DIRECTORY include/ DESTINATION include)
+else()
+  # Gate off: don't ship the BT header without its library.
+  install(DIRECTORY include/ DESTINATION include PATTERN "bt" EXCLUDE)
+endif()
 
 ament_export_targets(export_chaos_sdk HAS_LIBRARY_TARGET)
 ament_export_dependencies(rclcpp rclcpp_action std_msgs builtin_interfaces
   geometry_msgs chaos_interfaces chaos_core)
+if(CHAOS_SDK_WITH_BT)
+  # behaviortree_cpp is linked PUBLIC by chaos_sdk_bt, so a consumer that
+  # links chaos_sdk::chaos_sdk_bt needs the imported target to exist.
+  ament_export_dependencies(behaviortree_cpp)
+endif()
 
 if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)
@@ -122,6 +165,18 @@ if(BUILD_TESTING)
     target_link_options(test_feedback_dispatcher PRIVATE ${_sanitizer_flags})
   endif()
   set_tests_properties(test_feedback_dispatcher PROPERTIES TIMEOUT 120)
+
+  if(CHAOS_SDK_WITH_BT)
+    ament_add_gtest(test_bt_nodes test/test_bt_nodes.cpp TIMEOUT 180)
+    target_include_directories(test_bt_nodes PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
+    target_link_libraries(test_bt_nodes
+      chaos_sdk_bt
+      rclcpp::rclcpp
+      rclcpp_action::rclcpp_action
+      chaos_interfaces::chaos_interfaces__rosidl_generator_cpp
+      chaos_interfaces::chaos_interfaces__rosidl_typesupport_cpp)
+    set_tests_properties(test_bt_nodes PROPERTIES ENVIRONMENT "ROS_DOMAIN_ID=188")
+  endif()
 
   install(TARGETS chaos_sdk_mock_asset DESTINATION lib/${PROJECT_NAME})
 

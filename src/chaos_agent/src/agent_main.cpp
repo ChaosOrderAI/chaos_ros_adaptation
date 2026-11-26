@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -32,6 +33,10 @@ public:
     declare_parameter("llama_endpoint", std::string{"http://127.0.0.1:8000"});
     declare_parameter("system_prompt", std::string{});
     declare_parameter("iteration_hz", 0.5);
+    // A task function, not an identity. Empty leaves the snapshot without a role.
+    declare_parameter("role", std::string{});
+    // Namespaces whose team_status carries task progress. Not a camera feed.
+    declare_parameter("peer_namespaces", std::vector<std::string>{});
   }
 
   /// Called once after the node is inside a shared_ptr. shared_from_this is
@@ -45,6 +50,8 @@ public:
     const auto endpoint = get_parameter("llama_endpoint").as_string();
     const auto system_prompt = get_parameter("system_prompt").as_string();
     const auto iteration_hz = get_parameter("iteration_hz").as_double();
+    const auto role = get_parameter("role").as_string();
+    const auto peers = get_parameter("peer_namespaces").as_string_array();
 
     if (asset_id.empty() || vocab_json.empty()) {
       throw std::invalid_argument("asset_id and vocabulary_json are required");
@@ -52,7 +59,8 @@ public:
     const auto planner_document = nlohmann::json::parse(vocab_json);
 
     loop_ = std::make_shared<chaos_agent::AgentLoop>(
-      shared_from_this(), asset_id, skill_ns, planner_document, system_prompt, endpoint);
+      shared_from_this(), asset_id, skill_ns, planner_document, system_prompt,
+      endpoint, role, peers);
     loop_->set_task(task);
 
     const auto period = std::chrono::duration<double>(1.0 / std::max(0.05, iteration_hz));

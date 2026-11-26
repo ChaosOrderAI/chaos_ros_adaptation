@@ -1,13 +1,13 @@
 # 行为树节点
 
-`chaos_bt` 把 `chaos_sdk::Robot` 的导航、起飞和降落包装成 BehaviorTree.CPP 节点。行为树跑在调用方进程里，由调用方 tick；runtime 仍然只执行单个动作，租约、能力检查和停止都由 runtime 决定。
+BehaviorTree.CPP 节点库（`chaos_sdk` 包的 `chaos_sdk_bt` 目标，由 `CHAOS_SDK_WITH_BT` 控制构建）把 `chaos_sdk::Robot` 的导航、起飞和降落包装成 BehaviorTree.CPP 节点。行为树跑在调用方进程里，由调用方 tick；runtime 仍然只执行单个动作，租约、能力检查和停止都由 runtime 决定。
 
-节点不申请租约，也不续租。调用方先 `acquire`，再把同一个 `Robot` 交给 `chaos_bt::register_nodes`。`Robot` 的 executor 必须在别的线程上转，不能放在 tick 行为树的线程上。
+节点不申请租约，也不续租。调用方先 `acquire`，再把同一个 `Robot` 交给 `chaos_sdk::bt::register_nodes`。`Robot` 的 executor 必须在别的线程上转，不能放在 tick 行为树的线程上。
 
 ```cpp
 auto robot = chaos_sdk::Robot::create_standalone("vehicle_001");
 BT::BehaviorTreeFactory factory;
-chaos_bt::register_nodes(factory, robot);
+chaos_sdk::bt::register_nodes(factory, robot);
 auto tree = factory.createTreeFromText(xml);
 ```
 
@@ -49,12 +49,12 @@ XML 里写了的输出端口按 BehaviorTree.CPP 的重映射写入；没有写�
 
 ## 构建
 
-`chaos_bt` 依赖 `ros-jazzy-behaviortree-cpp`（4.x API：Humble 只有 `behaviortree_cpp_v3` 3.8，不在本包支持范围内）。`chaos_sdk` 和 `chaos_runtime` 不依赖它。
+节点库是 `chaos_sdk` 的可选部分，由 `CHAOS_SDK_WITH_BT`（默认 ON）控制构建，依赖 `ros-jazzy-behaviortree-cpp`（4.x API：Humble 只有 `behaviortree_cpp_v3` 3.8，Humble 构建以 `-DCHAOS_SDK_WITH_BT=OFF` 关闭）。`chaos_runtime` 不依赖它。
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon build --base-paths src --packages-select chaos_bt \
+colcon build --base-paths src --packages-select chaos_sdk \
   --build-base build --install-base install
-colcon test --base-paths src --packages-select chaos_bt \
+colcon test --base-paths src --packages-select chaos_sdk \
   --build-base build --install-base install
 ```

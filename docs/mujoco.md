@@ -21,7 +21,7 @@ colcon --log-base log-sim build --base-paths src --packages-select chaos_sim \
 source install-sim/local_setup.bash
 ```
 
-本机验证使用 MuJoCo 3.15.0，SDK 为 `/home/yunze/mujoco`。C++ 核心直接链接已有 SDK，不依赖 GLFW 开发头文件，也不安装 Python 学习框架。
+变体目录 `build-sim` / `install-sim` / `log-sim` 不入库，清理后用上面的命令原地重建即可。本机验证使用 MuJoCo 3.15.0，SDK 为 `/home/yunze/mujoco`。C++ 核心直接链接已有 SDK，不依赖 GLFW 开发头文件，也不安装 Python 学习框架。
 
 ## 显式准备模型
 
@@ -38,13 +38,13 @@ ros2 run chaos_sim fetch_models.py --output /path/to/models --verify-only
 - [Unitree unitree_mujoco](https://github.com/unitreerobotics/unitree_mujoco/tree/1eb6642e3f3fdfb7fb13a9794fd6a2dd93ea0e7d)，commit `1eb6642e3f3fdfb7fb13a9794fd6a2dd93ea0e7d`，BSD 3-Clause。
 - [Booster booster_assets](https://github.com/BoosterRobotics/booster_assets/tree/12a97516f57469078707afb587a5f84c1cb110d1)，commit `12a97516f57469078707afb587a5f84c1cb110d1`，BSD 3-Clause。
 
-本机已有经过校验的缓存可直接复用，避免重复下载：
+模型缓存放在规范位置 `~/.cache/chaos/mujoco`，按 `models.lock.json` 哈希校验；清空后重新下载即可：
 
 ```bash
 python3 src/chaos_sim/tools/fetch_models.py --verify-only \
-  --output work/multi-model-team/simplify-20261031/model-cache
+  --output ~/.cache/chaos/mujoco
 ros2 launch chaos_sim simulator.launch.py robots:=go2,t2 \
-  model_root:="$PWD/work/multi-model-team/simplify-20261031/model-cache"
+  model_root:="$HOME/.cache/chaos/mujoco"
 ```
 
 ## 启动与 ROS 接口
@@ -96,7 +96,7 @@ ros2 service call /chaos_sim/pause std_srvs/srv/SetBool '{data: false}'
 
 ```bash
 ros2 launch chaos_sim simulator.launch.py robots:=go2,go2 \
-  model_root:="$PWD/work/multi-model-team/simplify-20261031/model-cache" \
+  model_root:="$HOME/.cache/chaos/mujoco" \
   scene:="$PWD/src/chaos_sim/config/scenes/demo.ply" \
   scene_voxel_size:=0.1 scene_point_radius:=0.12 \
   scene_max_geoms:=20000 scene_collision:=true
@@ -135,7 +135,7 @@ VIEWER_PYTHON=/path/to/venv/bin/python
 PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH" \
   /home/yunze/mujoco_playground/.venv/bin/python src/chaos_sim/tools/viewer.py \
   --robot go2 --name go2_1 \
-  --model-root "$PWD/work/multi-model-team/simplify-20261031/model-cache" \
+  --model-root "$HOME/.cache/chaos/mujoco" \
   --scene "$PWD/src/chaos_sim/config/scenes/demo.ply" \
   --scene-voxel-size 0.1 --scene-point-radius 0.12
 ```

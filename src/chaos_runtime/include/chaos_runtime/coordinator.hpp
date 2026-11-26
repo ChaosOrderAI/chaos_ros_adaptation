@@ -380,6 +380,10 @@ private:
   std::optional<StopPending> stop_pending_;
   std::string fault_;
   std::shared_ptr<Operation> operation_;
+  // Serializes trace sequence assignment with the admission: emitTrace
+  // runs on several threads and the recorded stream must stay strictly
+  // increasing without duplicates or reversals.
+  std::mutex trace_order_mutex_;
   std::uint64_t trace_sequence_ = 0;
   std::uint64_t next_operation_id_ = 0;
   double last_tick_s_ = 0.0;

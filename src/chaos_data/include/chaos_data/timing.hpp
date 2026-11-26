@@ -1,5 +1,4 @@
 // Read-only host time quality and monotonic recording admission checks.
-// Port of chaos_data/timing.py. No ROS dependency.
 //
 // Chrony tracking describes the host clock, not a camera/IMU's hardware
 // clock. The error bound assumes that chrony's upstream reference itself is

@@ -1,4 +1,3 @@
-// Port of chaos_data/timing.py.
 #include "chaos_data/timing.hpp"
 
 #include <algorithm>

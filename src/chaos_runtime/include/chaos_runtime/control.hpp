@@ -1,5 +1,5 @@
 // Control validation with monotonic leases and bounded Unix ingress deadlines.
-// Port of chaos_runtime/control.py. No ROS dependency; all timing uses an
+// No ROS dependency; all timing uses an
 // injected monotonic clock.
 //
 // Invariants are encapsulated: lease owner/token and expiry values can be
