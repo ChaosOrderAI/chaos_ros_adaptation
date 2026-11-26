@@ -106,7 +106,7 @@ ros2 run camera_aravis2 camera_driver_gv --ros-args -r __node:=driver \
 
 ## 7. 待办
 
-- [ ] 相机断电重上电一次,枚举确认 IP 持久化(§2)。
+- [x] 相机断电重上电一次,枚举确认 IP 持久化(§2)——2026-11-26 已验证,重启后仍为 192.168.123.64,hik_front 同样持久。
 - [ ] 镜头对焦(当前 20ms+9dB 图像失焦,手动拧调焦环;对焦后重新标定)。
 - [ ] 棋盘格标定 → `/opt/chaos/hik/mvcs050_camera_info.yaml`,替换台架占位文件。
 - [ ] 车上:触发模式(板卡 CAM_1 PWM 10Hz→Line0)、按车端光照定曝光、外参测量。
