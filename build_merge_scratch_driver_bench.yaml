@@ -1,0 +1,19 @@
+driver:
+  ros__parameters:
+    guid: Hikrobot-MV-CS050-10GC-K90022518
+    frame_id: vehicle_001_front_camera_optical_frame
+    stream_names:
+      - vis
+    camera_info_urls:
+      - file:///opt/chaos/hik/mvcs050_camera_info.yaml
+    TransportLayerControl.PtpEnable: false
+    TransportLayerControl.GevSCPSPacketSize: 9000
+    ImageFormatControl.BinningHorizontal: 2
+    ImageFormatControl.BinningVertical: 2
+    ImageFormatControl.Width: 1224
+    ImageFormatControl.Height: 1024
+    ImageFormatControl.PixelFormat:
+      - BayerRG8
+    AcquisitionControl.TriggerMode: 'Off'
+    AcquisitionControl.ExposureAuto: 'Off'
+    AcquisitionControl.ExposureTime: 5000.0
