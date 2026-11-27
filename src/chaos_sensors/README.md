@@ -9,6 +9,9 @@ It owns everything the platform itself maintains on the sensor side:
 | `mock_sensor` | Synthetic streams for `mode: mock` assets; never touches hardware |
 | `sensor_monitor` | Per-asset stream health, diagnostics and `sensors/description` |
 | `at600_split_node` | IRay AT600 dual-spectrum capture (raw V4L2, kernel timestamps) and left/right split |
+| `thermal_fusion_node` | Fuses thermal and visible streams (`blend`, `detail`, `side_by_side`, `thermal_color`) with optional homography warp |
+| `thermal_register_calib` | Estimates visible -> thermal SIFT+RANSAC homography and writes a ROS 2 parameter file |
+| `thermal_cloud_node` | Time-aligns thermal frames with `/aft_mapped_to_init` + `/cloud_registered` and publishes 3D thermal point clouds (`/cloud_registered_thermal`) |
 | `trigger_pair_node` | Pairs externally triggered camera frames with the sync board's trigger edges and republishes them stamped with the trigger time |
 | `chaos_time_sync_node` | Sync board client: PTP-like clock exchange, trigger/IMU reports, `/board/*` topics and diagnostics |
 
@@ -19,7 +22,7 @@ chaos_sensors/
 ├── include/chaos_sensors/     shared headers: health, sensor config, QoS, stamps
 ├── src/                       the executables above
 ├── config/                    per-node parameter defaults
-├── launch/                    time_sync.launch.py, trigger_pair.launch.py
+├── launch/                    time_sync.launch.py, trigger_pair.launch.py, thermal_fusion.launch.py
 ├── docs/                      time_sync.md, trigger_pair.md (protocol, wiring, diagnostics)
 ├── vendor/                    third-party drivers, each its own colcon package (see vendor/README.md)
 └── catalog/                   one entry per supported sensor model (see catalog/sensors.yaml)

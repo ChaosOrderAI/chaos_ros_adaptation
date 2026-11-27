@@ -20,6 +20,9 @@ VIOManager::VIOManager()
 VIOManager::~VIOManager()
 {
   delete visual_submap;
+  delete cam;
+  cam = nullptr;
+  pinhole_cam = nullptr;
   for (auto& pair : warp_map) delete pair.second;
   warp_map.clear();
   for (auto& pair : feat_map) delete pair.second;
@@ -40,7 +43,9 @@ void VIOManager::setLidarToCameraExtrinsic(vector<double> &R, vector<double> &P)
 
 void VIOManager::initializeVIO()
 {
+  if (cam == nullptr) throw std::runtime_error("VIOManager::initializeVIO requires a camera model");
   visual_submap = new SubSparseMap;
+  pinhole_cam = dynamic_cast<livo::PinholeCamera*>(cam);
 
   fx = cam->fx();
   fy = cam->fy();
@@ -127,7 +132,6 @@ void VIOManager::initializeVIO()
 
   if(colmap_output_en)
   {
-    pinhole_cam = dynamic_cast<livo::PinholeCamera*>(cam);
     fout_colmap.open(DEBUG_FILE_DIR("Colmap/sparse/0/images.txt"), ios::out);
     fout_colmap << "# Image list with two lines of data per image:\n";
     fout_colmap << "#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n";
@@ -974,6 +978,10 @@ void VIOManager::updateVisualMapPoints(cv::Mat img)
       ftr_new->inv_expo_time_ = state->inv_expo_time;
       pt->addFrameRef(ftr_new);
     }
+    else
+    {
+      delete[] patch_temp;
+    }
   }
   printf("[ VIO ] Update %d points in visual submap\n", update_num);
 }
@@ -1780,7 +1788,8 @@ void VIOManager::dumpDataForColmap()
   std::string image_path = std::string(ROOT_DIR) + "Log/Colmap/images/" + cnt_str + ".png";
   
   cv::Mat img_rgb_undistort;
-  pinhole_cam->undistortImage(img_rgb, img_rgb_undistort);
+  if (pinhole_cam != nullptr) pinhole_cam->undistortImage(img_rgb, img_rgb_undistort);
+  else img_rgb_undistort = img_rgb;
   cv::imwrite(image_path, img_rgb_undistort);
   
   Eigen::Quaterniond q(new_frame_->T_f_w_.rotation_matrix());
@@ -1797,9 +1806,13 @@ void VIOManager::dumpDataForColmap()
 
 void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &feat_map, double img_time)
 {
+  if (img.empty())
+  {
+    printf("[ VIO ] Empty Image!\n");
+    return;
+  }
   if (width != img.cols || height != img.rows)
   {
-    if (img.empty()) printf("[ VIO ] Empty Image!\n");
     cv::resize(img, img, cv::Size(img.cols * image_resize_factor, img.rows * image_resize_factor), 0, 0, cv::INTER_LINEAR);
   }
   img_rgb = img.clone();

@@ -127,10 +127,10 @@ public:
   bool raycast_en = false;
   int lidar_en = 1;
   bool is_first_frame = false;
-  int grid_size, patch_size, grid_n_width, grid_n_height, patch_pyrimid_level;
-  double outlier_threshold;
-  double plot_time;
-  int frame_cnt;
+  int grid_size = 5, patch_size = 8, grid_n_width = 0, grid_n_height = 17, patch_pyrimid_level = 3;
+  double outlier_threshold = 1000.0;
+  double plot_time = -10.0;
+  int frame_cnt = 6;
   double img_time_offset = 0.0;
   deque<PointCloudXYZI::Ptr> lid_raw_data_buffer;
   deque<double> lid_header_time_buffer;

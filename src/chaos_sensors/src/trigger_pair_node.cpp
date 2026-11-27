@@ -160,7 +160,7 @@ private:
       std::lock_guard<std::mutex> lock(mutex_);
       if (have_trigger_) {
         age_us = arrival_us - static_cast<int64_t>(last_trigger_.host_stamp_us);
-        if (age_us <= static_cast<int64_t>(max_age_ms_ * 1000.0)) {
+        if (age_us >= 0 && age_us <= static_cast<int64_t>(max_age_ms_ * 1000.0)) {
           paired = true;
         } else if (missing_trigger_ == "last") {
           paired = true;
@@ -200,6 +200,7 @@ private:
         last_used_last_ = used_last;
       }
       last_image_stamp_us_ = stamp_us;
+      last_image_arrival_us_ = arrival_us;
       have_last_image_stamp_ = true;
     }
 
@@ -216,22 +217,39 @@ private:
     if (!info_pub_) {
       return;
     }
-    sensor_msgs::msg::CameraInfo out = *msg;
-    const int64_t now_us = hostUs();
+    const int64_t arrival_us = hostUs();
+    const int64_t max_age_us = static_cast<int64_t>(max_age_ms_ * 1000.0);
+    bool paired = false;
+    int64_t stamp_us = arrival_us;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      // Attach the calibration to the last image only while that image is
-      // still the one being described. An older stamp would pair this
-      // calibration with a frame it does not belong to.
-      const bool fresh = have_last_image_stamp_ &&
-        (now_us - last_image_stamp_us_) <= static_cast<int64_t>(max_age_ms_ * 1000.0);
-      if (fresh) {
-        out.header.stamp = rclcpp::Time(last_image_stamp_us_ * 1000LL);
-      } else {
-        out.header.stamp = rclcpp::Time(now_us * 1000LL);
+      // Pair directly against the trigger in the host clock domain so a small
+      // CameraInfo arriving slightly ahead of its large Image still gets the
+      // exact same trigger stamp instead of failing against the previous frame.
+      if (have_trigger_) {
+        const int64_t age_us =
+          arrival_us - static_cast<int64_t>(last_trigger_.host_stamp_us);
+        if ((age_us >= 0 && age_us <= max_age_us) || missing_trigger_ == "last") {
+          paired = true;
+          stamp_us = static_cast<int64_t>(last_trigger_.board_stamp_us) +
+            exposure_offset_us_;
+        }
+      }
+      if (!paired) {
         ++stale_camera_info_count_;
+        if (missing_trigger_ == "drop") {
+          return;
+        }
+        if (have_last_image_stamp_ &&
+          (arrival_us - last_image_arrival_us_) >= 0 &&
+          (arrival_us - last_image_arrival_us_) <= max_age_us)
+        {
+          stamp_us = last_image_stamp_us_;
+        }
       }
     }
+    sensor_msgs::msg::CameraInfo out = *msg;
+    out.header.stamp = rclcpp::Time(stamp_us * 1000LL);
     if (!frame_id_.empty()) {
       out.header.frame_id = frame_id_;
     }
@@ -339,6 +357,7 @@ private:
   int64_t max_observed_age_us_{-1};
   bool last_used_last_{false};
   int64_t last_image_stamp_us_{0};
+  int64_t last_image_arrival_us_{0};
   bool have_last_image_stamp_{false};
   static constexpr int64_t max_residual_us_ = 1000000;  // 1 s
 

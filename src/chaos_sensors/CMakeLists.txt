@@ -5,13 +5,14 @@ find_package(ament_cmake REQUIRED)
 find_package(chaos_core REQUIRED)
 find_package(chaos_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core imgproc)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc features2d calib3d imgcodecs)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,6 +62,31 @@ target_link_libraries(at600_split_node PRIVATE
   cv_bridge::cv_bridge
   ${OpenCV_LIBS})
 
+# Thermal/visible fusion and SIFT+RANSAC homography calibration.
+foreach(thermal_target thermal_fusion_node thermal_register_calib)
+  add_executable(${thermal_target} src/${thermal_target}.cpp)
+  target_include_directories(${thermal_target} PRIVATE ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(${thermal_target} PRIVATE
+    rclcpp::rclcpp
+    sensor_msgs::sensor_msgs__rosidl_typesupport_cpp
+    cv_bridge::cv_bridge
+    image_transport::image_transport
+    ${OpenCV_LIBS})
+endforeach()
+
+# 3D Thermal-LIVO point-cloud coloring node.
+add_executable(thermal_cloud_node src/thermal_cloud_node.cpp)
+target_include_directories(thermal_cloud_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(thermal_cloud_node PRIVATE
+  rclcpp::rclcpp
+  nav_msgs::nav_msgs__rosidl_typesupport_cpp
+  sensor_msgs::sensor_msgs__rosidl_typesupport_cpp
+  cv_bridge::cv_bridge
+  image_transport::image_transport
+  ${OpenCV_LIBS})
+
 # Trigger pairing: stamp externally triggered frames with the board's edge.
 add_executable(trigger_pair_node src/trigger_pair_node.cpp)
 target_link_libraries(trigger_pair_node PRIVATE
@@ -86,12 +112,13 @@ install(TARGETS chaos_sensors_health chaos_sensors_config chaos_sensors_ros
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
-install(TARGETS mock_sensor sensor_monitor at600_split_node trigger_pair_node
-  chaos_time_sync_node
+install(TARGETS mock_sensor sensor_monitor at600_split_node
+  thermal_fusion_node thermal_register_calib thermal_cloud_node
+  trigger_pair_node chaos_time_sync_node
   DESTINATION lib/${PROJECT_NAME})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
-ament_export_dependencies(chaos_core chaos_interfaces rclcpp sensor_msgs diagnostic_msgs
+ament_export_dependencies(chaos_core chaos_interfaces rclcpp nav_msgs sensor_msgs diagnostic_msgs
   std_msgs nlohmann_json cv_bridge image_transport)
 
 if(BUILD_TESTING)
@@ -105,6 +132,11 @@ if(BUILD_TESTING)
   ament_add_gtest(test_sensor_clock_cpp test/test_sensor_clock_cpp.cpp)
   target_link_libraries(test_sensor_clock_cpp chaos_sensors_ros
     chaos_core::chaos_core rosgraph_msgs::rosgraph_msgs__rosidl_typesupport_cpp)
+  ament_add_gtest(test_thermal_cloud_cpp test/test_thermal_cloud_cpp.cpp)
+  target_include_directories(test_thermal_cloud_cpp PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(test_thermal_cloud_cpp ${OpenCV_LIBS})
 endif()
 
 ament_package()

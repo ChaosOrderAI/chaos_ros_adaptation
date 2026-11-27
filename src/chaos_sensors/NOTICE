@@ -10,6 +10,8 @@ Proprietary (pre-existing):
 
 Apache-2.0 (merged from first-party packages):
   src/at600_split_node.cpp        (from chaos_thermal_fusion)
+  src/thermal_fusion_node.cpp     (from chaos_thermal_fusion)
+  src/thermal_register_calib.cpp  (from chaos_thermal_fusion)
   src/trigger_pair_node.cpp       (from chaos_camera_trigger)
   src/time_sync_node.cpp          (from chaos_time_sync)
   config/, launch/, docs/         (from the same packages)

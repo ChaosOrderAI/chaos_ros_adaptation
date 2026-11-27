@@ -33,7 +33,7 @@ recent `CAM_n` trigger, not to when its buffer happened to arrive.
 
 ```bash
 # board on a dedicated subnet, e.g. host 192.168.10.10, board 192.168.123.188
-ros2 launch chaos_time_sync time_sync.launch.py board_ip:=192.168.123.188
+ros2 launch chaos_sensors time_sync.launch.py board_ip:=192.168.123.188
 ```
 
 Ethernet caveats from the vendor docs:
@@ -78,7 +78,7 @@ frame rate in MVS equals `hz_cam_1`.
 Board config: `hz_cam_1: 10`, `cam1_ms: 10` (period 100 ms, pulse 10 ms).
 
 ```bash
-ros2 run chaos_time_sync trigger_pair_node --ros-args \
+ros2 run chaos_sensors trigger_pair_node --ros-args \
   -p image_topic:=/robots/vehicle_001/sensors/front_camera/image_raw \
   -p image_output_topic:=.../image_synced \
   -p board_channel:=CAM_1 \
@@ -91,7 +91,7 @@ Key parameters (full list in `config/trigger_pair.yaml`):
 | Parameter | Default | Meaning |
 |---|---|---|
 | `board_channel` | `CAM_1` | Which trigger bit pairs with this camera (`IMU_2` also accepted) |
-| `max_age_ms` | `100` | A frame pairs only if it arrived within this long after the trigger; keep it below the trigger period |
+| `max_age_ms` | `50` | A frame pairs only if it arrived within this long after the trigger; keep it below the trigger period |
 | `exposure_offset_us` | `0` | Added to the trigger stamp (e.g. half the exposure) |
 | `missing_trigger` | `drop` | `drop` discards unpaired frames, `arrival` stamps with host time, `last` reuses a stale trigger (debug only) |
 | `expected_period_ms` | `0` | When > 0, trigger intervals above 1.5× this count as gaps |

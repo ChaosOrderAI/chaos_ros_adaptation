@@ -1,0 +1,46 @@
+# Default 3D thermal point-cloud projection parameters (IRay AT600 + Livox Mid-360S).
+# Extrinsic convention matches fast_livo2:
+#   p_imu = extrinsic_R * p_lidar + extrinsic_T
+#   p_ir  = Rcl * p_lidar + Pcl
+thermal_cloud_node:
+  ros__parameters:
+    thermal_topic: "/thermal/image_raw"
+    odom_topic: "/aft_mapped_to_init"
+    cloud_topic: "/cloud_registered"
+    output_cloud_topic: "/cloud_registered_thermal"
+    output_image_topic: "/thermal/image_colored"
+
+    colormap: "inferno"
+    auto_low_percentile: 2.0
+    auto_high_percentile: 98.5
+    min_thermal_intensity: 0.0
+    max_sync_diff_sec: 0.20
+    thermal_time_offset_sec: 0.0
+
+    # Livox Mid-360 factory IMU-to-LiDAR offset
+    extrinsic_T: [-0.011, -0.02329, 0.04412]
+    extrinsic_R: [1.0, 0.0, 0.0,
+                  0.0, 1.0, 0.0,
+                  0.0, 0.0, 1.0]
+
+    # Placeholder forward mount; calibrate via AT600 co-axial visible stream + FAST-Calib
+    Rcl: [0.0, -1.0, 0.0,
+          0.0,  0.0, -1.0,
+          1.0,  0.0,  0.0]
+    Pcl: [0.0, 0.0, 0.0]
+
+    # IRay AT600 thermal half (256x192, 12 um pixel, 3.2 mm lens)
+    cam_width: 256
+    cam_height: 192
+    cam_fx: 266.7
+    cam_fy: 266.7
+    cam_cx: 128.0
+    cam_cy: 96.0
+    cam_d0: 0.0
+    cam_d1: 0.0
+    cam_d2: 0.0
+    cam_d3: 0.0
+    cam_d4: 0.0
+    min_depth: 0.35
+    max_depth: 40.0
+    border_margin: 1

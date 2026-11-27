@@ -1,5 +1,6 @@
 #include "utils/camera.h"
 #include "utils/vision.h"
+#include "vio.h"
 
 #include <gtest/gtest.h>
 #include <opencv2/calib3d.hpp>
@@ -138,6 +139,40 @@ TEST(Vision, ShiTomasiPrefersCornersOverEdgesAndFlat)
   EXPECT_NEAR(livo::shiTomasiScore(edge, 20, 20), 0.0f, 1e-3);
   EXPECT_GT(livo::shiTomasiScore(corner, 20, 20), 100.0f);
   EXPECT_FLOAT_EQ(livo::shiTomasiScore(corner, 3, 20), 0.0f);
+}
+
+TEST(VIOManager, ProjectionJacobianAppliesDistortionWithoutColmapOutput)
+{
+  VIOManager vio;
+  vio.cam = new livo::PinholeCamera(avia_camera(1.0));
+  vio.grid_size = 40;
+  vio.grid_n_height = 25;
+  vio.patch_size = 8;
+  vio.patch_pyrimid_level = 3;
+  vio.colmap_output_en = false;
+  vio.raycast_en = false;
+  vio.setImuToLidarExtrinsic(Eigen::Vector3d::Zero(), Eigen::Matrix3d::Identity());
+  std::vector<double> rcl{1, 0, 0, 0, 1, 0, 0, 0, 1};
+  std::vector<double> pcl{0, 0, 0};
+  vio.setLidarToCameraExtrinsic(rcl, pcl);
+  vio.initializeVIO();
+
+  ASSERT_NE(vio.pinhole_cam, nullptr);
+
+  const Eigen::Vector3d p(0.8, -0.5, 2.0);
+  Eigen::Matrix<double, 2, 3> J;
+  vio.computeProjectionJacobian(p, J);
+
+  const double eps = 1e-6;
+  const Eigen::Vector2d px = vio.cam->world2cam(p);
+  for (int axis = 0; axis < 3; ++axis)
+  {
+    Eigen::Vector3d dp = Eigen::Vector3d::Zero();
+    dp(axis) = eps;
+    const Eigen::Vector2d num = (vio.cam->world2cam(p + dp) - px) / eps;
+    EXPECT_NEAR(J(0, axis), num.x(), 1e-3);
+    EXPECT_NEAR(J(1, axis), num.y(), 1e-3);
+  }
 }
 
 } // namespace

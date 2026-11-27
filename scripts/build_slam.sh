@@ -31,6 +31,17 @@ elif [[ -f "${HOME}/.local/lib/liblivox_lidar_sdk_shared.so" ]]; then
   sdk_prefix="${HOME}/.local"
 fi
 
+# Drop stale per-package CMake build dirs when a package moved or was merged
+# (e.g. src/livox_ros_driver2 -> src/chaos_sensors/vendor/livox_ros_driver2).
+shopt -s nullglob
+for cache in build/*/CMakeCache.txt; do
+  src_dir="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "${cache}")"
+  if [[ -n "${src_dir}" && ! -d "${src_dir}" ]]; then
+    rm -rf "$(dirname "${cache}")"
+  fi
+done
+shopt -u nullglob
+
 # The in-tree Livox vendor lives inside the chaos_sensors package tree;
 # colcon does not descend into a package directory, so its own directory is an
 # explicit second base path. Other vendor trees (Orbbec) are separate
